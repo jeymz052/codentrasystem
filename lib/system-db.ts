@@ -99,6 +99,7 @@ export async function loadTenantState(tenantId?: string | null) {
     usersResult,
     productsResult,
     alertsResult,
+    cashShiftsResult,
     poResult,
     poItemsResult,
     salesResult,
@@ -112,6 +113,7 @@ export async function loadTenantState(tenantId?: string | null) {
     client.from('users').select('*').eq('tenant_id', tenant.id),
     client.from('products').select('*').eq('tenant_id', tenant.id),
     client.from('alerts').select('*').eq('tenant_id', tenant.id),
+    client.from('cash_shifts').select('*').eq('tenant_id', tenant.id),
     client.from('purchase_orders').select('*').eq('tenant_id', tenant.id),
     client.from('purchase_order_items').select('*'),
     client.from('sales_transactions').select('*').eq('tenant_id', tenant.id),
@@ -126,6 +128,7 @@ export async function loadTenantState(tenantId?: string | null) {
   const users = asArray(usersResult.data)
   const productsRaw = asArray(productsResult.data)
   const alertsRaw = asArray(alertsResult.data)
+  const cashShiftsRaw = asArray(cashShiftsResult.data)
   const purchaseOrdersRaw = asArray(poResult.data)
   const purchaseOrderItemsRaw = asArray(poItemsResult.data)
   const salesTransactionsRaw = asArray(salesResult.data)
@@ -154,6 +157,13 @@ export async function loadTenantState(tenantId?: string | null) {
   const purchaseOrderItems = mapRow(purchaseOrderItemsRaw, (row) => ({
     ...row,
     product: productById.get(row.product_id) ?? undefined,
+  }))
+
+  const cashShifts = mapRow(cashShiftsRaw, (row) => ({
+    ...row,
+    opened_by_user: row.opened_by ? userById.get(row.opened_by) ?? undefined : undefined,
+    closed_by_user: row.closed_by ? userById.get(row.closed_by) ?? undefined : undefined,
+    location: row.location_id ? locationById.get(row.location_id) ?? undefined : undefined,
   }))
 
   const salesTransactionItems = mapRow(salesTransactionItemsRaw, (row) => ({
@@ -201,6 +211,7 @@ export async function loadTenantState(tenantId?: string | null) {
     suppliers,
     products,
     users,
+    cashShifts,
     purchaseOrders,
     purchaseOrderItems,
     salesTransactions,

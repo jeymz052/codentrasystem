@@ -1,10 +1,11 @@
 'use client'
 // components/layout/Sidebar.tsx
 import Link from 'next/link'
+import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, Package, ShoppingCart, Truck,
-  BarChart3, Settings, Layers, ArrowLeftRight,
+  BarChart3, Settings, ArrowLeftRight,
   CreditCard, Users, Building2,
 } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
@@ -40,23 +41,16 @@ export function Sidebar() {
       height: '100vh',
     }}>
       {/* Logo */}
-      <div style={{ padding: '20px 18px 16px', borderBottom: '1px solid #D8E4F2' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{
-            width: 36, height: 36, borderRadius: 10,
-            background: 'linear-gradient(135deg, #3B82F6, #60A5FA)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-          }}>
-            <Layers size={18} color="#fff" strokeWidth={2.5} />
-          </div>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: 16, color: '#0F172A', letterSpacing: '-0.03em' }}>
-              Codentra
-            </div>
-            <div style={{ fontSize: 9, color: '#64748B', marginTop: 1, letterSpacing: '0.05em' }}>
-              SYSTEMS WITH INTEGRITY
-            </div>
-          </div>
+      <div style={{ padding: '22px 18px 18px', borderBottom: '1px solid #D8E4F2' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+          <Image
+            src="/images/codentralogo-removebg-preview.png"
+            alt="Codentra"
+            width={170}
+            height={60}
+            priority
+            style={{ width: '170px', height: 'auto', objectFit: 'contain' }}
+          />
         </div>
       </div>
 

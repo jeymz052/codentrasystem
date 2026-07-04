@@ -42,7 +42,16 @@ export async function loadAccessibleTenants(authUserId: string): Promise<{ tenan
     return { tenants, activeTenantId: tenants[0]?.id ?? null }
   }
 
-  const tenantIds = memberships.map((membership) => membership.tenant_id)
+  const uniqueMemberships = Array.from(
+    new Map(
+      memberships.map((membership) => [
+        membership.tenant_id,
+        membership,
+      ])
+    ).values()
+  )
+
+  const tenantIds = uniqueMemberships.map((membership) => membership.tenant_id)
   if (!tenantIds.length) {
     return { tenants: [], activeTenantId: null }
   }
@@ -57,7 +66,7 @@ export async function loadAccessibleTenants(authUserId: string): Promise<{ tenan
   }
 
   const tenantById = new Map((tenantRows ?? []).map((row) => [row.id, row]))
-  const tenants = memberships
+  const tenants = uniqueMemberships
     .map((membership) => {
       const tenant = tenantById.get(membership.tenant_id)
       if (!tenant) return null

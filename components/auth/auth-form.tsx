@@ -2,6 +2,7 @@
 
 import { useMemo, useState, type FormEvent } from 'react'
 import Link from 'next/link'
+import Image from 'next/image'
 import { ArrowRight, CheckCircle2, Eye, EyeOff, LockKeyhole, Mail } from 'lucide-react'
 import { SUBSCRIPTION_PLANS, formatPlanPrice } from '@/lib/subscription-plans'
 
@@ -78,9 +79,7 @@ export function AuthForm({
         }),
       })
 
-      const body = (await response.json().catch(() => null)) as
-        | { message?: string }
-        | null
+      const body = (await response.json().catch(() => null)) as { message?: string } | null
 
       if (!response.ok) {
         throw new Error(body?.message || 'Sign up failed')
@@ -100,20 +99,29 @@ export function AuthForm({
   }
 
   return (
-    <div className="auth-card">
-      <div className="auth-badge">
-        <LockKeyhole size={14} />
-        Secure multi-tenant access
+    <div className="auth-card auth-card--entry">
+      <div className="auth-brand-block">
+        <div className="auth-brand">
+          <Image
+            src="/images/codentralogo-removebg-preview.png"
+            alt="Codentra logo"
+            width={520}
+            height={184}
+            priority={mode === 'sign-in'}
+            className="auth-brand-logo"
+          />
+        </div>
+        <div className="auth-signin-copy">
+          <h1 className="auth-title">
+            {mode === 'sign-in' ? 'Sign In to Your Account' : 'Create Your Account'}
+          </h1>
+          <p className="auth-copy">
+            {mode === 'sign-in'
+              ? 'Welcome back. Please enter your credentials.'
+              : 'Start a tenant, pick a plan, and get your workspace ready in minutes.'}
+          </p>
+        </div>
       </div>
-
-      <h1 className="auth-title">
-        {mode === 'sign-in' ? 'Welcome back' : 'Create your account'}
-      </h1>
-      <p className="auth-copy">
-        {mode === 'sign-in'
-          ? 'Sign in to manage your stores, branches, subscriptions, and operations from one place.'
-          : 'Start a tenant, pick a plan, confirm your password, and onboard the first business in minutes.'}
-      </p>
 
       <form onSubmit={handleSubmit} className="auth-form">
         <label className="auth-field">
@@ -125,7 +133,7 @@ export function AuthForm({
               type="email"
               autoComplete="email"
               required
-              placeholder="you@company.com"
+              placeholder={mode === 'sign-in' ? 'name@company.com' : 'you@company.com'}
               value={email}
               onChange={(event) => setEmail(event.target.value)}
             />
@@ -142,7 +150,7 @@ export function AuthForm({
               autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'}
               minLength={8}
               required
-              placeholder="At least 8 characters"
+              placeholder={mode === 'sign-in' ? 'Enter your password' : 'At least 8 characters'}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
             />
@@ -227,7 +235,7 @@ export function AuthForm({
               </Link>
             </div>
             <div className="auth-helper">
-              Need to reset? We’ll email a secure link to create a new password.
+              Need to reset? We'll email a secure link to create a new password.
             </div>
           </>
         )}
@@ -245,7 +253,6 @@ export function AuthForm({
           {loading ? 'Please wait...' : mode === 'sign-in' ? 'Sign in' : 'Create account'}
           <ArrowRight size={16} />
         </button>
-
       </form>
 
       <div className="auth-footer">
@@ -259,7 +266,6 @@ export function AuthForm({
           </span>
         )}
       </div>
-
     </div>
   )
 }

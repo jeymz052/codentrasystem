@@ -117,20 +117,44 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
     linear-gradient(180deg, #f8fbff 0%, #ffffff 42%, #f6f9fc 100%);
 }
 
-.auth-hero {
-  padding: 64px;
-  display: flex;
-  align-items: center;
+.auth-page--split {
+  grid-template-columns: minmax(0, 1.15fr) minmax(420px, 0.85fr);
+  background: #ffffff;
 }
 
-.auth-hero-panel {
-  max-width: 560px;
-  padding: 32px;
-  border-radius: 28px;
-  background: rgba(255, 255, 255, 0.68);
-  border: 1px solid rgba(216, 228, 242, 0.8);
-  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.12);
-  backdrop-filter: blur(12px);
+.auth-hero {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-hero--image {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+.auth-hero-image {
+  object-fit: cover;
+  object-position: center;
+  filter: saturate(0.95) contrast(1.05) brightness(0.82);
+}
+
+.auth-hero-overlay {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(130deg, rgba(13, 24, 39, 0.28) 0%, rgba(13, 24, 39, 0.08) 44%, rgba(13, 24, 39, 0.44) 100%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.06), rgba(15, 23, 42, 0.14));
+}
+
+.auth-panel {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 56px;
+  background: #ffffff;
 }
 
 .auth-kicker {
@@ -169,6 +193,71 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.auth-card--entry {
+  width: min(100%, 500px);
+  margin: 0;
+  padding: 0;
+  gap: 22px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.auth-brand-block {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  align-items: center;
+  text-align: center;
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.auth-brand-logo {
+  width: auto;
+  height: auto;
+  max-width: 380px;
+  object-fit: contain;
+}
+
+.auth-signin-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+
+.auth-card--entry .auth-title {
+  font-size: clamp(2rem, 3vw, 2.85rem);
+  letter-spacing: -0.06em;
+  text-align: center;
+}
+
+.auth-card--entry .auth-copy {
+  max-width: 36ch;
+  font-size: 15px;
+  text-align: center;
+}
+
+.auth-card--entry .auth-form {
+  gap: 12px;
+}
+
+.auth-card--entry .auth-helper {
+  background: #f8fafc;
+}
+
+.auth-card--entry .auth-footer {
+  margin-top: 4px;
+  text-align: center;
 }
 
 .auth-badge {
@@ -421,12 +510,25 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
     grid-template-columns: 1fr;
   }
 
-  .auth-hero {
-    padding: 28px 24px 0;
+  .auth-page--split {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-hero--image {
+    min-height: 320px;
+  }
+
+  .auth-panel {
+    min-height: auto;
+    padding: 32px 20px 40px;
   }
 
   .auth-card {
     margin: 24px;
+  }
+
+  .auth-card--entry {
+    margin: 0;
   }
 }
 
@@ -437,5 +539,270 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
 
   .auth-card {
     padding: 24px;
+  }
+
+  .auth-card--entry {
+    padding: 0;
+  }
+
+  .auth-brand-logo {
+    max-width: 300px;
+  }
+
+  .auth-panel {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
+
+.pos-receipt-modal {
+  width: min(100%, 400px);
+  background: #ffffff;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+}
+
+.pos-receipt-paper {
+  padding: 18px 18px 16px;
+  background: #ffffff;
+  color: #111827;
+  font-family: var(--font-inter), system-ui, sans-serif;
+}
+
+.pos-receipt-header {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pos-receipt-brand {
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pos-receipt-logo {
+  width: 72%;
+  max-width: 180px;
+  height: auto;
+  object-fit: contain;
+  margin: 0 auto 4px;
+  display: block;
+}
+
+.pos-receipt-subtitle {
+  font-size: 12px;
+  color: #4b5563;
+  font-weight: 600;
+}
+
+.pos-receipt-meta {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.pos-receipt-divider {
+  border-top: 1px dashed #cbd5e1;
+  margin: 12px 0;
+}
+
+.pos-receipt-items {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pos-receipt-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.pos-receipt-line-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.pos-receipt-item-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #111827;
+  line-height: 1.35;
+}
+
+.pos-receipt-item-meta {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.pos-receipt-line-total {
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+  color: #111827;
+}
+
+.pos-receipt-totals {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.pos-receipt-totals > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pos-receipt-totals span {
+  color: #6b7280;
+}
+
+.pos-receipt-totals strong {
+  color: #111827;
+  font-weight: 700;
+}
+
+.pos-receipt-total-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 2px;
+  padding-top: 6px;
+  font-size: 13px;
+  font-weight: 900;
+  color: #111827;
+}
+
+.pos-receipt-footer {
+  margin-top: 12px;
+  text-align: center;
+  font-size: 11px;
+  color: #6b7280;
+  line-height: 1.45;
+}
+
+@media print {
+  @page {
+    margin: 0;
+    size: 80mm auto;
+  }
+
+  body {
+    background: #ffffff !important;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .pos-print-hide,
+  .pos-print-hide * {
+    display: none !important;
+  }
+
+  .pos-receipt-modal,
+  .pos-receipt-modal * {
+    visibility: visible !important;
+  }
+
+  .pos-receipt-modal {
+    position: fixed;
+    inset: 0;
+    width: 80mm;
+    max-width: 80mm;
+    min-height: 100vh;
+    margin: 0 auto;
+    border: none;
+    box-shadow: none;
+    border-radius: 0;
+    overflow: visible;
+    background: #ffffff !important;
+  }
+
+  .pos-receipt-paper {
+    padding: 4mm 4mm 5mm;
+    width: 80mm;
+    box-sizing: border-box;
+    font-family: "Courier New", Courier, monospace;
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  .pos-receipt-logo {
+    width: 54mm;
+    max-width: 54mm;
+    margin-bottom: 2mm;
+  }
+
+  .pos-receipt-brand {
+    font-size: 13px;
+  }
+
+  .pos-receipt-subtitle {
+    font-size: 10px;
+  }
+
+  .pos-receipt-meta {
+    font-size: 9px;
+  }
+
+  .pos-receipt-item-name,
+  .pos-receipt-line-total,
+  .pos-receipt-total-row,
+  .pos-receipt-totals strong {
+    font-size: 11px;
+  }
+
+  .pos-receipt-item-meta,
+  .pos-receipt-totals span,
+  .pos-receipt-footer {
+    font-size: 9px;
+  }
+
+  .pos-receipt-divider {
+    margin: 8px 0;
+  }
+
+  .pos-receipt-items {
+    gap: 6px;
+  }
+
+  .pos-receipt-line {
+    gap: 8px;
+  }
+
+  .pos-receipt-totals {
+    gap: 4px;
+  }
+
+  .pos-receipt-total-row {
+    margin-top: 0;
+    padding-top: 4px;
+  }
+
+  .pos-receipt-footer {
+    break-inside: avoid;
+    margin-top: 8px;
+  }
+
+  .modal-overlay {
+    background: transparent !important;
+    backdrop-filter: none !important;
+  }
+
+  .modal {
+    background: transparent !important;
+  }
+
+  .pos-print-hide {
+    display: none !important;
   }
 }

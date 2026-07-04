@@ -8,6 +8,7 @@ export type OrderStatus = 'draft' | 'pending_approval' | 'approved' | 'ordered' 
 export type MovementType = 'inbound' | 'outbound' | 'adjustment' | 'return' | 'production'
 export type AlertType = 'low_stock' | 'out_of_stock' | 'overstock' | 'expiry_warning'
 export type AlertStatus = 'open' | 'acknowledged' | 'resolved'
+export type ShiftStatus = 'open' | 'closed' | 'voided'
 export type PaymentMethod = 'cash' | 'qr_ph' | 'gcash' | 'card' | 'bank_transfer' | 'other'
 export type TransactionStatus = 'completed' | 'voided' | 'refunded'
 
@@ -197,6 +198,7 @@ export interface SalesTransaction {
   tenant_id: string
   receipt_number: string
   cashier_id: string | null
+  shift_id: string | null
   location_id: string | null
   status: TransactionStatus
   payment_method: PaymentMethod
@@ -215,6 +217,33 @@ export interface SalesTransaction {
   created_at: string
   cashier?: User
   items?: SalesTransactionItem[]
+}
+
+export interface CashShift {
+  id: string
+  tenant_id: string
+  shift_code: string
+  opened_by: string
+  closed_by: string | null
+  location_id: string | null
+  status: ShiftStatus
+  opening_float: number
+  closing_float: number | null
+  expected_cash: number | null
+  counted_cash: number | null
+  cash_sales_total: number
+  qr_sales_total: number
+  total_sales: number
+  variance_amount: number | null
+  notes: string | null
+  close_notes: string | null
+  opened_at: string
+  closed_at: string | null
+  created_at: string
+  updated_at: string
+  opened_by_user?: User
+  closed_by_user?: User | null
+  location?: Location | null
 }
 
 export interface SalesTransactionItem {

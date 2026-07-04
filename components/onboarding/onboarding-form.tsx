@@ -1,5 +1,6 @@
 'use client'
 
+import Image from 'next/image'
 import { useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowRight, Building2, CalendarDays, CircleDollarSign, Layers3 } from 'lucide-react'
@@ -59,15 +60,29 @@ export function OnboardingForm({ initialPlan }: { initialPlan?: string }) {
   }
 
   return (
-    <form className="auth-card onboarding-card" onSubmit={handleSubmit}>
-      <div className="auth-badge">
-        <Layers3 size={14} />
-        Tenant onboarding
+    <form className="auth-card auth-card--entry onboarding-card" onSubmit={handleSubmit}>
+      <div className="auth-brand-block">
+        <div className="auth-brand">
+          <Image
+            src="/images/codentralogo-removebg-preview.png"
+            alt="Codentra logo"
+            width={520}
+            height={184}
+            priority
+            className="auth-brand-logo"
+          />
+        </div>
+        <div className="auth-signin-copy">
+          <div className="auth-badge">
+            <Layers3 size={14} />
+            Tenant onboarding
+          </div>
+          <h1 className="auth-title">Set up your first business</h1>
+          <p className="auth-copy">
+            We&apos;ll create the tenant, connect the first subscription record, and load the operational template that matches your business type.
+          </p>
+        </div>
       </div>
-      <h1 className="auth-title">Set up your first business</h1>
-      <p className="auth-copy">
-        We’ll create the tenant, connect the first subscription record, and load the operational template that matches your business type.
-      </p>
 
       <div className="onboarding-grid">
         <label className="auth-field">

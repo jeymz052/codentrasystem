@@ -3,6 +3,7 @@ import type {
   BusinessType,
   Category,
   DashboardStats,
+  CashShift,
   Location,
   MovementType,
   OrderStatus,
@@ -15,6 +16,7 @@ import type {
   StockMovement,
   Supplier,
   Tenant,
+  ShiftStatus,
   TransactionStatus,
   UnitOfMeasure,
   User,
@@ -79,6 +81,7 @@ export type DemoSystemState = {
   suppliers: Supplier[]
   products: Product[]
   users: User[]
+  cashShifts: CashShift[]
   purchaseOrders: PurchaseOrder[]
   purchaseOrderItems: PurchaseOrderItem[]
   salesTransactions: SalesTransaction[]
@@ -353,6 +356,60 @@ function pastIso(days: number) {
   return d.toISOString()
 }
 
+function formatShiftCode(date = new Date(), sequence = 1) {
+  return `SHIFT-${date.toISOString().slice(0, 10).replaceAll('-', '')}-${String(sequence).padStart(3, '0')}`
+}
+
+function createCashShift(
+  tenantId: string,
+  openedBy: string,
+  locationId: string | null,
+  openingFloat: number,
+  status: ShiftStatus,
+  opts?: {
+    shiftCode?: string
+    closedBy?: string | null
+    closedAt?: string | null
+    notes?: string | null
+    closeNotes?: string | null
+    closingFloat?: number | null
+    expectedCash?: number | null
+    countedCash?: number | null
+    cashSalesTotal?: number
+    qrSalesTotal?: number
+    totalSales?: number
+    varianceAmount?: number | null
+    openedAt?: string
+    createdAt?: string
+    updatedAt?: string
+  }
+): CashShift {
+  const now = opts?.createdAt ?? nowIso()
+  return {
+    id: id(),
+    tenant_id: tenantId,
+    shift_code: opts?.shiftCode ?? formatShiftCode(new Date(now), 1),
+    opened_by: openedBy,
+    closed_by: opts?.closedBy ?? null,
+    location_id: locationId,
+    status,
+    opening_float: openingFloat,
+    closing_float: opts?.closingFloat ?? null,
+    expected_cash: opts?.expectedCash ?? null,
+    counted_cash: opts?.countedCash ?? null,
+    cash_sales_total: opts?.cashSalesTotal ?? 0,
+    qr_sales_total: opts?.qrSalesTotal ?? 0,
+    total_sales: opts?.totalSales ?? 0,
+    variance_amount: opts?.varianceAmount ?? null,
+    notes: opts?.notes ?? null,
+    close_notes: opts?.closeNotes ?? null,
+    opened_at: opts?.openedAt ?? now,
+    closed_at: opts?.closedAt ?? null,
+    created_at: opts?.createdAt ?? now,
+    updated_at: opts?.updatedAt ?? now,
+  }
+}
+
 function createTenant(businessType: BusinessType): Tenant {
   const template = BUSINESS_TEMPLATES[businessType]
   const now = nowIso()
@@ -607,7 +664,8 @@ function createSales(
   tenantId: string,
   users: User[],
   locations: Location[],
-  products: Product[]
+  products: Product[],
+  shiftId: string | null
 ): { transactions: SalesTransaction[]; items: SalesTransactionItem[] } {
   const cashierId = users.find((user) => user.role === 'cashier')?.id ?? users[0]?.id ?? null
   const locationId = locations[1]?.id ?? locations[0]?.id ?? null
@@ -663,6 +721,7 @@ function createSales(
       tenant_id: tenantId,
       receipt_number: `REC-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-1001`,
       cashier_id: cashierId,
+      shift_id: shiftId,
       location_id: locationId,
       status: 'completed',
       payment_method: 'cash',
@@ -683,6 +742,7 @@ function createSales(
       tenant_id: tenantId,
       receipt_number: `REC-${new Date(Date.now() - 86400000).toISOString().slice(0, 10).replaceAll('-', '')}-1000`,
       cashier_id: cashierId,
+      shift_id: shiftId,
       location_id: locationId,
       status: 'completed',
       payment_method: 'gcash',
@@ -770,9 +830,24 @@ function buildState(businessType: BusinessType): DemoSystemState {
   const suppliers = createSuppliers(tenant.id, BUSINESS_TEMPLATES[businessType])
   const users = createUsers(tenant.id)
   const products = createProducts(tenant.id, BUSINESS_TEMPLATES[businessType], categories, suppliers, locations, unitsOfMeasure)
+  const currentCashierId = users.find((user) => user.role === 'cashier')?.id ?? users[0]?.id ?? ''
+  const currentShift = createCashShift(
+    tenant.id,
+    currentCashierId,
+    locations[0]?.id ?? null,
+    1000,
+    'open',
+    {
+      shiftCode: formatShiftCode(new Date(), 1),
+      notes: 'Opening shift',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      openedAt: nowIso(),
+    }
+  )
   const alerts = createAlerts(tenant.id, products)
   const stockMovements = createStockMovements(tenant.id, products, users, locations)
-  const { transactions, items } = createSales(tenant.id, users, locations, products)
+  const { transactions, items } = createSales(tenant.id, users, locations, products, currentShift.id)
   const { orders, items: poItems } = createPurchaseOrders(tenant.id, users, suppliers, products)
 
   return {
@@ -784,6 +859,7 @@ function buildState(businessType: BusinessType): DemoSystemState {
     suppliers,
     products,
     users,
+    cashShifts: [currentShift],
     purchaseOrders: orders,
     purchaseOrderItems: poItems,
     salesTransactions: transactions,
@@ -812,6 +888,7 @@ export function remapStateTenantId(state: DemoSystemState, tenantId: string): De
     suppliers: remapTenantRow(state.suppliers),
     products: remapTenantRow(state.products),
     users: remapTenantRow(state.users),
+    cashShifts: remapTenantRow(state.cashShifts),
     purchaseOrders: remapTenantRow(state.purchaseOrders),
     stockMovements: remapTenantRow(state.stockMovements),
     alerts: remapTenantRow(state.alerts),
@@ -1203,6 +1280,7 @@ export function recordSale(
     tenant_id: state.tenant.id,
     receipt_number: receiptNumber,
     cashier_id: state.currentUserId,
+    shift_id: state.cashShifts[0]?.id ?? null,
     location_id: payload.location_id,
     status: 'completed',
     payment_method: payload.payment_method,

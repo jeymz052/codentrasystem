@@ -58,6 +58,38 @@ async function seedSuperadmin() {
     throw new Error('Could not resolve superadmin auth user')
   }
 
+  const { data: existingTenant, error: tenantLookupError } = await client
+    .from('tenants')
+    .select('id')
+    .eq('name', SUPERADMIN_TENANT_NAME)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (tenantLookupError) {
+    throw new Error(`tenant lookup failed: ${tenantLookupError.message}`)
+  }
+
+  if (existingTenant?.id) {
+    const { error: membershipUpsertError } = await client
+      .from('tenant_memberships')
+      .upsert({
+        id: randomUUID(),
+        tenant_id: existingTenant.id,
+        auth_user_id: userId,
+        role: 'super_admin',
+        is_default: true,
+      }, {
+        onConflict: 'tenant_id,auth_user_id',
+      })
+
+    if (membershipUpsertError && !isDuplicateKeyError(membershipUpsertError)) {
+      throw new Error(`membership upsert failed: ${membershipUpsertError.message}`)
+    }
+
+    return
+  }
+
   const { data: membershipRows, error: membershipError } = await client
     .from('tenant_memberships')
     .select('tenant_id, role')
@@ -69,10 +101,10 @@ async function seedSuperadmin() {
     throw new Error(`membership lookup failed: ${membershipError.message}`)
   }
 
-  let tenantId = membershipRows?.[0]?.tenant_id ?? null
+  const existingMembershipTenantId = membershipRows?.[0]?.tenant_id ?? null
 
-  if (!tenantId) {
-    tenantId = randomUUID()
+  if (!existingMembershipTenantId) {
+    const tenantId = randomUUID()
     const { error: tenantError } = await client.from('tenants').insert({
       id: tenantId,
       name: SUPERADMIN_TENANT_NAME,

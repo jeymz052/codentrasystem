@@ -1,4 +1,5 @@
 import { AuthForm } from '@/components/auth/auth-form'
+import Image from 'next/image'
 
 export default async function SignInPage({
   searchParams,
@@ -7,17 +8,21 @@ export default async function SignInPage({
 }) {
   const params = (await searchParams) ?? {}
   return (
-    <main className="auth-page">
-      <section className="auth-hero">
-        <div className="auth-hero-panel">
-          <p className="auth-kicker">Codentra SaaS</p>
-          <h2>One system for coffee shops, manufacturers, sari-sari stores, and every other small business.</h2>
-          <p>
-            Real login. Real tenants. Real billing hooks. The same product can flex across different operations without changing the core workflow.
-          </p>
-        </div>
+    <main className="auth-page auth-page--split">
+      <section className="auth-hero auth-hero--image" aria-hidden="true">
+        <Image
+          src="/images/codentrabg.png"
+          alt=""
+          fill
+          priority
+          sizes="(max-width: 980px) 100vw, 60vw"
+          className="auth-hero-image"
+        />
+        <div className="auth-hero-overlay" />
       </section>
-      <AuthForm mode="sign-in" nextPath={params.next ?? '/dashboard'} />
+      <section className="auth-panel">
+        <AuthForm mode="sign-in" nextPath={params.next ?? '/dashboard'} />
+      </section>
     </main>
   )
 }
