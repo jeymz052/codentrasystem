@@ -31,7 +31,7 @@ export default function UsersPage() {
       </div>
 
       <div className="card" style={{ padding: 16, marginBottom: 16 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
           <input className="input" value={form.full_name} onChange={(event) => setForm((current) => ({ ...current, full_name: event.target.value }))} placeholder="Full name" />
           <input className="input" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} placeholder="Email" />
           <select className="input" value={form.role} onChange={(event) => setForm((current) => ({ ...current, role: event.target.value as UserRole }))}>
@@ -45,7 +45,7 @@ export default function UsersPage() {
         </div>
       </div>
 
-      <div className="card" style={{ overflow: 'hidden' }}>
+      <div className="card table-scroll" style={{ overflow: 'hidden' }}>
         <table className="data-table">
           <thead>
             <tr>
@@ -74,7 +74,7 @@ export default function UsersPage() {
         </table>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 14, marginTop: 18 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 14, marginTop: 18 }}>
         {[
           { label: 'Admins', value: state.users.filter((user) => user.role === 'admin').length, color: '#3B82F6' },
           { label: 'Managers', value: state.users.filter((user) => user.role === 'manager').length, color: '#8B5CF6' },

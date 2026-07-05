@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bell, Building2, ChevronDown, CheckCircle2, LogOut, AlertTriangle } from 'lucide-react'
+import { Bell, Building2, ChevronDown, CheckCircle2, AlertTriangle, Menu } from 'lucide-react'
 import { usePathname } from 'next/navigation'
 import { useDemoSystem } from '@/components/demo-system-provider'
 
@@ -17,9 +17,13 @@ const TITLES: Record<string, string> = {
   '/dashboard/settings': 'Settings',
 }
 
-export function TopBar() {
+type TopBarProps = {
+  onToggleSidebar?: () => void
+}
+
+export function TopBar({ onToggleSidebar }: TopBarProps) {
   const path = usePathname()
-  const { state, stats, availableTenants, activeTenantId, switchTenant, signOut, acknowledge, resolve } = useDemoSystem()
+  const { state, stats, availableTenants, activeTenantId, switchTenant, acknowledge, resolve } = useDemoSystem()
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const title = TITLES[path] ?? 'Codentra'
@@ -44,15 +48,23 @@ export function TopBar() {
     <header style={{
       height: 60, borderBottom: '1px solid #D8E4F2',
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: '0 32px', background: '#FFFFFF', flexShrink: 0,
+      padding: '0 12px 0 14px', background: '#FFFFFF', flexShrink: 0,
     }}>
-      <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm topbar-menu-button"
+          onClick={onToggleSidebar}
+          aria-label="Toggle navigation menu"
+        >
+          <Menu size={16} />
+        </button>
         <h1 style={{ fontSize: 17, fontWeight: 700, color: '#0F172A', letterSpacing: '-0.02em' }}>
           {title}
         </h1>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <div style={{
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="topbar-tenant-card" style={{
           display: 'flex', alignItems: 'center', gap: 8,
           background: '#F8FBFF', border: '1px solid #D8E4F2',
           borderRadius: 8, padding: '5px 12px',
@@ -194,21 +206,9 @@ export function TopBar() {
             </div>
           )}
         </div>
-        <div style={{ fontSize: 12, color: '#64748B' }}>
+        <div className="topbar-open-alerts" style={{ fontSize: 12, color: '#64748B' }}>
           {stats.open_alerts} open alerts
         </div>
-        <button
-          onClick={() => void signOut()}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            border: '1px solid #D8E4F2', borderRadius: 8,
-            background: '#fff', padding: '8px 10px', cursor: 'pointer',
-            color: '#475569',
-          }}
-        >
-          <LogOut size={14} />
-          <span style={{ fontSize: 12 }}>Sign out</span>
-        </button>
       </div>
     </header>
   )

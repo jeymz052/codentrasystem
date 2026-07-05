@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, Package, ShoppingCart, Truck,
   BarChart3, Settings, ArrowLeftRight,
-  CreditCard, Users, Building2,
+  CreditCard, Users, Building2, LogOut,
 } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { canAccessDashboardPath } from '@/lib/access-control'
@@ -23,9 +23,14 @@ const NAV = [
   { href: '/dashboard/settings',   icon: Settings,         label: 'Settings',         roles: ['admin'] },
 ]
 
-export function Sidebar() {
+type SidebarProps = {
+  mobileOpen?: boolean
+  onNavigate?: () => void
+}
+
+export function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps) {
   const path = usePathname()
-  const { state, availableTenants, activeTenantId } = useDemoSystem()
+  const { state, availableTenants, activeTenantId, signOut } = useDemoSystem()
   const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
   const role = activeTenant?.role ?? 'cashier'
   const renewalLabel = state.tenant.subscription_ends_at
@@ -33,13 +38,7 @@ export function Sidebar() {
     : 'No renewal date'
 
   return (
-    <aside style={{
-      width: 230, minWidth: 230,
-      background: '#FFFFFF',
-      borderRight: '1px solid #D8E4F2',
-      display: 'flex', flexDirection: 'column',
-      height: '100vh',
-    }}>
+    <aside className={`dashboard-sidebar${mobileOpen ? ' dashboard-sidebar--open' : ''}`}>
       {/* Logo */}
       <div style={{ padding: '22px 18px 18px', borderBottom: '1px solid #D8E4F2' }}>
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
@@ -65,6 +64,7 @@ export function Sidebar() {
             <Link
               key={href}
               href={href}
+              onClick={onNavigate}
               style={{
                 display: 'flex', alignItems: 'center', gap: 9,
                 padding: '9px 10px', borderRadius: 8, marginBottom: 1,
@@ -121,6 +121,29 @@ export function Sidebar() {
             <div style={{ fontSize: 10, color: '#64748B' }}>{role}</div>
           </div>
         </div>
+        <button
+          type="button"
+          onClick={() => void signOut()}
+          style={{
+            width: '100%',
+            marginTop: 10,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+            padding: '9px 10px',
+            borderRadius: 8,
+            background: '#FFFFFF',
+            border: '1px solid #D8E4F2',
+            color: '#475569',
+            cursor: 'pointer',
+            fontSize: 13,
+            fontWeight: 600,
+          }}
+        >
+          <LogOut size={14} />
+          Sign out
+        </button>
       </div>
     </aside>
   )

@@ -86,12 +86,8 @@ export default function MovementsPage() {
               Stock movement ledger
             </div>
             <h2 style={{ fontSize: 'clamp(1.8rem, 3vw, 2.5rem)', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.05em', lineHeight: 1.05 }}>
-              Track every inbound, outbound, and adjustment in one clean audit trail.
+              Stock Movements
             </h2>
-            <p style={{ color: '#475569', fontSize: 14, lineHeight: 1.7, marginTop: 12, maxWidth: '64ch' }}>
-              This page is best kept separate from Inventory because it answers a different question: not what stock you have,
-              but how stock changed over time. That said, it now visually matches the rest of the dashboard and is easier to scan.
-            </p>
           </div>
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -118,7 +114,7 @@ export default function MovementsPage() {
       </section>
 
       <section className="card" style={{ padding: 16, borderRadius: 20 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 0.8fr', gap: 12, alignItems: 'center' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, alignItems: 'center' }}>
           <div style={{ position: 'relative' }}>
             <Search size={14} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
             <input

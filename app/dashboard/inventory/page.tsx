@@ -200,7 +200,7 @@ export default function InventoryPage() {
         </select>
       </div>
 
-      <div className="card" style={{ overflow: 'hidden' }}>
+      <div className="card table-scroll" style={{ overflow: 'hidden' }}>
         <table className="data-table">
           <thead>
             <tr>
@@ -273,7 +273,7 @@ export default function InventoryPage() {
               <button onClick={() => setShowModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748B' }}><X size={20} /></button>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
               {[
                 { label: 'Item Code', key: 'item_code', placeholder: 'e.g. COF001' },
                 { label: 'Product Name', key: 'name', placeholder: 'e.g. Espresso Beans' },

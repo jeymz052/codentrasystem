@@ -11,7 +11,7 @@ export default async function SignUpPage({
   const plan = SUBSCRIPTION_PLANS.some((entry) => entry.plan === params.plan) ? (params.plan as string) : 'professional'
 
   return (
-    <main className="auth-page auth-page--split">
+    <main className="auth-page auth-page--split auth-page--stack-mobile">
       <section className="auth-hero auth-hero--image" aria-hidden="true">
         <Image
           src="/images/codentrabg.png"

@@ -86,7 +86,7 @@ export default function SettingsPage() {
       </div>
 
       <div className="card" style={{ padding: 16 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
           <input className="input" value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} placeholder="Business name" />
           <select className="input" value={form.business_type} onChange={(event) => setForm((current) => ({ ...current, business_type: event.target.value as BusinessType }))}>
             <option value="coffee_shop">Coffee shop</option>
@@ -122,7 +122,7 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 14, marginTop: 18 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 14, marginTop: 18 }}>
         {[
           { label: 'Plan', value: state.tenant.plan, color: '#3B82F6' },
           { label: 'Business Type', value: state.tenant.business_type.replaceAll('_', ' '), color: '#8B5CF6' },

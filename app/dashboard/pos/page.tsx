@@ -449,7 +449,7 @@ export default function POSPage() {
       </section>
 
       <section className="card" style={{ padding: 14, borderRadius: 20 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 0.7fr', gap: 12, alignItems: 'center' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12, alignItems: 'center' }}>
           <div style={{ position: 'relative' }}>
             <Search size={14} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
             <input
@@ -501,7 +501,7 @@ export default function POSPage() {
         </div>
       </section>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.6fr) minmax(360px, 0.9fr)', gap: 20, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 20, alignItems: 'start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14, overflow: 'hidden' }}>
           <section className="card" style={{ overflow: 'hidden', borderRadius: 20 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '16px 18px', borderBottom: '1px solid #E2E8F0' }}>
@@ -578,7 +578,7 @@ export default function POSPage() {
           </section>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, position: 'sticky', top: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, position: 'static', top: 16 }}>
           <section className="card" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', borderRadius: 20 }}>
             <div style={{ padding: '16px 18px', borderBottom: '1px solid #E2E8F0', flexShrink: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

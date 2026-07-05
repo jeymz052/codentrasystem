@@ -53,7 +53,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 14, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginBottom: 24 }}>
         {statCards.map((item) => (
           <div key={item.label} className="card" style={{ padding: '16px 18px', position: 'relative', overflow: 'hidden' }}>
             {'alert' in item && item.alert && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: item.color }} />}
@@ -71,7 +71,7 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 24 }}>
         {quickLinks.map((link) => (
           <Link key={link.href} href={link.href} style={{ textDecoration: 'none' }}>
             <div className="card" style={{ padding: '14px 16px', border: `1px solid ${link.color}33`, cursor: 'pointer' }}>
@@ -82,7 +82,7 @@ export default function DashboardPage() {
           ))}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 20 }}>
         <div className="card" style={{ padding: '18px 20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
             <h3 style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>Critical Stock Levels</h3>

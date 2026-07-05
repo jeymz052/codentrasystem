@@ -108,7 +108,7 @@ export default function ReportsPage() {
 
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 14, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginBottom: 24 }}>
         {[
           { label: 'Inventory Value', value: formatCurrency(totalValue), icon: <Package size={18} />, color: '#3B82F6' },
           { label: 'Total COGS', value: formatCurrency(totalCOGS), icon: <TrendingDown size={18} />, color: '#EF4444' },
@@ -157,7 +157,7 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      <div className="card" style={{ overflow: 'hidden' }}>
+      <div className="card table-scroll" style={{ overflow: 'hidden' }}>
         {tab === 'Stock Balance' && (
           <table className="data-table">
             <thead>

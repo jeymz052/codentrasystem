@@ -103,12 +103,8 @@ export default function OrdersPage() {
               Procurement workspace
             </div>
             <h2 style={{ fontSize: 'clamp(1.8rem, 3vw, 2.5rem)', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.05em', lineHeight: 1.05 }}>
-              Manage purchase orders without crowding the page.
+              Purchase Orders
             </h2>
-            <p style={{ color: '#475569', fontSize: 14, lineHeight: 1.7, marginTop: 12, maxWidth: '64ch' }}>
-              Keep the list clean and open a popup only when you&apos;re creating a new PO. This keeps procurement fast,
-              readable, and consistent with the rest of the dashboard.
-            </p>
           </div>
 
           <button className="btn btn-primary" onClick={openCreate}>
@@ -162,7 +158,7 @@ export default function OrdersPage() {
         })}
       </section>
 
-      <section className="card" style={{ overflow: 'hidden', borderRadius: 20 }}>
+      <section className="card table-scroll" style={{ overflow: 'hidden', borderRadius: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '16px 18px', borderBottom: '1px solid #E2E8F0' }}>
           <div>
             <h3 style={{ fontSize: 15, fontWeight: 800, color: '#0F172A' }}>Purchase orders</h3>
@@ -248,7 +244,7 @@ export default function OrdersPage() {
               </button>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
               <label className="auth-field">
                 <span>Supplier</span>
                 <select className="auth-select" value={form.supplierId} onChange={(event) => setForm((current) => ({ ...current, supplierId: event.target.value }))}>

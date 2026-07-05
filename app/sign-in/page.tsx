@@ -8,7 +8,7 @@ export default async function SignInPage({
 }) {
   const params = (await searchParams) ?? {}
   return (
-    <main className="auth-page auth-page--split">
+    <main className="auth-page auth-page--split auth-page--stack-mobile">
       <section className="auth-hero auth-hero--image" aria-hidden="true">
         <Image
           src="/images/codentrabg.png"

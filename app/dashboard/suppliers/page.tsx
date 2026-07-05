@@ -99,11 +99,8 @@ export default function SuppliersPage() {
               Supplier directory
             </div>
             <h2 style={{ fontSize: 'clamp(1.8rem, 3vw, 2.5rem)', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.05em', lineHeight: 1.05 }}>
-              Keep vendor contacts organized without filling the page with forms.
+              Suppliers
             </h2>
-            <p style={{ color: '#475569', fontSize: 14, lineHeight: 1.7, marginTop: 12, maxWidth: '64ch' }}>
-              Add or edit suppliers in a popup, then use the table below to scan names, lead times, and contact info quickly.
-            </p>
           </div>
 
           <button className="btn btn-primary" onClick={startCreate}>
