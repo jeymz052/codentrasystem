@@ -47,6 +47,19 @@ const IMPORT_COLUMNS = [
   'reorder_point',
 ] as const
 
+const IMPORT_COLUMN_ALIASES: Record<(typeof IMPORT_COLUMNS)[number], string[]> = {
+  item_code: ['item_code', 'item code', 'sku', 'code', 'product code', 'item no', 'item number'],
+  name: ['name', 'product name', 'item name', 'description'],
+  category: ['category', 'cat', 'group'],
+  supplier: ['supplier', 'vendor', 'brand'],
+  uom: ['uom', 'unit', 'unit of measure', 'measure', 'abbreviation'],
+  unit_cost: ['unit_cost', 'unit cost', 'cost', 'purchase price', 'buying price'],
+  selling_price: ['selling_price', 'selling price', 'price', 'retail price', 'sale price'],
+  location: ['location', 'storage location', 'warehouse', 'shelf'],
+  quantity_on_hand: ['quantity_on_hand', 'quantity on hand', 'qty', 'stock qty', 'stock quantity', 'on hand'],
+  reorder_point: ['reorder_point', 'reorder point', 'reorder', 'min stock', 'minimum stock', 'low stock'],
+}
+
 function toNumber(value: unknown) {
   const parsed = Number(String(value ?? '').trim())
   return Number.isFinite(parsed) ? parsed : 0
@@ -59,7 +72,11 @@ function normalizeImportRow(row: Record<string, unknown> | unknown[]): ProductDr
         const direct = row[column]
         if (direct !== undefined) return direct
 
-        const matchedKey = Object.keys(row).find((key) => key.trim().toLowerCase() === column)
+        const aliases = IMPORT_COLUMN_ALIASES[column]
+        const matchedKey = Object.keys(row).find((key) => {
+          const normalized = key.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ')
+          return aliases.some((alias) => normalized === alias)
+        })
         return matchedKey ? row[matchedKey] : undefined
       })
 
@@ -84,7 +101,7 @@ function normalizeImportRow(row: Record<string, unknown> | unknown[]): ProductDr
 }
 
 export default function InventoryPage() {
-  const { state, saveProduct, removeProduct, importProductRows, formatCurrency } = useDemoSystem()
+  const { state, saveProduct, removeProduct, importProductRows, formatCurrency, notifySuccess, notifyError } = useDemoSystem()
   const [search, setSearch] = useState('')
   const [filterCat, setFilterCat] = useState('all')
   const [filterStatus, setFilterStatus] = useState('all')
@@ -159,6 +176,7 @@ export default function InventoryPage() {
     const draft = toDraft(form)
     if (!draft.item_code || !draft.name) return
     saveProduct(draft, editingId ?? undefined)
+    notifySuccess(editingId ? 'Item updated successfully.' : 'Item added successfully.')
     setShowModal(false)
     setEditingId(null)
     setForm(EMPTY_FORM)
@@ -166,6 +184,7 @@ export default function InventoryPage() {
 
   function handleDelete(id: string) {
     removeProduct(id)
+    notifySuccess('Item deleted successfully.')
     setDeleteConfirm(null)
   }
 
@@ -188,7 +207,7 @@ export default function InventoryPage() {
       setImportRows(rows)
       setShowImportModal(true)
     } catch {
-      alert('Unable to read that file. Please upload a valid CSV or XLSX file.')
+      notifyError('Unable to read that file. Please upload a valid CSV or XLSX file.')
     }
 
     e.target.value = ''
@@ -196,6 +215,7 @@ export default function InventoryPage() {
 
   function handleImportConfirm() {
     importProductRows(importRows)
+    notifySuccess(`Imported ${importRows.length} item${importRows.length === 1 ? '' : 's'} successfully.`)
     setShowImportModal(false)
     setImportRows([])
   }
@@ -390,41 +410,57 @@ export default function InventoryPage() {
 
               <div>
                 <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>Category</label>
-                <select className="input" value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))}>
-                  <option value="">Select category...</option>
-                  {state.categories.map((category) => (
-                    <option key={category.id} value={category.name}>{category.name}</option>
-                  ))}
-                </select>
+                {state.categories.length > 0 ? (
+                  <select className="input" value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))}>
+                    <option value="">Select category...</option>
+                    {state.categories.map((category) => (
+                      <option key={category.id} value={category.name}>{category.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input className="input" value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))} placeholder="Type a category name" />
+                )}
               </div>
 
               <div>
                 <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>Unit of Measure</label>
-                <select className="input" value={form.uom} onChange={(event) => setForm((current) => ({ ...current, uom: event.target.value }))}>
-                  {state.unitsOfMeasure.map((unit) => (
-                    <option key={unit.id} value={unit.abbreviation}>{unit.abbreviation}</option>
-                  ))}
-                </select>
+                {state.unitsOfMeasure.length > 0 ? (
+                  <select className="input" value={form.uom} onChange={(event) => setForm((current) => ({ ...current, uom: event.target.value }))}>
+                    {state.unitsOfMeasure.map((unit) => (
+                      <option key={unit.id} value={unit.abbreviation}>{unit.abbreviation}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input className="input" value={form.uom} onChange={(event) => setForm((current) => ({ ...current, uom: event.target.value }))} placeholder="Type a unit abbreviation" />
+                )}
               </div>
 
               <div>
                 <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>Supplier</label>
-                <select className="input" value={form.supplier} onChange={(event) => setForm((current) => ({ ...current, supplier: event.target.value }))}>
-                  <option value="">Select supplier...</option>
-                  {state.suppliers.map((supplier) => (
-                    <option key={supplier.id} value={supplier.name}>{supplier.name}</option>
-                  ))}
-                </select>
+                {state.suppliers.length > 0 ? (
+                  <select className="input" value={form.supplier} onChange={(event) => setForm((current) => ({ ...current, supplier: event.target.value }))}>
+                    <option value="">Select supplier...</option>
+                    {state.suppliers.map((supplier) => (
+                      <option key={supplier.id} value={supplier.name}>{supplier.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input className="input" value={form.supplier} onChange={(event) => setForm((current) => ({ ...current, supplier: event.target.value }))} placeholder="Type a supplier name" />
+                )}
               </div>
 
               <div>
                 <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>Location</label>
-                <select className="input" value={form.location} onChange={(event) => setForm((current) => ({ ...current, location: event.target.value }))}>
-                  <option value="">Select location...</option>
-                  {state.locations.map((location) => (
-                    <option key={location.id} value={location.name}>{location.name}</option>
-                  ))}
-                </select>
+                {state.locations.length > 0 ? (
+                  <select className="input" value={form.location} onChange={(event) => setForm((current) => ({ ...current, location: event.target.value }))}>
+                    <option value="">Select location...</option>
+                    {state.locations.map((location) => (
+                      <option key={location.id} value={location.name}>{location.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input className="input" value={form.location} onChange={(event) => setForm((current) => ({ ...current, location: event.target.value }))} placeholder="Type a location name" />
+                )}
               </div>
 
               {[

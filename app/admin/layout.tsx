@@ -5,6 +5,8 @@ import { DashboardShell } from '@/components/layout/DashboardShell'
 import { createSupabaseServerClient } from '@/lib/supabase-server'
 import { isConfiguredSuperAdminEmail, loadAccessibleTenants } from '@/lib/tenant-access'
 
+export const dynamic = 'force-dynamic'
+
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()

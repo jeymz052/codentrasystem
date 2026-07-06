@@ -3,7 +3,10 @@ import type { DemoSystemState } from '@/lib/demo-system'
 import {
   addOrUpdateProduct,
   acknowledgeAlert,
+  createCategory,
   createPurchaseOrder,
+  createLocation,
+  createUnitOfMeasure,
   createSupplier,
   createUser,
   deleteProduct,
@@ -18,10 +21,13 @@ import {
   toggleUserActive,
   updateSupplier,
   updateTenantSettings,
+  type CategoryDraft,
+  type LocationDraft,
   type ProductDraft,
   type PurchaseOrderDraft,
   type SaleDraftItem,
   type SupplierDraft,
+  type UnitOfMeasureDraft,
   type UserDraft,
 } from '@/lib/demo-system'
 import { getSupabaseAdminClient } from '@/lib/supabase-admin'
@@ -32,6 +38,9 @@ type AnyRow = Record<string, any>
 type MutationPayload =
   | { action: 'resetDemo'; businessType?: BusinessType }
   | { action: 'updateTenant'; patch: Partial<DemoSystemState['tenant']> & { business_type?: BusinessType } }
+  | { action: 'addCategory'; draft: CategoryDraft }
+  | { action: 'addUnitOfMeasure'; draft: UnitOfMeasureDraft }
+  | { action: 'addLocation'; draft: LocationDraft }
   | { action: 'saveProduct'; draft: ProductDraft; productId?: string }
   | { action: 'removeProduct'; productId: string }
   | { action: 'importProductRows'; drafts: ProductDraft[] }
@@ -357,6 +366,15 @@ export async function applyDatabaseMutation(
     }
     case 'updateTenant':
       state = updateTenantSettings(state, mutation.patch)
+      break
+    case 'addCategory':
+      state = createCategory(state, mutation.draft)
+      break
+    case 'addUnitOfMeasure':
+      state = createUnitOfMeasure(state, mutation.draft)
+      break
+    case 'addLocation':
+      state = createLocation(state, mutation.draft)
       break
     case 'saveProduct':
       state = addOrUpdateProduct(state, mutation.draft, mutation.productId)

@@ -13,7 +13,7 @@ const EMPTY = {
 }
 
 export default function UsersPage() {
-  const { state, addUser, toggleUser } = useDemoSystem()
+  const { state, addUser, toggleUser, notifySuccess } = useDemoSystem()
   const [form, setForm] = useState(EMPTY)
   const [showModal, setShowModal] = useState(false)
   const visibleUsers = state.users.filter((user) => !user.email.trim().toLowerCase().endsWith('@codentra.example'))
@@ -21,6 +21,7 @@ export default function UsersPage() {
   function handleSave() {
     if (!form.full_name || !form.email) return
     addUser(form)
+    notifySuccess('User invited successfully.')
     setForm(EMPTY)
     setShowModal(false)
   }
@@ -69,7 +70,13 @@ export default function UsersPage() {
                   <td>{user.email}</td>
                   <td>{user.is_active ? <span className="badge badge-green">Active</span> : <span className="badge badge-red">Inactive</span>}</td>
                   <td>
-                    <button className="btn btn-ghost btn-sm" onClick={() => toggleUser(user.id)}>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => {
+                        toggleUser(user.id)
+                        notifySuccess(user.is_active ? 'User deactivated successfully.' : 'User activated successfully.')
+                      }}
+                    >
                       <UserCheck size={13} /> {user.is_active ? 'Deactivate' : 'Activate'}
                     </button>
                   </td>

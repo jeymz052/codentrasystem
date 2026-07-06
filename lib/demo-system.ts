@@ -51,6 +51,23 @@ export type SupplierDraft = {
   notes: string
 }
 
+export type CategoryDraft = {
+  name: string
+  color?: string
+  description?: string
+}
+
+export type UnitOfMeasureDraft = {
+  name: string
+  abbreviation: string
+}
+
+export type LocationDraft = {
+  code: string
+  name: string
+  zone?: string
+}
+
 export type UserDraft = {
   full_name: string
   email: string
@@ -484,7 +501,6 @@ export function importProducts(state: DemoSystemState, drafts: ProductDraft[]): 
 }
 
 export function createSupplier(state: DemoSystemState, draft: SupplierDraft): DemoSystemState {
-  ensurePlanCapacity(state, 'users', true)
   const supplier: Supplier = {
     id: id(),
     tenant_id: state.tenant.id,
@@ -501,6 +517,96 @@ export function createSupplier(state: DemoSystemState, draft: SupplierDraft): De
   }
 
   return { ...state, suppliers: [...state.suppliers, supplier] }
+}
+
+export function createCategory(state: DemoSystemState, draft: CategoryDraft): DemoSystemState {
+  const name = normalizeName(draft.name)
+  if (!name) return state
+
+  const existing = state.categories.find((category) => lower(category.name) === lower(name))
+  if (existing) {
+    return {
+      ...state,
+      categories: state.categories.map((category) =>
+        category.id === existing.id
+          ? { ...category, color: draft.color?.trim() || category.color, description: draft.description?.trim() || category.description }
+          : category
+      ),
+    }
+  }
+
+  const category: Category = {
+    id: id(),
+    tenant_id: state.tenant.id,
+    name,
+    description: draft.description?.trim() || null,
+    color: draft.color?.trim() || '#3B82F6',
+    is_active: true,
+    created_at: nowIso(),
+  }
+
+  return { ...state, categories: [...state.categories, category] }
+}
+
+export function createUnitOfMeasure(state: DemoSystemState, draft: UnitOfMeasureDraft): DemoSystemState {
+  const name = normalizeName(draft.name)
+  const abbreviation = normalizeName(draft.abbreviation)
+  if (!name || !abbreviation) return state
+
+  const existing = state.unitsOfMeasure.find((uom) => lower(uom.abbreviation) === lower(abbreviation) || lower(uom.name) === lower(name))
+  if (existing) {
+    return {
+      ...state,
+      unitsOfMeasure: state.unitsOfMeasure.map((uom) =>
+        uom.id === existing.id
+          ? { ...uom, name, abbreviation, is_active: true }
+          : uom
+      ),
+    }
+  }
+
+  const uom: UnitOfMeasure = {
+    id: id(),
+    tenant_id: state.tenant.id,
+    name,
+    abbreviation,
+    is_active: true,
+    created_at: nowIso(),
+  }
+
+  return { ...state, unitsOfMeasure: [...state.unitsOfMeasure, uom] }
+}
+
+export function createLocation(state: DemoSystemState, draft: LocationDraft): DemoSystemState {
+  const code = normalizeName(draft.code).toUpperCase()
+  const name = normalizeName(draft.name)
+  if (!code || !name) return state
+
+  ensurePlanCapacity(state, 'locations')
+
+  const existing = state.locations.find((location) => lower(location.code) === lower(code) || lower(location.name) === lower(name))
+  if (existing) {
+    return {
+      ...state,
+      locations: state.locations.map((location) =>
+        location.id === existing.id
+          ? { ...location, code, name, zone: draft.zone?.trim() || location.zone, is_active: true }
+          : location
+      ),
+    }
+  }
+
+  const location: Location = {
+    id: id(),
+    tenant_id: state.tenant.id,
+    code,
+    name,
+    zone: draft.zone?.trim() || null,
+    is_active: true,
+    created_at: nowIso(),
+  }
+
+  return { ...state, locations: [...state.locations, location] }
 }
 
 export function updateSupplier(state: DemoSystemState, supplierId: string, draft: SupplierDraft): DemoSystemState {

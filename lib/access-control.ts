@@ -14,6 +14,9 @@ export type DashboardPath =
 export type MutationAction =
   | 'resetDemo'
   | 'updateTenant'
+  | 'addCategory'
+  | 'addUnitOfMeasure'
+  | 'addLocation'
   | 'saveProduct'
   | 'removeProduct'
   | 'importProductRows'

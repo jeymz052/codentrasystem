@@ -1,11 +1,15 @@
 'use client'
 
 import { createContext, useContext, useEffect, useRef, useState, type PropsWithChildren } from 'react'
+import { CheckCircle2, X, AlertTriangle } from 'lucide-react'
 import {
   addOrUpdateProduct,
   acknowledgeAlert,
   computeDashboardStats,
+  createCategory,
   createPurchaseOrder,
+  createLocation,
+  createUnitOfMeasure,
   createSupplier,
   createUser,
   deleteProduct,
@@ -22,10 +26,13 @@ import {
   updateSupplier,
   updateTenantSettings,
   type DemoSystemState,
+  type CategoryDraft,
+  type LocationDraft,
   type ProductDraft,
   type PurchaseOrderDraft,
   type SaleDraftItem,
   type SupplierDraft,
+  type UnitOfMeasureDraft,
   type UserDraft,
 } from '@/lib/demo-system'
 import type { AccessibleTenant, BusinessType, PaymentMethod } from '@/types/database'
@@ -50,6 +57,9 @@ type DemoSystemContextValue = {
   stats: ReturnType<typeof computeDashboardStats>
   resetDemo: (businessType?: BusinessType) => void
   updateTenant: (patch: Partial<DemoSystemState['tenant']> & { business_type?: BusinessType }) => void
+  addCategory: (draft: CategoryDraft) => void
+  addUnitOfMeasure: (draft: UnitOfMeasureDraft) => void
+  addLocation: (draft: LocationDraft) => void
   saveProduct: (draft: ProductDraft, productId?: string) => void
   removeProduct: (productId: string) => void
   importProductRows: (drafts: ProductDraft[]) => void
@@ -66,9 +76,17 @@ type DemoSystemContextValue = {
   switchTenant: (tenantId: string) => Promise<void>
   signOut: () => Promise<void>
   formatCurrency: (amount: number) => string
+  notifySuccess: (message: string) => void
+  notifyError: (message: string) => void
 }
 
 const DemoSystemContext = createContext<DemoSystemContextValue | null>(null)
+
+type FeedbackItem = {
+  id: string
+  kind: 'success' | 'error'
+  message: string
+}
 
 function loadCachedState(): DemoSystemState {
   if (typeof window === 'undefined') return seedDemoSystem()
@@ -120,8 +138,10 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
   const [availableTenants, setAvailableTenants] = useState<AccessibleTenant[]>([])
   const [activeTenantId, setActiveTenantId] = useState<string>('')
   const [hydrated, setHydrated] = useState(false)
+  const [feedback, setFeedback] = useState<FeedbackItem[]>([])
   const supabase = createClient()
   const requestIdRef = useRef(0)
+  const feedbackIdRef = useRef(0)
 
   useEffect(() => {
     let mounted = true
@@ -164,6 +184,26 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
     window.localStorage.setItem(ACTIVE_TENANT_KEY, activeTenantId || state.tenant.id)
   }, [hydrated, state, activeTenantId])
+
+  useEffect(() => {
+    if (!feedback.length) return
+
+    const timeoutIds = feedback.map((item) =>
+      window.setTimeout(() => {
+        setFeedback((current) => current.filter((entry) => entry.id !== item.id))
+      }, 3200)
+    )
+
+    return () => {
+      timeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId))
+    }
+  }, [feedback])
+
+  function pushFeedback(kind: FeedbackItem['kind'], message: string) {
+    feedbackIdRef.current += 1
+    const id = `${kind}-${feedbackIdRef.current}`
+    setFeedback((current) => [...current, { id, kind, message }].slice(-3))
+  }
 
   function sync<T>(optimistic: (current: DemoSystemState) => DemoSystemState, mutation: Record<string, unknown>) {
     requestIdRef.current += 1
@@ -211,6 +251,18 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     updateTenant: (patch) => sync(
       (current) => updateTenantSettings(current, patch),
       { action: 'updateTenant', patch }
+    ),
+    addCategory: (draft) => sync(
+      (current) => createCategory(current, draft),
+      { action: 'addCategory', draft }
+    ),
+    addUnitOfMeasure: (draft) => sync(
+      (current) => createUnitOfMeasure(current, draft),
+      { action: 'addUnitOfMeasure', draft }
+    ),
+    addLocation: (draft) => sync(
+      (current) => createLocation(current, draft),
+      { action: 'addLocation', draft }
     ),
     saveProduct: (draft, productId) => sync(
       (current) => addOrUpdateProduct(current, draft, productId),
@@ -291,9 +343,49 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       window.location.href = '/sign-in'
     },
     formatCurrency,
+    notifySuccess: (message) => pushFeedback('success', message),
+    notifyError: (message) => pushFeedback('error', message),
   }
 
-  return <DemoSystemContext.Provider value={value}>{children}</DemoSystemContext.Provider>
+  return (
+    <DemoSystemContext.Provider value={value}>
+      {children}
+      <div style={{ position: 'fixed', top: 16, right: 16, zIndex: 70, display: 'grid', gap: 10, width: 'min(360px, calc(100vw - 32px))', pointerEvents: 'none' }}>
+        {feedback.map((item) => (
+          <div
+            key={item.id}
+            style={{
+              pointerEvents: 'auto',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 10,
+              padding: '12px 14px',
+              borderRadius: 14,
+              border: item.kind === 'success' ? '1px solid #BBF7D0' : '1px solid #FECACA',
+              background: item.kind === 'success' ? 'linear-gradient(180deg, #ECFDF5 0%, #F0FDF4 100%)' : 'linear-gradient(180deg, #FEF2F2 0%, #FFF1F2 100%)',
+              boxShadow: '0 12px 30px rgba(15, 23, 42, 0.12)',
+              color: '#0F172A',
+            }}
+          >
+            <div style={{ width: 28, height: 28, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', background: item.kind === 'success' ? '#D1FAE5' : '#FEE2E2', color: item.kind === 'success' ? '#059669' : '#DC2626', flexShrink: 0 }}>
+              {item.kind === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, lineHeight: 1.25 }}>{item.message}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setFeedback((current) => current.filter((entry) => entry.id !== item.id))}
+              aria-label="Dismiss notification"
+              style={{ border: 'none', background: 'transparent', color: '#64748B', cursor: 'pointer', padding: 0, flexShrink: 0 }}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </DemoSystemContext.Provider>
+  )
 }
 
 export function useDemoSystem() {
