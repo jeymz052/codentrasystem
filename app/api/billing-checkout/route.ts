@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { PLAN_PRICE_ENV, getStripeSecretKey } from '@/lib/billing'
-import { hasSuperAdminMembership, loadAccessibleTenants, getTenantMembership } from '@/lib/tenant-access'
+import { hasSuperAdminMembership, isConfiguredSuperAdminEmail, loadAccessibleTenants, getTenantMembership } from '@/lib/tenant-access'
 import { copyResponseCookies, createSupabaseRouteClient } from '@/lib/supabase-server'
 
 export const runtime = 'nodejs'
@@ -22,14 +22,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid subscription plan' }, { status: 400 })
   }
 
-  const { tenants } = await loadAccessibleTenants(user.id)
+  const { tenants } = await loadAccessibleTenants(user.id, user.email)
   const tenant = tenants.find((entry) => entry.id === tenantId) ?? tenants[0]
   if (!tenant) {
     return NextResponse.json({ error: 'Complete onboarding first' }, { status: 409 })
   }
 
   const membership = await getTenantMembership(user.id, tenant.id)
-  const canManageBilling = membership?.role === 'admin' || membership?.role === 'super_admin' || await hasSuperAdminMembership(user.id)
+  const canManageBilling = membership?.role === 'admin' || membership?.role === 'super_admin' || isConfiguredSuperAdminEmail(user.email) || await hasSuperAdminMembership(user.id)
   if (!canManageBilling) {
     return NextResponse.json({ error: 'Only admins can manage billing' }, { status: 403 })
   }

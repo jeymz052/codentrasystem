@@ -15,6 +15,7 @@ const TITLES: Record<string, string> = {
   '/dashboard/reports': 'Reports',
   '/dashboard/users': 'User Management',
   '/dashboard/settings': 'Settings',
+  '/admin/tenants': 'Tenant Monitoring',
 }
 
 type TopBarProps = {

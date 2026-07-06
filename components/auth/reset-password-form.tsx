@@ -1,11 +1,14 @@
 'use client'
 
-import { useState, type FormEvent } from 'react'
-import { ArrowRight, CheckCircle2, Eye, EyeOff, LockKeyhole, Sparkles } from 'lucide-react'
+import { useEffect, useState, type FormEvent } from 'react'
+import { useRouter } from 'next/navigation'
+import Image from 'next/image'
+import { ArrowRight, CheckCircle2, Eye, EyeOff, LockKeyhole } from 'lucide-react'
 import { createClient } from '@/lib/supabase'
 
 export function ResetPasswordForm() {
   const supabase = createClient()
+  const router = useRouter()
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -13,6 +16,16 @@ export function ResetPasswordForm() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!success) return
+
+    const timer = window.setTimeout(() => {
+      router.replace('/sign-in?reset=1')
+    }, 1800)
+
+    return () => window.clearTimeout(timer)
+  }, [router, success])
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -40,15 +53,25 @@ export function ResetPasswordForm() {
   }
 
   return (
-    <div className="auth-card">
-      <div className="auth-badge">
-        <Sparkles size={14} />
-        Set new password
+    <div className="auth-card auth-card--entry">
+      <div className="auth-brand-block">
+        <div className="auth-brand">
+          <Image
+            src="/images/codentralogo-removebg-preview.png"
+            alt="Codentra logo"
+            width={520}
+            height={184}
+            priority
+            className="auth-brand-logo"
+          />
+        </div>
+        <div className="auth-signin-copy">
+          <h1 className="auth-title">Create your new password</h1>
+          <p className="auth-copy">
+            Choose a new password for your Codentra account.
+          </p>
+        </div>
       </div>
-      <h1 className="auth-title">Create your new password</h1>
-      <p className="auth-copy">
-        Choose a new password for your Codentra account.
-      </p>
 
       <form onSubmit={handleSubmit} className="auth-form">
         <label className="auth-field">
@@ -107,6 +130,10 @@ export function ResetPasswordForm() {
           <ArrowRight size={16} />
         </button>
       </form>
+
+      <div className="auth-footer">
+        After updating, you’ll be sent back to <span style={{ color: 'var(--accent)', fontWeight: 700 }}>sign in</span>.
+      </div>
     </div>
   )
 }

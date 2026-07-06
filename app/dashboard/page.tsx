@@ -3,9 +3,11 @@
 import Link from 'next/link'
 import { AlertTriangle, ArrowUpDown, CreditCard, DollarSign, Package, ShoppingCart, TrendingDown, Users } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
+import { formatRoleLabel } from '@/lib/access-control'
 
 export default function DashboardPage() {
   const { state, stats, formatCurrency } = useDemoSystem()
+  const visibleUsers = state.users.filter((user) => !user.email.trim().toLowerCase().endsWith('@codentra.example'))
 
   const statCards = [
     { label: 'Total SKUs', value: String(stats.total_products), sub: 'Active products', icon: <Package size={18} />, color: '#3B82F6' },
@@ -15,7 +17,7 @@ export default function DashboardPage() {
     { label: 'Pending Orders', value: String(stats.pending_orders), sub: 'Purchase orders', icon: <ShoppingCart size={18} />, color: '#8B5CF6' },
     { label: "Today's Sales", value: formatCurrency(stats.sales_today), sub: `${stats.transactions_today} transactions`, icon: <CreditCard size={18} />, color: '#2563EB' },
     { label: 'Stock Movements', value: String(state.stockMovements.length), sub: 'Audit trail', icon: <ArrowUpDown size={18} />, color: '#3B82F6' },
-    { label: 'Active Users', value: String(state.users.filter((user) => user.is_active).length), sub: 'Admin, Manager, Cashier', icon: <Users size={18} />, color: '#8B5CF6' },
+    { label: 'Active Users', value: String(visibleUsers.filter((user) => user.is_active).length), sub: `${formatRoleLabel('admin')}, Manager, Cashier`, icon: <Users size={18} />, color: '#8B5CF6' },
   ]
 
   const lowStock = state.products

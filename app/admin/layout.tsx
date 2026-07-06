@@ -1,17 +1,16 @@
 import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
 import { DemoSystemProvider } from '@/components/demo-system-provider'
-import { DashboardAccessGate } from '@/components/layout/DashboardAccessGate'
 import { DashboardShell } from '@/components/layout/DashboardShell'
 import { createSupabaseServerClient } from '@/lib/supabase-server'
 import { isConfiguredSuperAdminEmail, loadAccessibleTenants } from '@/lib/tenant-access'
 
-export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
+export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()
 
   if (!user) {
-    redirect('/sign-in?next=/dashboard')
+    redirect('/sign-in?next=/admin/tenants')
   }
 
   const isSuperAdminIdentity = isConfiguredSuperAdminEmail(user.email)
@@ -26,9 +25,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   return (
     <DemoSystemProvider initialTenantId={initialTenantId} authUserEmail={user.email ?? null} isSuperAdminIdentity={isSuperAdminIdentity}>
-      <DashboardAccessGate>
-        <DashboardShell>{children}</DashboardShell>
-      </DashboardAccessGate>
+      <DashboardShell>{children}</DashboardShell>
     </DemoSystemProvider>
   )
 }

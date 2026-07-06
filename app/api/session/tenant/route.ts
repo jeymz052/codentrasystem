@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'tenantId is required' }, { status: 400 })
   }
 
-  const allowed = await canAccessTenant(user.id, tenantId)
+  const allowed = await canAccessTenant(user.id, tenantId, user.email)
   if (!allowed) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }

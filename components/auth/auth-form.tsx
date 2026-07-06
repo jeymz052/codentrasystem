@@ -12,12 +12,14 @@ type AuthFormProps = {
   mode: AuthMode
   nextPath?: string
   initialPlan?: string
+  resetMessage?: boolean
 }
 
 export function AuthForm({
   mode,
   nextPath = '/dashboard',
   initialPlan = 'professional',
+  resetMessage = false,
 }: AuthFormProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -221,6 +223,12 @@ export function AuthForm({
           </>
         ) : (
           <>
+            {resetMessage ? (
+              <div className="auth-message success">
+                <CheckCircle2 size={14} />
+                Your password was updated. You can sign in again now.
+              </div>
+            ) : null}
             <div className="auth-inline-row">
               <label className="auth-inline-label">
                 <input

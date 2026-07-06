@@ -553,6 +553,14 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
   overflow-x: auto;
 }
 
+.inventory-mobile-list {
+  display: none;
+}
+
+.inventory-toolbar {
+  display: flex;
+}
+
 @media (max-width: 1024px) {
   .dashboard-sidebar {
     position: fixed;
@@ -606,6 +614,31 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
   .auth-card {
     margin: 18px;
     padding: 22px;
+  }
+
+  .modal {
+    padding: 20px 16px;
+    border-radius: 18px;
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 20px);
+  }
+
+  .inventory-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .inventory-toolbar > * {
+    width: 100%;
+  }
+
+  .inventory-desktop-table {
+    display: none;
+  }
+
+  .inventory-mobile-list {
+    display: grid;
+    gap: 12px;
   }
 }
 

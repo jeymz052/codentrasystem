@@ -9,7 +9,7 @@ import {
   CreditCard, Users, Building2, LogOut,
 } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
-import { canAccessDashboardPath } from '@/lib/access-control'
+import { canAccessDashboardPath, formatRoleLabel } from '@/lib/access-control'
 
 const NAV = [
   { href: '/dashboard',            icon: LayoutDashboard, label: 'Dashboard',        roles: ['admin','manager','cashier'] },
@@ -30,9 +30,11 @@ type SidebarProps = {
 
 export function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps) {
   const path = usePathname()
-  const { state, availableTenants, activeTenantId, signOut } = useDemoSystem()
+  const { state, availableTenants, activeTenantId, authUserEmail, isSuperAdminIdentity, signOut } = useDemoSystem()
   const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
   const role = activeTenant?.role ?? 'cashier'
+  const fallbackEmail = state.users.find((user) => user.id === state.currentUserId)?.email ?? state.users[0]?.email ?? null
+  const displayEmail = authUserEmail ?? fallbackEmail
   const renewalLabel = state.tenant.subscription_ends_at
     ? `Renews ${new Date(state.tenant.subscription_ends_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
     : 'No renewal date'
@@ -86,6 +88,47 @@ export function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps) {
             </Link>
           )
         })}
+        {isSuperAdminIdentity && (
+          <>
+            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', color: '#94A3B8', padding: '14px 8px 8px', textTransform: 'uppercase' }}>
+              Superadmin
+            </div>
+            <Link
+              href="/admin/tenants"
+              onClick={onNavigate}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 9,
+                padding: '9px 10px',
+                borderRadius: 8,
+                marginBottom: 1,
+                textDecoration: 'none',
+                background: path.startsWith('/admin') ? '#DBEAFE' : 'transparent',
+                color: path.startsWith('/admin') ? '#3B82F6' : '#475569',
+                fontWeight: path.startsWith('/admin') ? 600 : 400,
+                fontSize: 13,
+                transition: 'all 0.15s',
+                position: 'relative',
+              }}
+            >
+              {path.startsWith('/admin') && (
+                <span style={{
+                  position: 'absolute',
+                  left: 0,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  width: 3,
+                  height: 18,
+                  background: '#3B82F6',
+                  borderRadius: '0 3px 3px 0',
+                }} />
+              )}
+              <Building2 size={16} strokeWidth={path.startsWith('/admin') ? 2.5 : 2} />
+              <span style={{ flex: 1 }}>Tenant Monitor</span>
+            </Link>
+          </>
+        )}
       </nav>
 
       {/* Subscription badge */}
@@ -118,7 +161,12 @@ export function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps) {
             <div style={{ fontSize: 12, fontWeight: 600, color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {state.tenant.name}
             </div>
-            <div style={{ fontSize: 10, color: '#64748B' }}>{role}</div>
+            <div style={{ fontSize: 10, color: '#64748B' }}>{formatRoleLabel(role)}</div>
+            {displayEmail ? (
+              <div style={{ fontSize: 10, color: '#94A3B8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {displayEmail}
+              </div>
+            ) : null}
           </div>
         </div>
         <button

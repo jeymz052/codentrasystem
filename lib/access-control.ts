@@ -81,3 +81,18 @@ export function canUsePaymentMethod(role: UserRole, paymentMethod: PaymentMethod
   if (role === 'super_admin' || role === 'admin' || role === 'manager') return true
   return paymentMethod === 'cash' || paymentMethod === 'qr_ph'
 }
+
+export function formatRoleLabel(role: UserRole) {
+  switch (role) {
+    case 'super_admin':
+      return 'Super Admin'
+    case 'admin':
+      return 'Tenant Admin'
+    case 'manager':
+      return 'Manager'
+    case 'cashier':
+      return 'Cashier'
+    default:
+      return role
+  }
+}

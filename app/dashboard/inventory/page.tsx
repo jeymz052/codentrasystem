@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { AlertTriangle, Edit2, Package, Plus, Save, Search, Trash2, Upload, X } from 'lucide-react'
+import * as XLSX from 'xlsx'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import type { ProductDraft } from '@/lib/demo-system'
 
@@ -31,6 +32,55 @@ const EMPTY_FORM: ProductForm = {
   supplier: '',
   location: '',
   description: '',
+}
+
+const IMPORT_COLUMNS = [
+  'item_code',
+  'name',
+  'category',
+  'supplier',
+  'uom',
+  'unit_cost',
+  'selling_price',
+  'location',
+  'quantity_on_hand',
+  'reorder_point',
+] as const
+
+function toNumber(value: unknown) {
+  const parsed = Number(String(value ?? '').trim())
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function normalizeImportRow(row: Record<string, unknown> | unknown[]): ProductDraft | null {
+  const values = Array.isArray(row)
+    ? row
+    : IMPORT_COLUMNS.map((column) => {
+        const direct = row[column]
+        if (direct !== undefined) return direct
+
+        const matchedKey = Object.keys(row).find((key) => key.trim().toLowerCase() === column)
+        return matchedKey ? row[matchedKey] : undefined
+      })
+
+  const [item_code, name, category, supplier, uom, unit_cost, selling_price, location, quantity_on_hand, reorder_point] = values
+
+  const draft: ProductDraft = {
+    item_code: String(item_code ?? '').trim(),
+    name: String(name ?? '').trim(),
+    category: String(category ?? '').trim(),
+    supplier: String(supplier ?? '').trim(),
+    uom: String(uom ?? '').trim(),
+    unit_cost: toNumber(unit_cost),
+    selling_price: toNumber(selling_price),
+    location: String(location ?? '').trim(),
+    quantity_on_hand: toNumber(quantity_on_hand),
+    reorder_point: toNumber(reorder_point),
+    description: '',
+  }
+
+  if (!draft.item_code || !draft.name) return null
+  return draft
 }
 
 export default function InventoryPage() {
@@ -119,37 +169,28 @@ export default function InventoryPage() {
     setDeleteConfirm(null)
   }
 
-  function handleFileUpload(e: ChangeEvent<HTMLInputElement>) {
+  async function handleFileUpload(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
 
-    const reader = new FileReader()
-    reader.onload = (event) => {
-      const text = String(event.target?.result ?? '')
-      const rows = text
-        .split(/\r?\n/)
-        .slice(1)
-        .filter(Boolean)
-        .map((row) => row.split(',').map((cell) => cell.trim()))
-        .filter((cols) => cols.length >= 10)
-        .map(([item_code, name, category, supplier, uom, unit_cost, selling_price, location, quantity_on_hand, reorder_point]) => ({
-          item_code,
-          name,
-          category,
-          supplier,
-          uom,
-          unit_cost: Number(unit_cost) || 0,
-          selling_price: Number(selling_price) || 0,
-          location,
-          quantity_on_hand: Number(quantity_on_hand) || 0,
-          reorder_point: Number(reorder_point) || 0,
-          description: '',
-        }))
+    try {
+      const workbook = file.name.toLowerCase().endsWith('.csv')
+        ? XLSX.read(await file.text(), { type: 'string' })
+        : XLSX.read(await file.arrayBuffer(), { type: 'array' })
+
+      const firstSheet = workbook.SheetNames[0]
+      const sheet = firstSheet ? workbook.Sheets[firstSheet] : null
+      const parsedRows = sheet ? XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' }) : []
+      const rows = parsedRows
+        .map((row) => normalizeImportRow(row))
+        .filter((row): row is ProductDraft => Boolean(row))
 
       setImportRows(rows)
       setShowImportModal(true)
+    } catch {
+      alert('Unable to read that file. Please upload a valid CSV or XLSX file.')
     }
-    reader.readAsText(file)
+
     e.target.value = ''
   }
 
@@ -169,9 +210,9 @@ export default function InventoryPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <input ref={fileRef} type="file" accept=".csv" style={{ display: 'none' }} onChange={handleFileUpload} />
+          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: 'none' }} onChange={handleFileUpload} />
           <button className="btn btn-ghost" onClick={() => fileRef.current?.click()}>
-            <Upload size={15} /> Import CSV
+            <Upload size={15} /> Import CSV/XLSX
           </button>
           <button className="btn btn-primary" onClick={openAdd}>
             <Plus size={15} /> Add Item
@@ -179,7 +220,7 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      <div className="card" style={{ padding: '12px 16px', marginBottom: 16, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+      <div className="card inventory-toolbar" style={{ padding: '12px 16px', marginBottom: 16, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ position: 'relative', flex: 1, minWidth: 220 }}>
           <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
           <input className="input" placeholder="Search by name or item code..." value={search} onChange={(event) => setSearch(event.target.value)} style={{ paddingLeft: 36, height: 36, fontSize: 13 }} />
@@ -200,7 +241,7 @@ export default function InventoryPage() {
         </select>
       </div>
 
-      <div className="card table-scroll" style={{ overflow: 'hidden' }}>
+      <div className="card table-scroll inventory-desktop-table" style={{ overflow: 'hidden' }}>
         <table className="data-table">
           <thead>
             <tr>
@@ -263,6 +304,69 @@ export default function InventoryPage() {
             )}
           </tbody>
         </table>
+      </div>
+
+      <div className="inventory-mobile-list">
+        {filtered.map((product) => {
+          const status = product.quantity_on_hand === 0 ? 'out' : product.quantity_on_hand <= product.reorder_point ? 'low' : 'ok'
+          const statusColor = status === 'out' ? '#EF4444' : status === 'low' ? '#F59E0B' : '#10B981'
+          const statusLabel = status === 'out' ? 'Out of Stock' : status === 'low' ? 'Low Stock' : 'In Stock'
+
+          return (
+            <div key={product.id} className="card" style={{ padding: 14, borderRadius: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 800, color: '#0F172A', lineHeight: 1.25 }}>{product.name}</div>
+                  <div style={{ marginTop: 4, fontSize: 11, color: '#64748B' }}>{product.item_code} · {product.supplier?.name ?? 'No supplier'}</div>
+                </div>
+                <span className="badge" style={{ background: `${statusColor}14`, color: statusColor, flexShrink: 0 }}>{statusLabel}</span>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10, marginTop: 14, fontSize: 12 }}>
+                <div style={{ padding: 12, borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
+                  <div style={{ color: '#94A3B8' }}>Category</div>
+                  <div style={{ marginTop: 4, fontWeight: 700, color: '#0F172A' }}>{product.category?.name ?? 'Uncategorized'}</div>
+                </div>
+                <div style={{ padding: 12, borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
+                  <div style={{ color: '#94A3B8' }}>Location</div>
+                  <div style={{ marginTop: 4, fontWeight: 700, color: '#0F172A' }}>{product.location?.name ?? 'Main Storage'}</div>
+                </div>
+                <div style={{ padding: 12, borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
+                  <div style={{ color: '#94A3B8' }}>On hand</div>
+                  <div style={{ marginTop: 4, fontWeight: 800, color: statusColor }}>{product.quantity_on_hand}</div>
+                </div>
+                <div style={{ padding: 12, borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
+                  <div style={{ color: '#94A3B8' }}>Reorder</div>
+                  <div style={{ marginTop: 4, fontWeight: 800, color: '#0F172A' }}>{product.reorder_point}</div>
+                </div>
+                <div style={{ padding: 12, borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
+                  <div style={{ color: '#94A3B8' }}>Unit cost</div>
+                  <div style={{ marginTop: 4, fontWeight: 800, color: '#0F172A' }}>{formatCurrency(Number(product.unit_cost ?? 0))}</div>
+                </div>
+                <div style={{ padding: 12, borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
+                  <div style={{ color: '#94A3B8' }}>Selling price</div>
+                  <div style={{ marginTop: 4, fontWeight: 800, color: '#10B981' }}>{formatCurrency(Number(product.selling_price ?? 0))}</div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => openEdit(product)} style={{ flex: 1, justifyContent: 'center' }}>
+                  <Edit2 size={13} /> Edit
+                </button>
+                <button className="btn btn-danger btn-sm" onClick={() => setDeleteConfirm(product.id)} style={{ flex: 1, justifyContent: 'center' }}>
+                  <Trash2 size={13} /> Delete
+                </button>
+              </div>
+            </div>
+          )
+        })}
+
+        {filtered.length === 0 && (
+          <div className="card" style={{ padding: 24, textAlign: 'center', color: '#94A3B8' }}>
+            <Package size={28} style={{ marginBottom: 8, opacity: 0.35 }} />
+            <p>No items found</p>
+          </div>
+        )}
       </div>
 
       {showModal && (

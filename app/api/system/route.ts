@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { applyDatabaseMutation, ensureDatabaseState } from '@/lib/system-db'
-import { hasSuperAdminMembership, loadAccessibleTenants, getTenantMembership } from '@/lib/tenant-access'
+import { applyDatabaseMutation, ensureDatabaseState, loadTenantState } from '@/lib/system-db'
+import { hasSuperAdminMembership, isConfiguredSuperAdminEmail, loadAccessibleTenants, getTenantMembership } from '@/lib/tenant-access'
 import { canPerformMutation } from '@/lib/access-control'
 import { copyResponseCookies, createSupabaseRouteClient } from '@/lib/supabase-server'
 import type { BusinessType } from '@/types/database'
@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { tenants, activeTenantId: defaultTenantId } = await loadAccessibleTenants(user.id)
+    const { tenants, activeTenantId: defaultTenantId } = await loadAccessibleTenants(user.id, user.email)
     if (!tenants.length || !defaultTenantId) {
       return NextResponse.json({ error: 'Complete onboarding first' }, { status: 409 })
     }
@@ -23,7 +23,17 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const requestedTenantId = searchParams.get('tenantId') ?? request.cookies.get('codentra.active-tenant')?.value ?? defaultTenantId
     const activeTenant = tenants.find((tenant) => tenant.id === requestedTenantId) ?? tenants.find((tenant) => tenant.id === defaultTenantId) ?? tenants[0]
-    const state = await ensureDatabaseState(activeTenant.id, activeTenant.business_type as BusinessType)
+    let state: Awaited<ReturnType<typeof ensureDatabaseState>>
+    try {
+      state = await ensureDatabaseState(activeTenant.id, activeTenant.business_type as BusinessType)
+    } catch (error) {
+      const fallback = await loadTenantState(activeTenant.id)
+      if (fallback) {
+        state = fallback
+      } else {
+        throw error
+      }
+    }
 
     const response = NextResponse.json({
       state,
@@ -60,7 +70,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json()
-    const { tenants, activeTenantId: defaultTenantId } = await loadAccessibleTenants(user.id)
+    const { tenants, activeTenantId: defaultTenantId } = await loadAccessibleTenants(user.id, user.email)
     const requestedTenantId = String(body.tenantId ?? request.cookies.get('codentra.active-tenant')?.value ?? defaultTenantId ?? '')
     const activeTenant = tenants.find((tenant) => tenant.id === requestedTenantId) ?? tenants.find((tenant) => tenant.id === defaultTenantId)
 
@@ -74,7 +84,7 @@ export async function POST(request: NextRequest) {
     }
 
     const membership = await getTenantMembership(user.id, tenantId)
-    const superAdmin = membership?.role === 'super_admin' || await hasSuperAdminMembership(user.id)
+    const superAdmin = membership?.role === 'super_admin' || isConfiguredSuperAdminEmail(user.email) || await hasSuperAdminMembership(user.id)
     const role = (superAdmin ? 'super_admin' : membership?.role) as 'super_admin' | 'admin' | 'manager' | 'cashier' | null
 
     if (!role) {

@@ -3,8 +3,38 @@ import { getSupabaseServiceClient } from '@/lib/supabase-server'
 
 type MembershipRow = TenantMembership
 
-export async function loadAccessibleTenants(authUserId: string): Promise<{ tenants: AccessibleTenant[]; activeTenantId: string | null }> {
+const SUPERADMIN_EMAIL = process.env.SUPERADMIN_EMAIL ?? 'superadmin@codentra.local'
+
+export function isConfiguredSuperAdminEmail(email?: string | null) {
+  return String(email ?? '').trim().toLowerCase() === SUPERADMIN_EMAIL.toLowerCase()
+}
+
+export async function loadAccessibleTenants(authUserId: string, authUserEmail?: string | null): Promise<{ tenants: AccessibleTenant[]; activeTenantId: string | null }> {
   const client = getSupabaseServiceClient()
+
+  if (isConfiguredSuperAdminEmail(authUserEmail)) {
+    const { data: tenantRows, error: tenantError } = await client
+      .from('tenants')
+      .select('id, name, business_type, plan, subscription_status, created_at')
+      .order('created_at', { ascending: true })
+
+    if (tenantError) {
+      throw tenantError
+    }
+
+    const tenants = (tenantRows ?? []).map((tenant) => ({
+      id: tenant.id,
+      name: tenant.name,
+      business_type: tenant.business_type,
+      plan: tenant.plan,
+      subscription_status: tenant.subscription_status,
+      role: 'super_admin' as const,
+      is_default: false,
+    }))
+
+    return { tenants, activeTenantId: tenants[0]?.id ?? null }
+  }
+
   const { data, error } = await client
     .from('tenant_memberships')
     .select('id, tenant_id, auth_user_id, role, is_default, created_at')
@@ -87,7 +117,11 @@ export async function loadAccessibleTenants(authUserId: string): Promise<{ tenan
   return { tenants, activeTenantId }
 }
 
-export async function canAccessTenant(authUserId: string, tenantId: string) {
+export async function canAccessTenant(authUserId: string, tenantId: string, authUserEmail?: string | null) {
+  if (isConfiguredSuperAdminEmail(authUserEmail)) {
+    return true
+  }
+
   const client = getSupabaseServiceClient()
   const { data, error } = await client
     .from('tenant_memberships')

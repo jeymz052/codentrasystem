@@ -31,8 +31,8 @@ import {
 import type { AccessibleTenant, BusinessType, PaymentMethod } from '@/types/database'
 import { createClient } from '@/lib/supabase'
 
-const STORAGE_KEY = 'codentra.demo-cache.v1'
-const ACTIVE_TENANT_KEY = 'codentra.active-tenant.v1'
+const STORAGE_KEY = 'codentra.demo-cache.v3'
+const ACTIVE_TENANT_KEY = 'codentra.active-tenant.v3'
 
 type SystemApiResponse = {
   state: DemoSystemState
@@ -45,6 +45,8 @@ type DemoSystemContextValue = {
   state: DemoSystemState
   availableTenants: AccessibleTenant[]
   activeTenantId: string
+  authUserEmail: string | null
+  isSuperAdminIdentity: boolean
   stats: ReturnType<typeof computeDashboardStats>
   resetDemo: (businessType?: BusinessType) => void
   updateTenant: (patch: Partial<DemoSystemState['tenant']> & { business_type?: BusinessType }) => void
@@ -113,7 +115,7 @@ async function postMutation(tenantId: string, body: Record<string, unknown>) {
   return (await response.json()) as SystemApiResponse
 }
 
-export function DemoSystemProvider({ children, initialTenantId }: PropsWithChildren<{ initialTenantId?: string }>) {
+export function DemoSystemProvider({ children, initialTenantId, authUserEmail = null, isSuperAdminIdentity = false }: PropsWithChildren<{ initialTenantId?: string; authUserEmail?: string | null; isSuperAdminIdentity?: boolean }>) {
   const [state, setState] = useState<DemoSystemState>(() => seedDemoSystem())
   const [availableTenants, setAvailableTenants] = useState<AccessibleTenant[]>([])
   const [activeTenantId, setActiveTenantId] = useState<string>('')
@@ -143,7 +145,7 @@ export function DemoSystemProvider({ children, initialTenantId }: PropsWithChild
           business_type: cached.tenant.business_type,
           plan: cached.tenant.plan,
           subscription_status: cached.tenant.subscription_status,
-          role: 'admin',
+          role: isSuperAdminIdentity ? 'super_admin' : 'admin',
           is_default: true,
         }])
         setActiveTenantId(cached.tenant.id)
@@ -199,6 +201,8 @@ export function DemoSystemProvider({ children, initialTenantId }: PropsWithChild
     state,
     availableTenants,
     activeTenantId,
+    authUserEmail,
+    isSuperAdminIdentity,
     stats: computeDashboardStats(state),
     resetDemo: (businessType = state.tenant.business_type) => sync(
       (current) => remapStateTenantId(seedDemoSystem(businessType), current.tenant.id),

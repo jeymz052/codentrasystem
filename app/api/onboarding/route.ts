@@ -54,6 +54,20 @@ export async function POST(request: NextRequest) {
     max_locations: limits.max_locations,
   }
 
+  seed.users = [{
+    id: user.id,
+    tenant_id: tenantId,
+    role: 'admin',
+    full_name: String(user.user_metadata?.full_name ?? user.user_metadata?.name ?? user.email ?? business_name).trim(),
+    email: String(user.email ?? billing_email).trim(),
+    avatar_url: null,
+    is_active: true,
+    last_login: null,
+    created_at: now.toISOString(),
+    updated_at: now.toISOString(),
+  }]
+  seed.currentUserId = user.id
+
   await upsertTenantState(seed)
 
   const serviceClient = getSupabaseServiceClient()

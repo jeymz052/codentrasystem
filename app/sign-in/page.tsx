@@ -4,7 +4,7 @@ import Image from 'next/image'
 export default async function SignInPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ next?: string }>
+  searchParams?: Promise<{ next?: string; reset?: string }>
 }) {
   const params = (await searchParams) ?? {}
   return (
@@ -21,7 +21,7 @@ export default async function SignInPage({
         <div className="auth-hero-overlay" />
       </section>
       <section className="auth-panel">
-        <AuthForm mode="sign-in" nextPath={params.next ?? '/dashboard'} />
+        <AuthForm mode="sign-in" nextPath={params.next ?? '/dashboard'} resetMessage={params.reset === '1'} />
       </section>
     </main>
   )

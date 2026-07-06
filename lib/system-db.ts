@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import type { DemoSystemState } from '@/lib/demo-system'
 import {
   addOrUpdateProduct,
@@ -99,7 +100,6 @@ export async function loadTenantState(tenantId?: string | null) {
     usersResult,
     productsResult,
     alertsResult,
-    cashShiftsResult,
     poResult,
     poItemsResult,
     salesResult,
@@ -113,7 +113,6 @@ export async function loadTenantState(tenantId?: string | null) {
     client.from('users').select('*').eq('tenant_id', tenant.id),
     client.from('products').select('*').eq('tenant_id', tenant.id),
     client.from('alerts').select('*').eq('tenant_id', tenant.id),
-    client.from('cash_shifts').select('*').eq('tenant_id', tenant.id),
     client.from('purchase_orders').select('*').eq('tenant_id', tenant.id),
     client.from('purchase_order_items').select('*'),
     client.from('sales_transactions').select('*').eq('tenant_id', tenant.id),
@@ -128,7 +127,6 @@ export async function loadTenantState(tenantId?: string | null) {
   const users = asArray(usersResult.data)
   const productsRaw = asArray(productsResult.data)
   const alertsRaw = asArray(alertsResult.data)
-  const cashShiftsRaw = asArray(cashShiftsResult.data)
   const purchaseOrdersRaw = asArray(poResult.data)
   const purchaseOrderItemsRaw = asArray(poItemsResult.data)
   const salesTransactionsRaw = asArray(salesResult.data)
@@ -159,13 +157,6 @@ export async function loadTenantState(tenantId?: string | null) {
     product: productById.get(row.product_id) ?? undefined,
   }))
 
-  const cashShifts = mapRow(cashShiftsRaw, (row) => ({
-    ...row,
-    opened_by_user: row.opened_by ? userById.get(row.opened_by) ?? undefined : undefined,
-    closed_by_user: row.closed_by ? userById.get(row.closed_by) ?? undefined : undefined,
-    location: row.location_id ? locationById.get(row.location_id) ?? undefined : undefined,
-  }))
-
   const salesTransactionItems = mapRow(salesTransactionItemsRaw, (row) => ({
     ...row,
     product: productById.get(row.product_id) ?? undefined,
@@ -193,6 +184,7 @@ export async function loadTenantState(tenantId?: string | null) {
 
   const salesTransactions = mapRow(salesTransactionsRaw, (row) => ({
     ...row,
+    shift_id: row.shift_id ?? null,
     cashier: row.cashier_id ? userById.get(row.cashier_id) ?? undefined : undefined,
     items: salesItemsByTxId.get(row.id) ?? [],
   }))
@@ -211,7 +203,7 @@ export async function loadTenantState(tenantId?: string | null) {
     suppliers,
     products,
     users,
-    cashShifts,
+    cashShifts: [],
     purchaseOrders,
     purchaseOrderItems,
     salesTransactions,
@@ -251,7 +243,7 @@ export async function upsertTenantState(state: DemoSystemState) {
 
   const productRows = state.products.map(({ category, supplier, location, uom, ...row }) => row)
   const purchaseOrderRows = state.purchaseOrders.map(({ supplier, items, ...row }) => row)
-  const salesTransactionRows = state.salesTransactions.map(({ cashier, items, ...row }) => row)
+  const salesTransactionRows = state.salesTransactions.map(({ cashier, items, shift_id, ...row }) => row)
   const purchaseOrderItemRows = state.purchaseOrderItems.map(({ product, ...row }) => row)
   const salesTransactionItemRows = state.salesTransactionItems.map(({ product, ...row }) => row)
   const alertRows = state.alerts.map(({ product, ...row }) => row)
@@ -286,6 +278,60 @@ export async function upsertTenantState(state: DemoSystemState) {
 
 function normalizeSeedState(state: DemoSystemState, tenantId?: string) {
   return tenantId ? remapStateTenantId(state, tenantId) : state
+}
+
+async function provisionTenantUserAccess(tenantId: string, draft: UserDraft) {
+  const client = getSupabaseAdminClient()
+  const email = draft.email.trim().toLowerCase()
+  if (!email) {
+    throw new Error('email is required')
+  }
+
+  const { data: usersResult, error: listError } = await client.auth.admin.listUsers({ page: 1, perPage: 1000 })
+  if (listError) {
+    throw new Error(`listUsers failed: ${listError.message}`)
+  }
+
+  let authUserId = usersResult.users.find((entry) => entry.email?.toLowerCase() === email)?.id ?? null
+  if (!authUserId) {
+    const { data, error } = await client.auth.admin.createUser({
+      email,
+      password: `${randomUUID()}!Temp1`,
+      email_confirm: true,
+    })
+
+    if (error) {
+      throw new Error(`createUser failed: ${error.message}`)
+    }
+
+    authUserId = data.user.id
+  }
+
+  if (!authUserId) {
+    throw new Error('Could not resolve auth user')
+  }
+
+  const { error: membershipError } = await client.from('tenant_memberships').upsert({
+    id: randomUUID(),
+    tenant_id: tenantId,
+    auth_user_id: authUserId,
+    role: draft.role,
+    is_default: false,
+  }, {
+    onConflict: 'tenant_id,auth_user_id',
+  })
+
+  if (membershipError) {
+    throw new Error(`membership upsert failed: ${membershipError.message}`)
+  }
+
+  const redirectTo = process.env.NEXT_PUBLIC_APP_URL ? `${process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')}/reset-password` : undefined
+  const { error: resetError } = await client.auth.resetPasswordForEmail(email, redirectTo ? { redirectTo } : undefined)
+  if (resetError) {
+    throw new Error(`resetPasswordForEmail failed: ${resetError.message}`)
+  }
+
+  return authUserId
 }
 
 export async function ensureDatabaseState(tenantId?: string | null, businessType: BusinessType = 'coffee_shop') {
@@ -331,7 +377,8 @@ export async function applyDatabaseMutation(
       state = deleteSupplier(state, mutation.supplierId)
       break
     case 'addUser':
-      state = createUser(state, mutation.draft)
+      const authUserId = await provisionTenantUserAccess(currentTenantId, mutation.draft)
+      state = createUser(state, mutation.draft, authUserId)
       break
     case 'toggleUser':
       state = toggleUserActive(state, mutation.userId)

@@ -1,16 +1,19 @@
 import { ForgotPasswordForm } from '@/components/auth/forgot-password-form'
+import Image from 'next/image'
 
 export default function ForgotPasswordPage() {
   return (
-    <main className="auth-page">
-      <section className="auth-hero">
-        <div className="auth-hero-panel">
-          <p className="auth-kicker">Account access</p>
-          <h2>We’ll help you get back in safely.</h2>
-          <p>
-            Send a reset link to the email tied to your Codentra account.
-          </p>
-        </div>
+    <main className="auth-page auth-page--split auth-page--stack-mobile">
+      <section className="auth-hero auth-hero--image" aria-hidden="true">
+        <Image
+          src="/images/codentrabg.png"
+          alt=""
+          fill
+          priority
+          sizes="(max-width: 980px) 100vw, 60vw"
+          className="auth-hero-image"
+        />
+        <div className="auth-hero-overlay" />
       </section>
       <ForgotPasswordForm />
     </main>

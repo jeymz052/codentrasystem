@@ -1,16 +1,19 @@
 import { ResetPasswordForm } from '@/components/auth/reset-password-form'
+import Image from 'next/image'
 
 export default function ResetPasswordPage() {
   return (
-    <main className="auth-page">
-      <section className="auth-hero">
-        <div className="auth-hero-panel">
-          <p className="auth-kicker">Secure reset</p>
-          <h2>Set a fresh password and return to your dashboard.</h2>
-          <p>
-            This page is opened from the reset link in your email.
-          </p>
-        </div>
+    <main className="auth-page auth-page--split auth-page--stack-mobile">
+      <section className="auth-hero auth-hero--image" aria-hidden="true">
+        <Image
+          src="/images/codentrabg.png"
+          alt=""
+          fill
+          priority
+          sizes="(max-width: 980px) 100vw, 60vw"
+          className="auth-hero-image"
+        />
+        <div className="auth-hero-overlay" />
       </section>
       <ResetPasswordForm />
     </main>
