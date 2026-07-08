@@ -267,7 +267,7 @@ export default function ProductionPage() {
                 {selectedRecipes.map((recipe) => {
                   const ingredient = state.products.find((p) => p.id === recipe.ingredient_id)
                   const uom = state.unitsOfMeasure.find((u) => u.id === recipe.uom_id)
-                  const totalNeeded = produceQty ? Number((recipe.quantity_per_unit * Number(produceQty)).toFixed(4)) : 0
+                  const totalNeeded = Number((recipe.quantity_per_unit * (produceQty ? Number(produceQty) : 1)).toFixed(4))
                   const hasEnough = ingredient ? ingredient.quantity_on_hand >= totalNeeded : false
                   return (
                     <div key={recipe.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #E2E8F0' }}>
