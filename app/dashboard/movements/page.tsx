@@ -22,7 +22,7 @@ const TYPE_COLORS: Record<string, string> = {
 }
 
 export default function MovementsPage() {
-  const { state, formatCurrency } = useDemoSystem()
+  const { state } = useDemoSystem()
   const [typeFilter, setTypeFilter] = useState('all')
   const [productFilter, setProductFilter] = useState('all')
   const [search, setSearch] = useState('')
@@ -57,16 +57,15 @@ export default function MovementsPage() {
     const outbound = state.stockMovements.filter((movement) => movement.movement_type === 'outbound')
     const adjustments = state.stockMovements.filter((movement) => movement.movement_type === 'adjustment')
     const totalUnits = state.stockMovements.reduce((sum, movement) => sum + Number(movement.quantity ?? 0), 0)
-    const inventoryValue = state.products.reduce((sum, product) => sum + Number(product.unit_cost ?? 0) * Number(product.quantity_on_hand), 0)
 
     return [
       { label: 'Total movements', value: String(state.stockMovements.length), hint: 'Audit trail entries' },
       { label: 'Inbound', value: String(inbound.length), hint: `${inbound.reduce((sum, movement) => sum + Number(movement.quantity ?? 0), 0)} units` },
       { label: 'Outbound', value: String(outbound.length), hint: `${outbound.reduce((sum, movement) => sum + Number(movement.quantity ?? 0), 0)} units` },
-      { label: 'Adjustments', value: String(adjustments.length), hint: `${formatCurrency(inventoryValue)} inventory value` },
+      { label: 'Adjustments', value: String(adjustments.length), hint: `${adjustments.reduce((sum, movement) => sum + Number(movement.quantity ?? 0), 0)} units adjusted` },
       { label: 'Units moved', value: String(totalUnits), hint: 'All movement quantities' },
     ]
-  }, [state.stockMovements, state.products, formatCurrency])
+  }, [state.stockMovements, state.products])
 
   const latestMovements = movements.slice(0, 3)
 

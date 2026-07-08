@@ -12,6 +12,7 @@ import {
   createUnitOfMeasure,
   createSupplier,
   createUser,
+  cancelPurchaseOrder,
   deleteProduct,
   deleteSupplier,
   formatCurrency,
@@ -19,12 +20,19 @@ import {
   normalizeBusinessType,
   receivePurchaseOrder,
   recordSale,
+  recordWaste,
   remapStateTenantId,
   resolveAlert,
   seedDemoSystem,
   toggleUserActive,
+  updatePurchaseOrder,
   updateSupplier,
   updateTenantSettings,
+  updateUser,
+  createRecipe,
+  updateRecipe,
+  deleteRecipe,
+  produceFinishedGood,
   type DemoSystemState,
   type CategoryDraft,
   type LocationDraft,
@@ -35,7 +43,7 @@ import {
   type UnitOfMeasureDraft,
   type UserDraft,
 } from '@/lib/demo-system'
-import type { AccessibleTenant, BusinessType, PaymentMethod } from '@/types/database'
+import type { AccessibleTenant, BusinessType, PaymentMethod, UserRole } from '@/types/database'
 import { createClient } from '@/lib/supabase'
 
 const STORAGE_KEY = 'codentra.demo-cache.v3'
@@ -67,12 +75,20 @@ type DemoSystemContextValue = {
   editSupplier: (supplierId: string, draft: SupplierDraft) => void
   removeSupplier: (supplierId: string) => void
   addUser: (draft: UserDraft) => void
+  editUser: (userId: string, draft: { full_name: string; email: string; role: UserRole }) => void
   toggleUser: (userId: string) => void
+  createRecipe: (finishedGoodId: string, ingredientId: string, quantityPerUnit: number, uomId?: string | null) => void
+  updateRecipe: (recipeId: string, quantityPerUnit: number, uomId?: string | null) => void
+  deleteRecipe: (recipeId: string) => void
+  produceFinishedGood: (finishedGoodId: string, quantity: number, locationId?: string | null) => void
   createPO: (draft: PurchaseOrderDraft) => void
   receivePO: (purchaseOrderId: string) => void
+  updatePO: (purchaseOrderId: string, draft: PurchaseOrderDraft) => void
+  cancelPO: (purchaseOrderId: string) => void
   completeSale: (payload: { payment_method: PaymentMethod; payment_provider?: string; payment_reference?: string | null; amount_tendered: number; location_id: string | null; notes?: string; items: SaleDraftItem[] }) => { receiptNumber: string }
   acknowledge: (alertId: string) => void
   resolve: (alertId: string) => void
+  recordWaste: (productId: string, wasteType: 'waste' | 'defect' | 'reject', quantity: number, reason?: string) => void
   switchTenant: (tenantId: string) => Promise<void>
   signOut: () => Promise<void>
   formatCurrency: (amount: number) => string
@@ -288,22 +304,50 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       (current) => deleteSupplier(current, supplierId),
       { action: 'removeSupplier', supplierId }
     ),
-    addUser: (draft) => sync(
-      (current) => createUser(current, draft),
-      { action: 'addUser', draft }
-    ),
-    toggleUser: (userId) => sync(
-      (current) => toggleUserActive(current, userId),
-      { action: 'toggleUser', userId }
-    ),
-    createPO: (draft) => sync(
-      (current) => createPurchaseOrder(current, draft),
-      { action: 'createPO', draft }
-    ),
-    receivePO: (purchaseOrderId) => sync(
-      (current) => receivePurchaseOrder(current, purchaseOrderId),
-      { action: 'receivePO', purchaseOrderId }
-    ),
+  addUser: (draft) => sync(
+    (current) => createUser(current, draft),
+    { action: 'addUser', draft }
+  ),
+  editUser: (userId, draft) => sync(
+    (current) => updateUser(current, userId, draft),
+    { action: 'editUser', userId, draft }
+  ),
+  toggleUser: (userId) => sync(
+    (current) => toggleUserActive(current, userId),
+    { action: 'toggleUser', userId }
+  ),
+  createRecipe: (finishedGoodId, ingredientId, quantityPerUnit, uomId) => sync(
+    (current) => createRecipe(current, finishedGoodId, ingredientId, quantityPerUnit, uomId),
+    { action: 'createRecipe', finishedGoodId, ingredientId, quantityPerUnit, uomId }
+  ),
+  updateRecipe: (recipeId, quantityPerUnit, uomId) => sync(
+    (current) => updateRecipe(current, recipeId, quantityPerUnit, uomId),
+    { action: 'updateRecipe', recipeId, quantityPerUnit, uomId }
+  ),
+  deleteRecipe: (recipeId) => sync(
+    (current) => deleteRecipe(current, recipeId),
+    { action: 'deleteRecipe', recipeId }
+  ),
+  produceFinishedGood: (finishedGoodId, quantity, locationId) => sync(
+    (current) => produceFinishedGood(current, finishedGoodId, quantity, locationId),
+    { action: 'produceFinishedGood', finishedGoodId, quantity, locationId }
+  ),
+  createPO: (draft) => sync(
+    (current) => createPurchaseOrder(current, draft),
+    { action: 'createPO', draft }
+  ),
+  receivePO: (purchaseOrderId) => sync(
+    (current) => receivePurchaseOrder(current, purchaseOrderId),
+    { action: 'receivePO', purchaseOrderId }
+  ),
+  updatePO: (purchaseOrderId, draft) => sync(
+    (current) => updatePurchaseOrder(current, { purchaseOrderId, draft }),
+    { action: 'updatePurchaseOrder', purchaseOrderId, draft }
+  ),
+  cancelPO: (purchaseOrderId) => sync(
+    (current) => cancelPurchaseOrder(current, purchaseOrderId),
+    { action: 'cancelPurchaseOrder', purchaseOrderId }
+  ),
     completeSale: (payload) => {
       const local = recordSale(state, payload)
       sync(
@@ -319,6 +363,10 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     resolve: (alertId) => sync(
       (current) => resolveAlert(current, alertId),
       { action: 'resolve', alertId }
+    ),
+    recordWaste: (productId, wasteType, quantity, reason) => sync(
+      (current) => recordWaste(current, { productId, wasteType, quantity, reason }),
+      { action: 'recordWaste', productId, wasteType, quantity, reason }
     ),
     switchTenant: async (tenantId: string) => {
       const response = await fetch('/api/session/tenant', {
@@ -337,6 +385,11 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       window.localStorage.setItem(ACTIVE_TENANT_KEY, remote.activeTenantId)
     },
     signOut: async () => {
+      try {
+        await fetch('/api/auth/sign-out', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+      } catch {
+        // best-effort logout audit
+      }
       await supabase.auth.signOut()
       window.localStorage.removeItem(ACTIVE_TENANT_KEY)
       window.localStorage.removeItem(STORAGE_KEY)

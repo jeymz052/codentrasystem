@@ -2,6 +2,7 @@ import type {
   Alert,
   AlertStatus,
   AlertType,
+  AuditLog,
   BusinessType,
   CashShift,
   Category,
@@ -11,6 +12,7 @@ import type {
   OrderStatus,
   PaymentMethod,
   Product,
+  ProductRecipe,
   PurchaseOrder,
   PurchaseOrderItem,
   SalesTransaction,
@@ -109,6 +111,8 @@ export type DemoSystemState = {
   salesTransactionItems: SalesTransactionItem[]
   stockMovements: StockMovement[]
   alerts: Alert[]
+  auditLogs: AuditLog[]
+  productRecipes: ProductRecipe[]
 }
 
 const PLAN_LIMITS: Record<SubscriptionPlan, Pick<Tenant, 'max_users' | 'max_products' | 'max_locations'>> = {
@@ -196,11 +200,435 @@ function emptyState(businessType: BusinessType): DemoSystemState {
     salesTransactionItems: [],
     stockMovements: [],
     alerts: [],
+    auditLogs: [],
+    productRecipes: [],
   }
 }
 
+function addMinutes(iso: string, minutes: number) {
+  return new Date(new Date(iso).getTime() + minutes * 60_000).toISOString()
+}
+
 export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSystemState {
-  return emptyState(normalizeBusinessType(businessType))
+  const tenant = baseTenant(normalizeBusinessType(businessType))
+  const baseTime = '2026-07-07T08:00:00.000Z'
+
+  const categories: Category[] = [
+    { id: id(), tenant_id: tenant.id, name: 'Coffee Beans', description: null, color: '#3B82F6', is_active: true, created_at: addMinutes(baseTime, 0) },
+    { id: id(), tenant_id: tenant.id, name: 'Dairy', description: null, color: '#10B981', is_active: true, created_at: addMinutes(baseTime, 1) },
+    { id: id(), tenant_id: tenant.id, name: 'Ingredients', description: null, color: '#8B5CF6', is_active: true, created_at: addMinutes(baseTime, 2) },
+    { id: id(), tenant_id: tenant.id, name: 'Flavoring', description: null, color: '#F59E0B', is_active: true, created_at: addMinutes(baseTime, 3) },
+    { id: id(), tenant_id: tenant.id, name: 'Tea', description: null, color: '#0F766E', is_active: true, created_at: addMinutes(baseTime, 4) },
+    { id: id(), tenant_id: tenant.id, name: 'Bakery', description: null, color: '#F97316', is_active: true, created_at: addMinutes(baseTime, 5) },
+  ]
+
+  const unitsOfMeasure: UnitOfMeasure[] = [
+    { id: id(), tenant_id: tenant.id, name: 'Kilogram', abbreviation: 'kg', is_active: true, created_at: addMinutes(baseTime, 6) },
+    { id: id(), tenant_id: tenant.id, name: 'Liter', abbreviation: 'liter', is_active: true, created_at: addMinutes(baseTime, 7) },
+    { id: id(), tenant_id: tenant.id, name: 'Bottle', abbreviation: 'bottle', is_active: true, created_at: addMinutes(baseTime, 8) },
+    { id: id(), tenant_id: tenant.id, name: 'Box', abbreviation: 'box', is_active: true, created_at: addMinutes(baseTime, 9) },
+    { id: id(), tenant_id: tenant.id, name: 'Piece', abbreviation: 'pcs', is_active: true, created_at: addMinutes(baseTime, 10) },
+    { id: id(), tenant_id: tenant.id, name: 'Pack', abbreviation: 'pack', is_active: true, created_at: addMinutes(baseTime, 11) },
+  ]
+
+  const suppliers: Supplier[] = [
+    { id: id(), tenant_id: tenant.id, name: 'BeanCo', contact_name: 'Ana Cruz', email: 'orders@beanco.example', phone: '555-0101', address: '1 Coffee Lane', lead_days: 3, is_active: true, notes: null, created_at: addMinutes(baseTime, 12), updated_at: addMinutes(baseTime, 12) },
+    { id: id(), tenant_id: tenant.id, name: 'FreshDairy', contact_name: 'Luis Santos', email: 'sales@freshdairy.example', phone: '555-0102', address: '2 Dairy Road', lead_days: 2, is_active: true, notes: null, created_at: addMinutes(baseTime, 13), updated_at: addMinutes(baseTime, 13) },
+    { id: id(), tenant_id: tenant.id, name: 'SweetCorp', contact_name: 'Maya Lim', email: 'hello@sweetcorp.example', phone: '555-0103', address: '3 Sweet Street', lead_days: 4, is_active: true, notes: null, created_at: addMinutes(baseTime, 14), updated_at: addMinutes(baseTime, 14) },
+    { id: id(), tenant_id: tenant.id, name: 'ChocoMix', contact_name: 'Rex Velasco', email: 'support@chocomix.example', phone: '555-0104', address: '4 Cocoa Avenue', lead_days: 5, is_active: true, notes: null, created_at: addMinutes(baseTime, 15), updated_at: addMinutes(baseTime, 15) },
+    { id: id(), tenant_id: tenant.id, name: 'TeaHouse', contact_name: 'Nina Flores', email: 'orders@teahouse.example', phone: '555-0105', address: '5 Leaf Blvd', lead_days: 3, is_active: true, notes: null, created_at: addMinutes(baseTime, 16), updated_at: addMinutes(baseTime, 16) },
+    { id: id(), tenant_id: tenant.id, name: 'BakeCo', contact_name: 'Paolo Reyes', email: 'sales@bakeco.example', phone: '555-0106', address: '6 Oven Drive', lead_days: 2, is_active: true, notes: null, created_at: addMinutes(baseTime, 17), updated_at: addMinutes(baseTime, 17) },
+  ]
+
+  const locations: Location[] = [
+    { id: id(), tenant_id: tenant.id, code: 'MAIN', name: 'Main Storage', zone: 'Backroom', is_active: true, created_at: addMinutes(baseTime, 18) },
+    { id: id(), tenant_id: tenant.id, code: 'COLD', name: 'Cold Storage', zone: 'Chiller', is_active: true, created_at: addMinutes(baseTime, 19) },
+    { id: id(), tenant_id: tenant.id, code: 'BULK', name: 'Bulk Storage', zone: 'Warehouse', is_active: true, created_at: addMinutes(baseTime, 20) },
+    { id: id(), tenant_id: tenant.id, code: 'SHELF-A', name: 'Shelf A', zone: 'Front rack', is_active: true, created_at: addMinutes(baseTime, 21) },
+    { id: id(), tenant_id: tenant.id, code: 'SHELF-B', name: 'Shelf B', zone: 'Front rack', is_active: true, created_at: addMinutes(baseTime, 22) },
+  ]
+
+  const [coffeeCat, dairyCat, ingredientCat, flavorCat, teaCat, bakeryCat] = categories
+  const [kgUom, literUom, bottleUom, boxUom, pcsUom, packUom] = unitsOfMeasure
+  const [beanCo, freshDairy, sweetCorp, chocoMix, teaHouse, bakeCo] = suppliers
+  const [mainStorage, coldStorage, bulkStorage, shelfA, shelfB] = locations
+
+  const products: Product[] = [
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      item_code: 'COF001',
+      name: 'Espresso Beans',
+      description: 'House espresso blend',
+      category_id: coffeeCat.id,
+      supplier_id: beanCo.id,
+      location_id: mainStorage.id,
+      uom_id: kgUom.id,
+      quantity_on_hand: 20,
+      quantity_reserved: 0,
+      reorder_point: 5,
+      reorder_quantity: 10,
+      max_stock: null,
+      unit_cost: 500,
+      selling_price: 800,
+      barcode: null,
+      image_url: null,
+      is_active: true,
+      expiry_date: null,
+      created_at: addMinutes(baseTime, 30),
+      updated_at: addMinutes(baseTime, 35),
+      category: coffeeCat,
+      supplier: beanCo,
+      location: mainStorage,
+      uom: kgUom,
+    },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      item_code: 'COF003',
+      name: 'Milk',
+      description: 'Fresh dairy milk',
+      category_id: dairyCat.id,
+      supplier_id: freshDairy.id,
+      location_id: coldStorage.id,
+      uom_id: literUom.id,
+      quantity_on_hand: 45,
+      quantity_reserved: 0,
+      reorder_point: 10,
+      reorder_quantity: 20,
+      max_stock: null,
+      unit_cost: 60,
+      selling_price: 90,
+      barcode: null,
+      image_url: null,
+      is_active: true,
+      expiry_date: null,
+      created_at: addMinutes(baseTime, 31),
+      updated_at: addMinutes(baseTime, 39),
+      category: dairyCat,
+      supplier: freshDairy,
+      location: coldStorage,
+      uom: literUom,
+    },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      item_code: 'COF004',
+      name: 'Sugar',
+      description: 'Granulated white sugar',
+      category_id: ingredientCat.id,
+      supplier_id: sweetCorp.id,
+      location_id: bulkStorage.id,
+      uom_id: kgUom.id,
+      quantity_on_hand: 33,
+      quantity_reserved: 0,
+      reorder_point: 5,
+      reorder_quantity: 10,
+      max_stock: null,
+      unit_cost: 40,
+      selling_price: 70,
+      barcode: null,
+      image_url: null,
+      is_active: true,
+      expiry_date: null,
+      created_at: addMinutes(baseTime, 32),
+      updated_at: addMinutes(baseTime, 40),
+      category: ingredientCat,
+      supplier: sweetCorp,
+      location: bulkStorage,
+      uom: kgUom,
+    },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      item_code: 'COF005',
+      name: 'Chocolate Syrup',
+      description: 'Topping syrup',
+      category_id: flavorCat.id,
+      supplier_id: chocoMix.id,
+      location_id: shelfA.id,
+      uom_id: bottleUom.id,
+      quantity_on_hand: 18,
+      quantity_reserved: 0,
+      reorder_point: 5,
+      reorder_quantity: 10,
+      max_stock: null,
+      unit_cost: 120,
+      selling_price: 180,
+      barcode: null,
+      image_url: null,
+      is_active: true,
+      expiry_date: null,
+      created_at: addMinutes(baseTime, 33),
+      updated_at: addMinutes(baseTime, 41),
+      category: flavorCat,
+      supplier: chocoMix,
+      location: shelfA,
+      uom: bottleUom,
+    },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      item_code: 'COF006',
+      name: 'Tea Leaves',
+      description: 'Premium tea leaves',
+      category_id: teaCat.id,
+      supplier_id: teaHouse.id,
+      location_id: mainStorage.id,
+      uom_id: boxUom.id,
+      quantity_on_hand: 12,
+      quantity_reserved: 0,
+      reorder_point: 3,
+      reorder_quantity: 8,
+      max_stock: null,
+      unit_cost: 200,
+      selling_price: 350,
+      barcode: null,
+      image_url: null,
+      is_active: true,
+      expiry_date: null,
+      created_at: addMinutes(baseTime, 34),
+      updated_at: addMinutes(baseTime, 34),
+      category: teaCat,
+      supplier: teaHouse,
+      location: mainStorage,
+      uom: boxUom,
+    },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      item_code: 'COF007',
+      name: 'Pastry Croissant',
+      description: 'Fresh bakery item',
+      category_id: bakeryCat.id,
+      supplier_id: bakeCo.id,
+      location_id: shelfB.id,
+      uom_id: pcsUom.id,
+      quantity_on_hand: 40,
+      quantity_reserved: 0,
+      reorder_point: 10,
+      reorder_quantity: 20,
+      max_stock: null,
+      unit_cost: 30,
+      selling_price: 60,
+      barcode: null,
+      image_url: null,
+      is_active: true,
+      expiry_date: null,
+      created_at: addMinutes(baseTime, 35),
+      updated_at: addMinutes(baseTime, 35),
+      category: bakeryCat,
+      supplier: bakeCo,
+      location: shelfB,
+      uom: pcsUom,
+    },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      item_code: 'COF020',
+      name: 'Hot Chocolate Powder',
+      description: 'Powder for hot chocolate drinks',
+      category_id: flavorCat.id,
+      supplier_id: chocoMix.id,
+      location_id: bulkStorage.id,
+      uom_id: packUom.id,
+      quantity_on_hand: 6,
+      quantity_reserved: 0,
+      reorder_point: 3,
+      reorder_quantity: 6,
+      max_stock: null,
+      unit_cost: 150,
+      selling_price: 250,
+      barcode: null,
+      image_url: null,
+      is_active: true,
+      expiry_date: null,
+      created_at: addMinutes(baseTime, 36),
+      updated_at: addMinutes(baseTime, 42),
+      category: flavorCat,
+      supplier: chocoMix,
+      location: bulkStorage,
+      uom: packUom,
+    },
+  ]
+
+  const [espresso, milk, sugar, , , , hotChocolate] = products
+
+  const stockMovements: StockMovement[] = [
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      product_id: espresso.id,
+      movement_type: 'inbound',
+      quantity: 20,
+      quantity_before: 0,
+      quantity_after: 20,
+      reference_id: 'seed-opening',
+      reference_type: 'seed',
+      location_id: espresso.location_id,
+      performed_by: null,
+      notes: 'Opening stock seeded',
+      created_at: addMinutes(baseTime, 50),
+      product: espresso,
+    },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      product_id: milk.id,
+      movement_type: 'inbound',
+      quantity: 50,
+      quantity_before: 0,
+      quantity_after: 50,
+      reference_id: 'po-seed-001',
+      reference_type: 'purchase_order',
+      location_id: milk.location_id,
+      performed_by: null,
+      notes: 'Supplier delivery received',
+      created_at: addMinutes(baseTime, 51),
+      product: milk,
+    },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      product_id: milk.id,
+      movement_type: 'outbound',
+      quantity: 5,
+      quantity_before: 50,
+      quantity_after: 45,
+      reference_id: 'rcp-seed-001',
+      reference_type: 'sales_transaction',
+      location_id: milk.location_id,
+      performed_by: null,
+      notes: 'Sale processed via POS',
+      created_at: addMinutes(baseTime, 61),
+      product: milk,
+    },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      product_id: sugar.id,
+      movement_type: 'adjustment',
+      quantity: 3,
+      quantity_before: 30,
+      quantity_after: 33,
+      reference_id: 'adj-seed-001',
+      reference_type: 'inventory_adjustment',
+      location_id: sugar.location_id,
+      performed_by: null,
+      notes: 'Cycle count correction',
+      created_at: addMinutes(baseTime, 71),
+      product: sugar,
+    },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      product_id: hotChocolate.id,
+      movement_type: 'production',
+      quantity: 6,
+      quantity_before: 0,
+      quantity_after: 6,
+      reference_id: 'prod-seed-001',
+      reference_type: 'production_batch',
+      location_id: hotChocolate.location_id,
+      performed_by: null,
+      notes: 'Finished goods production',
+      created_at: addMinutes(baseTime, 81),
+      product: hotChocolate,
+    },
+  ]
+
+  const adminUser: User = {
+    id: id(),
+    tenant_id: tenant.id,
+    role: 'admin',
+    full_name: 'Admin User',
+    email: 'admin@codentra.example',
+    avatar_url: null,
+    is_active: true,
+    last_login: null,
+    created_at: addMinutes(baseTime, 90),
+    updated_at: addMinutes(baseTime, 90),
+  }
+  const managerUser: User = {
+    id: id(),
+    tenant_id: tenant.id,
+    role: 'manager',
+    full_name: 'Store Manager',
+    email: 'manager@codentra.example',
+    avatar_url: null,
+    is_active: true,
+    last_login: null,
+    created_at: addMinutes(baseTime, 91),
+    updated_at: addMinutes(baseTime, 91),
+  }
+  const cashierUser: User = {
+    id: id(),
+    tenant_id: tenant.id,
+    role: 'cashier',
+    full_name: 'Cashier One',
+    email: 'cashier@codentra.example',
+    avatar_url: null,
+    is_active: true,
+    last_login: null,
+    created_at: addMinutes(baseTime, 92),
+    updated_at: addMinutes(baseTime, 92),
+  }
+
+  const seedAuditLogs: AuditLog[] = [
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      user_id: adminUser.id,
+      action: 'user.created',
+      target_type: 'user',
+      target_id: adminUser.id,
+      details: { role: adminUser.role, email: adminUser.email },
+      performed_by: null,
+      performed_at: adminUser.created_at,
+    },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      user_id: managerUser.id,
+      action: 'user.created',
+      target_type: 'user',
+      target_id: managerUser.id,
+      details: { role: managerUser.role, email: managerUser.email },
+      performed_by: adminUser.id,
+      performed_at: managerUser.created_at,
+    },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      user_id: cashierUser.id,
+      action: 'user.created',
+      target_type: 'user',
+      target_id: cashierUser.id,
+      details: { role: cashierUser.role, email: cashierUser.email },
+      performed_by: adminUser.id,
+      performed_at: cashierUser.created_at,
+    },
+  ]
+
+  return syncAlerts({
+    tenant,
+    currentUserId: adminUser.id,
+    categories,
+    unitsOfMeasure,
+    locations,
+    suppliers,
+    products,
+    users: [adminUser, managerUser, cashierUser],
+    cashShifts: [],
+    purchaseOrders: [],
+    purchaseOrderItems: [],
+    salesTransactions: [],
+    salesTransactionItems: [],
+    stockMovements,
+    alerts: [],
+    auditLogs: seedAuditLogs,
+    productRecipes: [],
+  })
 }
 
 function ensurePlanCapacity(state: DemoSystemState, resource: 'users' | 'products' | 'locations', isUpdate = false) {
@@ -655,13 +1083,178 @@ export function createUser(state: DemoSystemState, draft: UserDraft, userId?: st
     updated_at: nowIso(),
   }
 
-  return setCurrentUser({ ...state, users: [...state.users, user] })
+  return setCurrentUser({
+    ...state,
+    users: [...state.users, user],
+    auditLogs: [
+      ...state.auditLogs,
+      {
+        id: id(),
+        tenant_id: state.tenant.id,
+        user_id: user.id,
+        action: 'user.created',
+        target_type: 'user',
+        target_id: user.id,
+        details: { full_name: user.full_name, email: user.email, role: user.role },
+        performed_by: state.currentUserId,
+        performed_at: nowIso(),
+      },
+    ],
+  })
 }
 
 export function toggleUserActive(state: DemoSystemState, userId: string): DemoSystemState {
+  const user = state.users.find((entry) => entry.id === userId)
+  const next = {
+    ...state,
+    users: state.users.map((u) => (u.id === userId ? { ...u, is_active: !u.is_active, updated_at: nowIso() } : u)),
+  }
+  if (user) {
+    next.auditLogs = [
+      ...next.auditLogs,
+      {
+        id: id(),
+        tenant_id: state.tenant.id,
+        user_id: userId,
+        action: user.is_active ? 'user.deactivated' : 'user.activated',
+        target_type: 'user',
+        target_id: userId,
+        details: { full_name: user.full_name, email: user.email },
+        performed_by: state.currentUserId,
+        performed_at: nowIso(),
+      },
+    ]
+  }
+  return next
+}
+
+export function updateUser(state: DemoSystemState, userId: string, draft: { full_name: string; email: string; role: UserRole }): DemoSystemState {
+  const user = state.users.find((entry) => entry.id === userId)
+  if (!user) return state
+  const updated = {
+    ...state,
+    users: state.users.map((u) => (u.id === userId ? { ...u, ...draft, full_name: normalizeName(draft.full_name), email: draft.email.trim().toLowerCase(), updated_at: nowIso() } : u)),
+  }
+  updated.auditLogs = [
+    ...updated.auditLogs,
+    {
+      id: id(),
+      tenant_id: state.tenant.id,
+      user_id: userId,
+      action: 'user.updated',
+      target_type: 'user',
+      target_id: userId,
+      details: { full_name: draft.full_name, email: draft.email, role: draft.role, previous_role: user.role },
+      performed_by: state.currentUserId,
+      performed_at: nowIso(),
+    },
+  ]
+  return updated
+}
+
+export function createRecipe(state: DemoSystemState, finishedGoodId: string, ingredientId: string, quantityPerUnit: number, uomId?: string | null): DemoSystemState {
+  const existing = state.productRecipes.find(
+    (r) => r.finished_good_id === finishedGoodId && r.ingredient_id === ingredientId
+  )
+  if (existing) return state
+
+  const recipe: ProductRecipe = {
+    id: id(),
+    tenant_id: state.tenant.id,
+    finished_good_id: finishedGoodId,
+    ingredient_id: ingredientId,
+    quantity_per_unit: quantityPerUnit,
+    uom_id: uomId ?? null,
+    created_at: nowIso(),
+  }
+
   return {
     ...state,
-    users: state.users.map((user) => (user.id === userId ? { ...user, is_active: !user.is_active, updated_at: nowIso() } : user)),
+    productRecipes: [...state.productRecipes, recipe],
+  }
+}
+
+export function updateRecipe(state: DemoSystemState, recipeId: string, quantityPerUnit: number, uomId?: string | null): DemoSystemState {
+  return {
+    ...state,
+    productRecipes: state.productRecipes.map((r) =>
+      r.id === recipeId ? { ...r, quantity_per_unit: quantityPerUnit, uom_id: uomId ?? r.uom_id } : r
+    ),
+  }
+}
+
+export function deleteRecipe(state: DemoSystemState, recipeId: string): DemoSystemState {
+  return {
+    ...state,
+    productRecipes: state.productRecipes.filter((r) => r.id !== recipeId),
+  }
+}
+
+export function produceFinishedGood(state: DemoSystemState, finishedGoodId: string, quantity: number, locationId?: string | null): DemoSystemState {
+  const recipeLines = state.productRecipes.filter((r) => r.finished_good_id === finishedGoodId)
+  if (!recipeLines.length) return state
+
+  const finishedGood = state.products.find((p) => p.id === finishedGoodId)
+  if (!finishedGood) return state
+
+  const updatedProducts = new Map(state.products.map((p) => [p.id, { ...p }]))
+  const newMovements: StockMovement[] = []
+
+  for (const line of recipeLines) {
+    const ingredient = updatedProducts.get(line.ingredient_id)
+    if (!ingredient) continue
+
+    const deductQty = Number((line.quantity_per_unit * quantity).toFixed(4))
+    const before = ingredient.quantity_on_hand
+    const after = Math.max(0, before - deductQty)
+    ingredient.quantity_on_hand = after
+    ingredient.updated_at = nowIso()
+
+    newMovements.push({
+      id: id(),
+      tenant_id: state.tenant.id,
+      product_id: line.ingredient_id,
+      movement_type: 'production',
+      quantity: -deductQty,
+      quantity_before: before,
+      quantity_after: after,
+      reference_id: null,
+      reference_type: 'production_batch',
+      location_id: locationId ?? finishedGood.location_id,
+      performed_by: state.currentUserId || null,
+      notes: `Produced ${quantity} x ${finishedGood.name}`,
+      created_at: nowIso(),
+    })
+  }
+
+  const fg = updatedProducts.get(finishedGoodId)
+  if (fg) {
+    const beforeQty = fg.quantity_on_hand
+    const afterQty = beforeQty + quantity
+    fg.quantity_on_hand = afterQty
+    fg.updated_at = nowIso()
+
+    newMovements.push({
+      id: id(),
+      tenant_id: state.tenant.id,
+      product_id: finishedGoodId,
+      movement_type: 'production',
+      quantity,
+      quantity_before: beforeQty,
+      quantity_after: afterQty,
+      reference_id: null,
+      reference_type: 'production_batch',
+      location_id: locationId ?? finishedGood.location_id,
+      performed_by: state.currentUserId || null,
+      notes: `Produced ${quantity} x ${finishedGood.name}`,
+      created_at: nowIso(),
+    })
+  }
+
+  return {
+    ...state,
+    products: Array.from(updatedProducts.values()),
+    stockMovements: [...state.stockMovements, ...newMovements],
   }
 }
 
@@ -706,6 +1299,64 @@ export function createPurchaseOrder(state: DemoSystemState, draft: PurchaseOrder
     ...state,
     purchaseOrders: [...state.purchaseOrders, po],
     purchaseOrderItems: [...state.purchaseOrderItems, ...items],
+  }
+}
+
+export function updatePurchaseOrder(
+  state: DemoSystemState,
+  payload: { purchaseOrderId: string; draft: PurchaseOrderDraft }
+): DemoSystemState {
+  const order = state.purchaseOrders.find((row) => row.id === payload.purchaseOrderId)
+  if (!order) return state
+  if (order.status === 'received' || order.status === 'cancelled') return state
+
+  const supplier = state.suppliers.find((row) => row.id === payload.draft.supplier_id) ?? null
+  const now = nowIso()
+  const updatedOrder: PurchaseOrder = {
+    ...order,
+    supplier_id: payload.draft.supplier_id,
+    expected_date: payload.draft.expected_date || null,
+    notes: payload.draft.notes.trim() || null,
+    updated_at: now,
+    supplier: supplier ?? undefined,
+  }
+
+  const orderItems = state.purchaseOrderItems.filter((row) => row.po_id === order.id)
+  let updatedItems = state.purchaseOrderItems
+  if (orderItems.length > 0 && payload.draft.items.length > 0) {
+    const firstItemId = orderItems[0].id
+    const draftItem = payload.draft.items[0]
+    const product = state.products.find((row) => row.id === draftItem.product_id)
+    updatedItems = state.purchaseOrderItems.map((row) =>
+      row.id === firstItemId
+        ? {
+            ...row,
+            product_id: draftItem.product_id,
+            quantity_ordered: Number(draftItem.quantity_ordered ?? 0),
+            unit_cost: Number(draftItem.unit_cost ?? product?.unit_cost ?? 0),
+            product: product ?? undefined,
+          }
+        : row
+    )
+  }
+
+  return {
+    ...state,
+    purchaseOrders: state.purchaseOrders.map((row) => (row.id === order.id ? updatedOrder : row)),
+    purchaseOrderItems: updatedItems,
+  }
+}
+
+export function cancelPurchaseOrder(state: DemoSystemState, purchaseOrderId: string): DemoSystemState {
+  const order = state.purchaseOrders.find((row) => row.id === purchaseOrderId)
+  if (!order) return state
+  if (order.status === 'received' || order.status === 'cancelled') return state
+
+  return {
+    ...state,
+    purchaseOrders: state.purchaseOrders.map((row) =>
+      row.id === purchaseOrderId ? { ...row, status: 'cancelled', updated_at: nowIso() } : row
+    ),
   }
 }
 
@@ -873,6 +1524,52 @@ export function recordSale(
   })
 
   return { state: nextState, receiptNumber }
+}
+
+export type WasteType = 'waste' | 'defect' | 'reject'
+
+export function recordWaste(
+  state: DemoSystemState,
+  payload: { productId: string; wasteType: WasteType; quantity: number; reason?: string }
+): DemoSystemState {
+  const productIndex = state.products.findIndex((product) => product.id === payload.productId)
+  if (productIndex < 0) return state
+
+  const product = state.products[productIndex]
+  const before = Number(product.quantity_on_hand ?? 0)
+  const quantity = Math.max(0, Math.min(Number(payload.quantity ?? 0), before))
+  if (quantity <= 0) return state
+
+  const after = before - quantity
+  const now = nowIso()
+  const updatedProduct: Product = {
+    ...product,
+    quantity_on_hand: after,
+    updated_at: now,
+  }
+
+  const movement: StockMovement = {
+    id: id(),
+    tenant_id: state.tenant.id,
+    product_id: product.id,
+    movement_type: payload.wasteType,
+    quantity,
+    quantity_before: before,
+    quantity_after: after,
+    reference_id: null,
+    reference_type: 'waste',
+    location_id: product.location_id,
+    performed_by: state.currentUserId || null,
+    notes: payload.reason?.trim() || `${payload.wasteType} write-off`,
+    created_at: now,
+    product: updatedProduct,
+  }
+
+  return {
+    ...state,
+    products: state.products.map((row, index) => (index === productIndex ? updatedProduct : row)),
+    stockMovements: [...state.stockMovements, movement],
+  }
 }
 
 export function acknowledgeAlert(state: DemoSystemState, alertId: string): DemoSystemState {

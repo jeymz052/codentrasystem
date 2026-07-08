@@ -4,6 +4,7 @@ export type DashboardPath =
   | '/dashboard'
   | '/dashboard/inventory'
   | '/dashboard/pos'
+  | '/dashboard/production'
   | '/dashboard/movements'
   | '/dashboard/orders'
   | '/dashboard/suppliers'
@@ -24,17 +25,26 @@ export type MutationAction =
   | 'editSupplier'
   | 'removeSupplier'
   | 'addUser'
+  | 'editUser'
   | 'toggleUser'
+  | 'createRecipe'
+  | 'updateRecipe'
+  | 'deleteRecipe'
+  | 'produceFinishedGood'
   | 'createPO'
   | 'receivePO'
+  | 'updatePurchaseOrder'
+  | 'cancelPurchaseOrder'
   | 'completeSale'
   | 'acknowledge'
   | 'resolve'
+  | 'recordWaste'
 
 const MANAGER_PATHS = new Set<DashboardPath>([
   '/dashboard',
   '/dashboard/inventory',
   '/dashboard/pos',
+  '/dashboard/production',
   '/dashboard/movements',
   '/dashboard/orders',
   '/dashboard/suppliers',
@@ -67,9 +77,16 @@ export function canPerformMutation(role: UserRole, action: MutationAction) {
       'removeSupplier',
       'createPO',
       'receivePO',
+      'updatePurchaseOrder',
+      'cancelPurchaseOrder',
       'completeSale',
       'acknowledge',
       'resolve',
+      'recordWaste',
+      'createRecipe',
+      'updateRecipe',
+      'deleteRecipe',
+      'produceFinishedGood',
     ].includes(action)
   }
 

@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, Package, ShoppingCart, Truck,
   BarChart3, Settings, ArrowLeftRight,
-  CreditCard, Users, Building2, LogOut,
+  CreditCard, Users, Building2, LogOut, Factory,
 } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { canAccessDashboardPath, formatRoleLabel } from '@/lib/access-control'
@@ -15,6 +15,7 @@ const NAV = [
   { href: '/dashboard',            icon: LayoutDashboard, label: 'Dashboard',        roles: ['admin','manager','cashier'] },
   { href: '/dashboard/inventory',  icon: Package,          label: 'Inventory',        roles: ['admin','manager','cashier'] },
   { href: '/dashboard/pos',        icon: CreditCard,       label: 'Point of Sale',    roles: ['admin','manager','cashier'] },
+  { href: '/dashboard/production', icon: Factory,           label: 'Production',       roles: ['admin','manager'] },
   { href: '/dashboard/movements',  icon: ArrowLeftRight,   label: 'Stock Movements',  roles: ['admin','manager'] },
   { href: '/dashboard/orders',     icon: ShoppingCart,     label: 'Purchase Orders',  roles: ['admin','manager'] },
   { href: '/dashboard/suppliers',  icon: Truck,            label: 'Suppliers',        roles: ['admin','manager'] },

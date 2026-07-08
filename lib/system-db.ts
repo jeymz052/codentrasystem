@@ -5,22 +5,30 @@ import {
   acknowledgeAlert,
   createCategory,
   createPurchaseOrder,
-  createLocation,
-  createUnitOfMeasure,
-  createSupplier,
+  cancelPurchaseOrder,
   createUser,
+  createUnitOfMeasure,
+  createLocation,
+  createSupplier,
   deleteProduct,
   deleteSupplier,
   importProducts,
   normalizeBusinessType,
   receivePurchaseOrder,
   recordSale,
+  recordWaste,
   remapStateTenantId,
   resolveAlert,
   seedDemoSystem,
   toggleUserActive,
+  updatePurchaseOrder,
   updateSupplier,
   updateTenantSettings,
+  updateUser,
+  createRecipe,
+  updateRecipe,
+  deleteRecipe,
+  produceFinishedGood,
   type CategoryDraft,
   type LocationDraft,
   type ProductDraft,
@@ -31,7 +39,7 @@ import {
   type UserDraft,
 } from '@/lib/demo-system'
 import { getSupabaseAdminClient } from '@/lib/supabase-admin'
-import type { BusinessType, PaymentMethod, SubscriptionPlan, SubscriptionStatus } from '@/types/database'
+import type { BusinessType, PaymentMethod, SubscriptionPlan, SubscriptionStatus, UserRole } from '@/types/database'
 
 type AnyRow = Record<string, any>
 
@@ -48,12 +56,20 @@ type MutationPayload =
   | { action: 'editSupplier'; supplierId: string; draft: SupplierDraft }
   | { action: 'removeSupplier'; supplierId: string }
   | { action: 'addUser'; draft: UserDraft }
+  | { action: 'editUser'; userId: string; draft: { full_name: string; email: string; role: UserRole } }
   | { action: 'toggleUser'; userId: string }
+  | { action: 'createRecipe'; finishedGoodId: string; ingredientId: string; quantityPerUnit: number; uomId?: string | null }
+  | { action: 'updateRecipe'; recipeId: string; quantityPerUnit: number; uomId?: string | null }
+  | { action: 'deleteRecipe'; recipeId: string }
+  | { action: 'produceFinishedGood'; finishedGoodId: string; quantity: number; locationId?: string | null }
   | { action: 'createPO'; draft: PurchaseOrderDraft }
   | { action: 'receivePO'; purchaseOrderId: string }
   | { action: 'completeSale'; payload: { payment_method: PaymentMethod; payment_provider?: string; payment_reference?: string | null; amount_tendered: number; location_id: string | null; notes?: string; items: SaleDraftItem[] } }
   | { action: 'acknowledge'; alertId: string }
   | { action: 'resolve'; alertId: string }
+  | { action: 'recordWaste'; productId: string; wasteType: 'waste' | 'defect' | 'reject'; quantity: number; reason?: string }
+  | { action: 'updatePurchaseOrder'; purchaseOrderId: string; draft: PurchaseOrderDraft }
+  | { action: 'cancelPurchaseOrder'; purchaseOrderId: string }
 
 function asArray<T>(value: T[] | null | undefined) {
   return Array.isArray(value) ? value : []
@@ -114,6 +130,8 @@ export async function loadTenantState(tenantId?: string | null) {
     salesResult,
     salesItemsResult,
     movementResult,
+    auditLogsResult,
+    recipesResult,
   ] = await Promise.all([
     client.from('categories').select('*').eq('tenant_id', tenant.id),
     client.from('units_of_measure').select('*').eq('tenant_id', tenant.id),
@@ -127,6 +145,8 @@ export async function loadTenantState(tenantId?: string | null) {
     client.from('sales_transactions').select('*').eq('tenant_id', tenant.id),
     client.from('sales_transaction_items').select('*'),
     client.from('stock_movements').select('*').eq('tenant_id', tenant.id),
+    client.from('audit_logs').select('*').eq('tenant_id', tenant.id).order('performed_at', { ascending: false }),
+    client.from('product_recipes').select('*').eq('tenant_id', tenant.id),
   ])
 
   const categories = asArray(categoriesResult.data)
@@ -141,6 +161,8 @@ export async function loadTenantState(tenantId?: string | null) {
   const salesTransactionsRaw = asArray(salesResult.data)
   const salesTransactionItemsRaw = asArray(salesItemsResult.data)
   const stockMovements = asArray(movementResult.data)
+  const auditLogs = asArray(auditLogsResult.data)
+  const productRecipes = asArray(recipesResult.data)
 
   const categoryById = new Map(categories.map((row) => [row.id, row]))
   const uomById = new Map(unitsOfMeasure.map((row) => [row.id, row]))
@@ -219,6 +241,8 @@ export async function loadTenantState(tenantId?: string | null) {
     salesTransactionItems,
     stockMovements,
     alerts,
+    auditLogs,
+    productRecipes,
   } satisfies DemoSystemState
 }
 
@@ -256,6 +280,8 @@ export async function upsertTenantState(state: DemoSystemState) {
   const purchaseOrderItemRows = state.purchaseOrderItems.map(({ product, ...row }) => row)
   const salesTransactionItemRows = state.salesTransactionItems.map(({ product, ...row }) => row)
   const alertRows = state.alerts.map(({ product, ...row }) => row)
+  const auditLogRows = state.auditLogs.map((row) => row)
+  const recipeRows = state.productRecipes.map((row) => row)
 
   await upsert('tenants', [tenantRow])
   await upsert('categories', state.categories)
@@ -270,6 +296,8 @@ export async function upsertTenantState(state: DemoSystemState) {
   await upsert('sales_transaction_items', salesTransactionItemRows)
   await upsert('alerts', alertRows)
   await upsert('stock_movements', state.stockMovements)
+  await upsert('audit_logs', auditLogRows)
+  await upsert('product_recipes', recipeRows)
 
   await Promise.all([
     prune('categories', state.categories.map((row) => row.id)),
@@ -282,6 +310,8 @@ export async function upsertTenantState(state: DemoSystemState) {
     prune('sales_transactions', state.salesTransactions.map((row) => row.id)),
     prune('alerts', state.alerts.map((row) => row.id)),
     prune('stock_movements', state.stockMovements.map((row) => row.id)),
+    prune('audit_logs', state.auditLogs.map((row) => row.id)),
+    prune('product_recipes', state.productRecipes.map((row) => row.id)),
   ])
 }
 
@@ -398,8 +428,23 @@ export async function applyDatabaseMutation(
       const authUserId = await provisionTenantUserAccess(currentTenantId, mutation.draft)
       state = createUser(state, mutation.draft, authUserId)
       break
+    case 'editUser':
+      state = updateUser(state, mutation.userId, mutation.draft)
+      break
     case 'toggleUser':
       state = toggleUserActive(state, mutation.userId)
+      break
+    case 'createRecipe':
+      state = createRecipe(state, mutation.finishedGoodId, mutation.ingredientId, mutation.quantityPerUnit, mutation.uomId)
+      break
+    case 'updateRecipe':
+      state = updateRecipe(state, mutation.recipeId, mutation.quantityPerUnit, mutation.uomId)
+      break
+    case 'deleteRecipe':
+      state = deleteRecipe(state, mutation.recipeId)
+      break
+    case 'produceFinishedGood':
+      state = produceFinishedGood(state, mutation.finishedGoodId, mutation.quantity, mutation.locationId)
       break
     case 'createPO':
       state = createPurchaseOrder(state, mutation.draft)
@@ -415,6 +460,15 @@ export async function applyDatabaseMutation(
       break
     case 'resolve':
       state = resolveAlert(state, mutation.alertId)
+      break
+    case 'recordWaste':
+      state = recordWaste(state, { productId: mutation.productId, wasteType: mutation.wasteType, quantity: mutation.quantity, reason: mutation.reason })
+      break
+    case 'updatePurchaseOrder':
+      state = updatePurchaseOrder(state, { purchaseOrderId: mutation.purchaseOrderId, draft: mutation.draft })
+      break
+    case 'cancelPurchaseOrder':
+      state = cancelPurchaseOrder(state, mutation.purchaseOrderId)
       break
   }
 

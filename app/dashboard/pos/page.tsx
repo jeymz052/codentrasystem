@@ -9,6 +9,7 @@ import {
   CreditCard,
   Minus,
   Package,
+  Percent,
   Plus,
   Printer,
   QrCode,
@@ -43,6 +44,8 @@ type ReceiptState = {
   receiptNo: string
   items: CartItem[]
   subtotal: number
+  discount: number
+  discountLabel: string | null
   totalAmount: number
   payMethod: PayMethod
   tendered: number
@@ -51,14 +54,26 @@ type ReceiptState = {
   cashierName: string
 }
 
-const blankCheckout = {
+type PendingSale = {
+  items: CartItem[]
+  subtotal: number
+  discount: number
+  discountLabel: string | null
+  grandTotal: number
+  locationId: string | null
+}
+
+const blankCheckout: PendingSale = {
   items: [] as CartItem[],
   subtotal: 0,
+  discount: 0,
+  discountLabel: null,
+  grandTotal: 0,
   locationId: null as string | null,
 }
 
 export default function POSPage() {
-  const { state, completeSale, formatCurrency } = useDemoSystem()
+  const { state, completeSale, formatCurrency, notifyError, notifySuccess } = useDemoSystem()
   const [search, setSearch] = useState('')
   const [cat, setCat] = useState('All')
   const [cart, setCart] = useState<CartItem[]>([])
@@ -73,6 +88,9 @@ export default function POSPage() {
   const [lastReceipt, setLastReceipt] = useState<ReceiptState | null>(null)
   const [scanValue, setScanValue] = useState('')
   const scanRef = useRef<HTMLInputElement>(null)
+  const scanTimer = useRef<number | null>(null)
+  const [orderDiscountType, setOrderDiscountType] = useState<'none' | 'pwd_senior' | 'employee'>('none')
+  const [manualDiscountPercent, setManualDiscountPercent] = useState(0)
 
   const categoryOptions = useMemo(() => ['All', ...state.categories.map((category) => category.name)], [state.categories])
   const recentTransactions = useMemo(() => {
@@ -93,8 +111,21 @@ export default function POSPage() {
   })
 
   const subtotal = cart.reduce((sum, item) => sum + item.sellingPrice * item.quantity - item.discount, 0)
+  const DISCOUNT_RATES = { none: 0, pwd_senior: 0.2, employee: 0.15 } as const
+  const discountRate = DISCOUNT_RATES[orderDiscountType]
+  const presetLabel = orderDiscountType === 'pwd_senior' ? 'PWD / Senior (−20%)' : orderDiscountType === 'employee' ? 'Employee (−15%)' : null
+  const presetDiscount = discountRate > 0 ? subtotal * discountRate : 0
+  const manualRate = manualDiscountPercent / 100
+  const manualDiscount = subtotal * manualRate
+  const totalOrderDiscount = presetDiscount + manualDiscount
+  const discountLines = [
+    ...(presetDiscount > 0 ? [{ label: presetLabel as string, amount: presetDiscount }] : []),
+    ...(manualDiscount > 0 ? [{ label: `Manual (−${manualDiscountPercent}%)`, amount: manualDiscount }] : []),
+  ]
+  const discountLabel = discountLines.length > 0 ? discountLines.map((entry) => entry.label).join(' + ') : null
+  const grandTotal = subtotal - totalOrderDiscount
   const cashEntered = Number(tendered) || 0
-  const change = cashEntered - subtotal
+  const change = cashEntered - grandTotal
 
   const stats = useMemo(() => {
     const openOrders = state.purchaseOrders.filter((order) => ['draft', 'pending_approval', 'approved', 'ordered'].includes(order.status)).length
@@ -133,18 +164,25 @@ export default function POSPage() {
     })
   }
 
-  function addByScan(value: string) {
-    const query = value.trim().toLowerCase()
+  function addByScan(rawValue: string) {
+    const query = rawValue.replace(/[\r\n]+/g, '').trim().toLowerCase()
     if (!query) return
-    const product = state.products.find((entry) =>
+    const exact = state.products.find((entry) =>
       entry.item_code.toLowerCase() === query ||
       (entry.barcode ?? '').toLowerCase() === query ||
       entry.name.toLowerCase() === query
     )
-    if (product) {
-      addToCart(product.id)
+    const partial = exact ?? state.products.find((entry) =>
+      (entry.barcode ?? '').toLowerCase().includes(query) ||
+      entry.item_code.toLowerCase().includes(query) ||
+      entry.name.toLowerCase().includes(query)
+    )
+    if (partial) {
+      addToCart(partial.id)
       setScanValue('')
       requestAnimationFrame(() => scanRef.current?.focus())
+    } else {
+      notifyError(`No product found for "${rawValue.trim()}".`)
     }
   }
 
@@ -156,12 +194,30 @@ export default function POSPage() {
     )
   }
 
+  function setQty(productId: string, value: string) {
+    const parsed = Math.floor(Number(value))
+    setCart((current) =>
+      current.map((item) => (item.productId === productId ? { ...item, quantity: Number.isFinite(parsed) && parsed > 0 ? parsed : 1 } : item))
+    )
+  }
+
   function removeItem(productId: string) {
     setCart((current) => current.filter((item) => item.productId !== productId))
   }
 
-  function updateDiscount(productId: string, value: string) {
-    setCart((current) => current.map((item) => (item.productId === productId ? { ...item, discount: Math.max(Number(value) || 0, 0) } : item)))
+  function oversellingItem() {
+    return cart.find((item) => {
+      const product = state.products.find((entry) => entry.id === item.productId)
+      return product ? item.quantity > product.quantity_on_hand : false
+    })
+  }
+
+  function guardOversell(): boolean {
+    const oversell = oversellingItem()
+    if (!oversell) return false
+    const product = state.products.find((entry) => entry.id === oversell.productId)
+    notifyError(`Cannot sell ${oversell.quantity} × ${product?.name ?? 'item'}. Only ${product?.quantity_on_hand ?? 0} in stock.`)
+    return true
   }
 
   useEffect(() => {
@@ -195,9 +251,11 @@ export default function POSPage() {
             receiptNo: data.receiptNumber ?? qrSession.intentId,
             items: sale.items,
             subtotal: sale.subtotal,
-            totalAmount: sale.subtotal,
+            discount: sale.discount,
+            discountLabel: sale.discountLabel,
+            totalAmount: sale.grandTotal,
             payMethod: 'qr_ph',
-            tendered: sale.subtotal,
+            tendered: sale.grandTotal,
             change: 0,
             date: new Date(),
             cashierName,
@@ -208,6 +266,8 @@ export default function POSPage() {
           setPendingSale(null)
           setShowReceipt(true)
           setCart([])
+          setOrderDiscountType('none')
+          setManualDiscountPercent(0)
           setTendered('')
           return
         }
@@ -241,23 +301,31 @@ export default function POSPage() {
 
   async function startQrPhCheckout() {
     if (cart.length === 0 || qrBusy) return
+    if (guardOversell()) return
     setQrBusy(true)
     setQrError(null)
 
-    const saleSubtotal = subtotal
+    const saleSubtotal = grandTotal
     const locationId = state.locations[0]?.id ?? null
     const receiptHint = `POS-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')}`
-    const saleItems = cart.map((item) => ({
-      product_id: item.productId,
-      quantity: item.quantity,
-      unit_price: item.sellingPrice,
-      unit_cost: item.unitCost,
-      discount: item.discount,
-    }))
+    const saleItems = cart.map((item) => {
+      const lineNet = item.sellingPrice * item.quantity - item.discount
+      const share = subtotal > 0 ? lineNet / subtotal : 0
+      return {
+        product_id: item.productId,
+        quantity: item.quantity,
+        unit_price: item.sellingPrice,
+        unit_cost: item.unitCost,
+        discount: item.discount + totalOrderDiscount * share,
+      }
+    })
 
     setPendingSale({
       items: cart,
-      subtotal: saleSubtotal,
+      subtotal,
+      discount: totalOrderDiscount,
+      discountLabel,
+      grandTotal: saleSubtotal,
       locationId,
     })
 
@@ -303,6 +371,7 @@ export default function POSPage() {
 
   function handleCheckout() {
     if (cart.length === 0) return
+    if (guardOversell()) return
 
     if (payMethod === 'qr_ph') {
       void startQrPhCheckout()
@@ -310,34 +379,44 @@ export default function POSPage() {
     }
 
     const cashierName = state.users.find((user) => user.id === state.currentUserId)?.full_name ?? 'Cashier'
+    const saleItems = cart.map((item) => {
+      const lineNet = item.sellingPrice * item.quantity - item.discount
+      const share = subtotal > 0 ? lineNet / subtotal : 0
+      return {
+        product_id: item.productId,
+        quantity: item.quantity,
+        unit_price: item.sellingPrice,
+        unit_cost: item.unitCost,
+        discount: item.discount + totalOrderDiscount * share,
+      }
+    })
+
     const result = completeSale({
       payment_method: payMethod,
       payment_provider: 'manual',
       amount_tendered: cashEntered,
       location_id: state.locations[0]?.id ?? null,
       notes: `Sold at ${state.tenant.name}`,
-      items: cart.map((item) => ({
-        product_id: item.productId,
-        quantity: item.quantity,
-        unit_price: item.sellingPrice,
-        unit_cost: item.unitCost,
-        discount: item.discount,
-      })),
+      items: saleItems,
     })
 
     setLastReceipt({
       receiptNo: result.receiptNumber,
       items: cart,
       subtotal,
-      totalAmount: subtotal,
+      discount: totalOrderDiscount,
+      discountLabel,
+      totalAmount: grandTotal,
       payMethod,
       tendered: cashEntered,
-      change: payMethod === 'cash' ? Math.max(cashEntered - subtotal, 0) : 0,
+      change: payMethod === 'cash' ? Math.max(cashEntered - grandTotal, 0) : 0,
       date: new Date(),
       cashierName,
     })
     setShowReceipt(true)
     setCart([])
+    setOrderDiscountType('none')
+    setManualDiscountPercent(0)
     setTendered('')
   }
 
@@ -353,7 +432,7 @@ export default function POSPage() {
     window.print()
   }
 
-  const canCheckout = cart.length > 0 && !qrBusy && (payMethod !== 'cash' || cashEntered >= subtotal)
+  const canCheckout = cart.length > 0 && !qrBusy && (payMethod !== 'cash' || cashEntered >= grandTotal)
   const receiptDateText = useMemo(
     () =>
       lastReceipt
@@ -466,10 +545,22 @@ export default function POSPage() {
               ref={scanRef}
               className="input"
               value={scanValue}
-              onChange={(event) => setScanValue(event.target.value)}
+              onChange={(event) => {
+                const next = event.target.value
+                setScanValue(next)
+                if (scanTimer.current) window.clearTimeout(scanTimer.current)
+                if (next.trim()) {
+                  scanTimer.current = window.setTimeout(() => {
+                    addByScan(next)
+                    if (scanTimer.current) window.clearTimeout(scanTimer.current)
+                    scanTimer.current = null
+                  }, 250)
+                }
+              }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') {
                   event.preventDefault()
+                  if (scanTimer.current) window.clearTimeout(scanTimer.current)
                   addByScan(scanValue)
                 }
               }}
@@ -586,7 +677,7 @@ export default function POSPage() {
                   <ShoppingBag size={16} color="#3B82F6" /> Current Order
                 </h3>
                 {cart.length > 0 && (
-                  <button onClick={() => setCart([])} className="btn btn-danger btn-sm" style={{ fontSize: 11, padding: '3px 8px' }}>
+                  <button onClick={() => { setCart([]); setOrderDiscountType('none'); setManualDiscountPercent(0) }} className="btn btn-danger btn-sm" style={{ fontSize: 11, padding: '3px 8px' }}>
                     Clear
                   </button>
                 )}
@@ -617,14 +708,17 @@ export default function POSPage() {
                         <button onClick={() => updateQty(item.productId, -1)} style={{ width: 28, height: 28, borderRadius: 8, background: '#F8FBFF', border: '1px solid #D8E4F2', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#475569' }}>
                           <Minus size={12} />
                         </button>
-                        <span style={{ fontSize: 14, fontWeight: 800, color: '#0F172A', minWidth: 24, textAlign: 'center' }}>{item.quantity}</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={item.quantity}
+                          onChange={(event) => setQty(item.productId, event.target.value)}
+                          onBlur={(event) => setQty(item.productId, event.target.value)}
+                          style={{ width: 44, textAlign: 'center', fontSize: 14, fontWeight: 800, color: '#0F172A', background: '#FFFFFF', border: '1px solid #D8E4F2', borderRadius: 8, padding: '4px 2px', outline: 'none' }}
+                        />
                         <button onClick={() => updateQty(item.productId, 1)} style={{ width: 28, height: 28, borderRadius: 8, background: '#F8FBFF', border: '1px solid #D8E4F2', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#475569' }}>
                           <Plus size={12} />
                         </button>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ fontSize: 10, color: '#64748B' }}>Disc:</span>
-                        <input type="number" value={item.discount || ''} onChange={(event) => updateDiscount(item.productId, event.target.value)} placeholder="0" style={{ width: 64, background: '#FFFFFF', border: '1px solid #D8E4F2', borderRadius: 6, padding: '4px 6px', color: '#0F172A', fontSize: 12, outline: 'none' }} />
                       </div>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 12 }}>
@@ -637,9 +731,68 @@ export default function POSPage() {
             </div>
 
             <div style={{ padding: '14px 16px', borderTop: '1px solid #E2E8F0', flexShrink: 0 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
-                <span style={{ color: '#475569', fontSize: 13 }}>Subtotal ({cart.length} item{cart.length !== 1 ? 's' : ''})</span>
-                <span style={{ fontWeight: 900, fontSize: 22, color: '#0F172A' }}>{formatCurrency(subtotal)}</span>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: '#475569', marginBottom: 6 }}>Apply discount</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+                  {([
+                    { value: 'none', label: 'None', rate: 0 },
+                    { value: 'pwd_senior', label: 'PWD/Senior', rate: 20 },
+                    { value: 'employee', label: 'Employee', rate: 15 },
+                  ] as const).map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setOrderDiscountType(opt.value)}
+                      style={{
+                        padding: '8px 4px',
+                        borderRadius: 10,
+                        border: `1px solid ${orderDiscountType === opt.value ? '#3B82F6' : '#D8E4F2'}`,
+                        background: orderDiscountType === opt.value ? '#EFF6FF' : '#FFFFFF',
+                        color: orderDiscountType === opt.value ? '#2563EB' : '#475569',
+                        cursor: 'pointer',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        textAlign: 'center',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3 }}>
+                        {opt.value !== 'none' && <Percent size={11} />}
+                        {opt.label}
+                      </div>
+                      {opt.value !== 'none' && <div style={{ fontSize: 10, marginTop: 2, opacity: 0.85 }}>{opt.rate}%</div>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: '#475569', marginBottom: 6 }}>Manual discount (%)</div>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={manualDiscountPercent || ''}
+                  onChange={(event) => setManualDiscountPercent(Math.min(100, Math.max(Number(event.target.value) || 0, 0)))}
+                  placeholder="0"
+                  style={{ width: '100%', background: '#FFFFFF', border: '1px solid #D8E4F2', borderRadius: 8, padding: '8px 10px', color: '#0F172A', fontSize: 13, outline: 'none' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <span style={{ color: '#475569', fontSize: 13 }}>Subtotal ({cart.length} item{cart.length !== 1 ? 's' : ''})</span>
+                  <span style={{ fontWeight: 800, fontSize: 15, color: '#0F172A' }}>{formatCurrency(subtotal)}</span>
+                </div>
+                {discountLines.map((entry) => (
+                  <div key={entry.label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <span style={{ color: '#DC2626', fontSize: 13 }}>{entry.label}</span>
+                    <span style={{ fontWeight: 800, fontSize: 15, color: '#DC2626' }}>-{formatCurrency(entry.amount)}</span>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed #E2E8F0', paddingTop: 10 }}>
+                  <span style={{ color: '#0F172A', fontSize: 14, fontWeight: 800 }}>Total</span>
+                  <span style={{ fontWeight: 900, fontSize: 22, color: '#0F172A' }}>{formatCurrency(grandTotal)}</span>
+                </div>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, marginBottom: 12 }}>
@@ -674,7 +827,7 @@ export default function POSPage() {
                 <div style={{ marginBottom: 12 }}>
                   <label style={{ fontSize: 11, color: '#475569', display: 'block', marginBottom: 5 }}>Amount Tendered</label>
                   <input className="input" type="number" placeholder="0.00" value={tendered} onChange={(event) => setTendered(event.target.value)} style={{ height: 42, fontSize: 16, fontWeight: 700, borderRadius: 12 }} />
-                  {cashEntered >= subtotal && subtotal > 0 && (
+                  {cashEntered >= grandTotal && grandTotal > 0 && (
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
                       <span style={{ fontSize: 12, color: '#475569' }}>Change</span>
                       <span style={{ fontSize: 16, fontWeight: 900, color: '#2563EB' }}>{formatCurrency(change)}</span>
@@ -741,6 +894,8 @@ export default function POSPage() {
                         receiptNo: tx.receipt_number,
                         items: txItems,
                         subtotal: total,
+                        discount: 0,
+                        discountLabel: null,
                         totalAmount: total,
                         payMethod: tx.payment_method === 'qr_ph' ? 'qr_ph' : 'cash',
                         tendered: Number(tx.amount_tendered ?? total),
@@ -817,6 +972,9 @@ export default function POSPage() {
 
               <div className="pos-receipt-totals">
                 <div><span>Subtotal</span><strong>{formatCurrency(lastReceipt.subtotal)}</strong></div>
+                {lastReceipt.discount > 0 && (
+                  <div><span>{lastReceipt.discountLabel ?? 'Discount'}</span><strong>-{formatCurrency(lastReceipt.discount)}</strong></div>
+                )}
                 <div><span>Payment</span><strong>{lastReceipt.payMethod === 'cash' ? 'Cash' : 'QR Ph'}</strong></div>
                 {lastReceipt.payMethod === 'cash' && (
                   <>

@@ -22,6 +22,16 @@ type TopBarProps = {
   onToggleSidebar?: () => void
 }
 
+function formatNotificationDateTime(value: string) {
+  return new Date(value).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
 export function TopBar({ onToggleSidebar }: TopBarProps) {
   const path = usePathname()
   const { state, stats, availableTenants, activeTenantId, switchTenant, acknowledge, resolve } = useDemoSystem()
@@ -165,6 +175,9 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
                             </span>
                           </div>
                           <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.45 }}>{alert.message}</div>
+                          <div style={{ marginTop: 5, fontSize: 10, color: '#94A3B8' }}>
+                            {formatNotificationDateTime(alert.created_at)}
+                          </div>
                           <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                             <span className="badge" style={{ background: `${color}14`, color, fontSize: 10 }}>{alert.alert_type}</span>
                             <span className="badge badge-blue" style={{ fontSize: 10 }}>{alert.status}</span>

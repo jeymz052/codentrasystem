@@ -16,6 +16,18 @@ type TenantRow = {
   is_active: boolean
 }
 
+type AuditLogRow = {
+  id: string
+  tenant_id: string
+  user_id: string | null
+  action: string
+  target_type: string
+  target_id: string | null
+  details: Record<string, unknown>
+  performed_by: string | null
+  performed_at: string
+}
+
 export default async function AdminTenantsPage() {
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -35,22 +47,28 @@ export default async function AdminTenantsPage() {
     membershipsResult,
     usersResult,
     productsResult,
+    auditLogsResult,
   ] = await Promise.all([
     serviceClient.from('tenants').select('id, name, business_type, plan, subscription_status, billing_email, created_at, updated_at, is_active').order('created_at', { ascending: true }),
     serviceClient.from('tenant_memberships').select('tenant_id, role'),
     serviceClient.from('users').select('tenant_id, id'),
     serviceClient.from('products').select('tenant_id, id'),
+    serviceClient.from('audit_logs').select('*').order('performed_at', { ascending: false }).limit(50),
   ])
 
   if (tenantsResult.error) throw tenantsResult.error
   if (membershipsResult.error) throw membershipsResult.error
   if (usersResult.error) throw usersResult.error
   if (productsResult.error) throw productsResult.error
+  if (auditLogsResult.error) throw auditLogsResult.error
 
   const tenants = (tenantsResult.data ?? []) as TenantRow[]
+  const auditLogs = (auditLogsResult.data ?? []) as AuditLogRow[]
   const membershipCounts = new Map<string, number>()
   const userCounts = new Map<string, number>()
   const productCounts = new Map<string, number>()
+  const tenantNameById = new Map<string, string>()
+  const userById = new Map<string, { full_name: string; email: string }>()
 
   for (const membership of membershipsResult.data ?? []) {
     membershipCounts.set(membership.tenant_id, (membershipCounts.get(membership.tenant_id) ?? 0) + 1)
@@ -62,6 +80,14 @@ export default async function AdminTenantsPage() {
 
   for (const row of productsResult.data ?? []) {
     productCounts.set(row.tenant_id, (productCounts.get(row.tenant_id) ?? 0) + 1)
+  }
+
+  for (const tenant of tenants) {
+    tenantNameById.set(tenant.id, tenant.name)
+  }
+
+  for (const row of usersResult.data ?? []) {
+    userById.set(row.id, { full_name: '', email: '' })
   }
 
   const summary = {
@@ -80,10 +106,6 @@ export default async function AdminTenantsPage() {
       <div style={{ maxWidth: 1440, margin: '0 auto', padding: '28px 24px 40px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 24 }}>
           <div>
-            <div className="badge badge-blue" style={{ marginBottom: 10 }}>
-              <ShieldCheck size={14} />
-              Superadmin console
-            </div>
             <h1 style={{ fontSize: 28, fontWeight: 900, letterSpacing: '-0.05em', marginBottom: 6 }}>Tenant monitoring</h1>
             <p style={{ color: '#475569', fontSize: 14, maxWidth: 760 }}>
               Review every tenant, plan, and membership from a single place. This page is for global oversight and account health.
@@ -114,7 +136,7 @@ export default async function AdminTenantsPage() {
           ))}
         </div>
 
-        <div className="card table-scroll" style={{ overflow: 'hidden' }}>
+        <div className="card table-scroll" style={{ overflow: 'hidden', marginBottom: 22 }}>
           <table className="data-table">
             <thead>
               <tr>
@@ -151,6 +173,32 @@ export default async function AdminTenantsPage() {
               })}
             </tbody>
           </table>
+        </div>
+
+        <div className="card" style={{ padding: 18, borderRadius: 18 }}>
+          <div style={{ fontSize: 12, color: '#64748B', marginBottom: 14 }}>Cross-tenant audit trail</div>
+          <div style={{ display: 'grid', gap: 8, maxHeight: 420, overflowY: 'auto' }}>
+            {auditLogs.length === 0 ? (
+              <p style={{ color: '#94A3B8', fontSize: 13 }}>No audit entries recorded yet.</p>
+            ) : (
+              auditLogs.map((log) => {
+                const tenantName = tenantNameById.get(log.tenant_id) ?? 'Unknown tenant'
+                const label = String(log.action).replace('user.', '').replace('product.', '').replace('supplier.', '').replace('order.', '')
+                return (
+                  <div key={log.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '10px 12px', borderRadius: 10, background: '#F8FBFF', border: '1px solid #E2E8F0', fontSize: 12 }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <span style={{ fontWeight: 700, color: '#0F172A' }}>{label}</span>
+                      <span style={{ color: '#64748B', marginLeft: 6 }}>{String(log.details?.full_name ?? log.details?.name ?? log.target_id ?? '')}</span>
+                    </div>
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                      <div style={{ color: '#475569' }}>{tenantName}</div>
+                      <div style={{ color: '#94A3B8', fontSize: 10 }}>{new Date(log.performed_at).toLocaleString()}</div>
+                    </div>
+                  </div>
+                )
+              })
+            )}
+          </div>
         </div>
       </div>
     </main>

@@ -5,7 +5,7 @@ export type SubscriptionStatus = 'active' | 'inactive' | 'suspended' | 'trial'
 export type BusinessType = 'coffee_shop' | 'manufacturing' | 'convenience_store' | 'restaurant' | 'retail' | 'pharmacy' | 'general'
 export type UserRole = 'super_admin' | 'admin' | 'manager' | 'cashier'
 export type OrderStatus = 'draft' | 'pending_approval' | 'approved' | 'ordered' | 'partially_received' | 'received' | 'cancelled'
-export type MovementType = 'inbound' | 'outbound' | 'adjustment' | 'return' | 'production'
+export type MovementType = 'inbound' | 'outbound' | 'adjustment' | 'return' | 'production' | 'waste' | 'defect' | 'reject'
 export type AlertType = 'low_stock' | 'out_of_stock' | 'overstock' | 'expiry_warning'
 export type AlertStatus = 'open' | 'acknowledged' | 'resolved'
 export type ShiftStatus = 'open' | 'closed' | 'voided'
@@ -146,6 +146,16 @@ export interface Product {
   uom?: UnitOfMeasure
 }
 
+export interface ProductRecipe {
+  id: string
+  tenant_id: string
+  finished_good_id: string
+  ingredient_id: string
+  quantity_per_unit: number
+  uom_id: string | null
+  created_at: string
+}
+
 export interface StockMovement {
   id: string
   tenant_id: string
@@ -284,6 +294,18 @@ export interface DashboardStats {
   pending_orders: number
   sales_today: number
   transactions_today: number
+}
+
+export interface AuditLog {
+  id: string
+  tenant_id: string
+  user_id: string | null
+  action: string
+  target_type: 'user' | 'product' | 'supplier' | 'order' | 'system'
+  target_id: string | null
+  details: Record<string, unknown>
+  performed_by: string | null
+  performed_at: string
 }
 
 // POS Cart

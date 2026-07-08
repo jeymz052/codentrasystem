@@ -2,23 +2,11 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { createSupabaseRouteClient, getSupabaseServiceClient } from '@/lib/supabase-server'
 
 export async function POST(request: NextRequest) {
-  const body = await request.json().catch(() => null)
-  const email = String(body?.email ?? '').trim()
-  const password = String(body?.password ?? '')
-
-  if (!email || !password) {
-    return NextResponse.json({ message: 'Email and password are required' }, { status: 400 })
-  }
-
-  const response = NextResponse.json({ ok: true })
-  const supabase = createSupabaseRouteClient(request, response)
-
-  const { error } = await supabase.auth.signInWithPassword({ email, password })
-  if (error) {
-    return NextResponse.json({ message: error.message }, { status: 401 })
-  }
+  const cookieResponse = NextResponse.json({ ok: true })
+  const supabase = createSupabaseRouteClient(request, cookieResponse)
 
   const { data: { user } } = await supabase.auth.getUser()
+
   if (user) {
     const serviceClient = getSupabaseServiceClient()
     const { data: membership } = await serviceClient
@@ -34,17 +22,19 @@ export async function POST(request: NextRequest) {
       await serviceClient.from('audit_logs').insert({
         tenant_id: tenantId,
         user_id: user.id,
-        action: 'user.login',
+        action: 'user.logout',
         target_type: 'user',
         target_id: user.id,
-        details: { email },
+        details: { email: user.email },
         performed_by: user.id,
         performed_at: new Date().toISOString(),
       })
-
-      await serviceClient.from('users').update({ last_login: new Date().toISOString() }).eq('id', user.id)
     }
   }
 
-  return response
+  await supabase.auth.signOut()
+
+  cookieResponse.cookies.set({ name: 'codentra.active-tenant', value: '', path: '/', maxAge: 0 })
+  cookieResponse.cookies.set({ name: 'codentra.demo-cache.v3', value: '', path: '/', maxAge: 0 })
+  return cookieResponse
 }

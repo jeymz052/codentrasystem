@@ -31,6 +31,14 @@ function timingSafeEqualHex(a: string, b: string) {
   return crypto.timingSafeEqual(left, right)
 }
 
+function toPayMongoAmount(amount: number) {
+  return Math.round(Number(amount) * 100)
+}
+
+function fromPayMongoAmount(amount: number) {
+  return Number((Number(amount) / 100).toFixed(2))
+}
+
 async function paymongoRequest<T>(path: string, init: RequestInit, keyName: 'PAYMONGO_SECRET_KEY' | 'PAYMONGO_PUBLIC_KEY' = 'PAYMONGO_SECRET_KEY') {
   const baseUrl = 'https://api.paymongo.com/v1'
   const response = await fetch(`${baseUrl}${path}`, {
@@ -74,7 +82,7 @@ export async function createQrPhPaymentIntent(input: {
     body: JSON.stringify({
       data: {
         attributes: {
-          amount: Math.round(input.amount),
+          amount: toPayMongoAmount(input.amount),
           currency: 'PHP',
           payment_method_allowed: ['qrph'],
           description: input.description,
@@ -117,7 +125,7 @@ export async function createQrPhPaymentIntent(input: {
     id: attached.data.id,
     clientKey,
     status: String(attached.data.attributes.status ?? 'pending'),
-    amount: Number(attached.data.attributes.amount ?? input.amount),
+    amount: fromPayMongoAmount(Number(attached.data.attributes.amount ?? toPayMongoAmount(input.amount))),
     currency: String(attached.data.attributes.currency ?? 'PHP'),
     nextAction: attached.data.attributes.next_action ?? null,
     raw: attached,
@@ -132,7 +140,7 @@ export async function getPaymentIntent(intentId: string) {
   return {
     id: intent.data.id,
     status: String(intent.data.attributes.status ?? 'pending'),
-    amount: Number(intent.data.attributes.amount ?? 0),
+    amount: fromPayMongoAmount(Number(intent.data.attributes.amount ?? 0)),
     currency: String(intent.data.attributes.currency ?? 'PHP'),
     nextAction: intent.data.attributes.next_action ?? null,
     raw: intent,
