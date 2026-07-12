@@ -23,6 +23,14 @@ function exportCSV(data: Record<string, string | number | null | undefined>[], f
 type SalesPoint = { label: string; sales: number; transactions: number; sortKey: string }
 
 function SalesAreaChart({ rows, formatCurrency }: { rows: SalesPoint[]; formatCurrency: (value: number) => string }) {
+  if (rows.length === 0) {
+    return (
+      <div style={{ height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94A3B8', fontSize: 13 }}>
+        No sales recorded in the selected date range.
+      </div>
+    )
+  }
+
   const width = 760
   const height = 260
   const padX = 40
@@ -43,14 +51,6 @@ function SalesAreaChart({ rows, formatCurrency }: { rows: SalesPoint[]; formatCu
   const first = points[0]
   const areaPath = `${linePath} L${last.x},${padY + innerH} L${first.x},${padY + innerH} Z`
   const gridLines = [0.25, 0.5, 0.75, 1]
-
-  if (rows.length === 0) {
-    return (
-      <div style={{ height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94A3B8', fontSize: 13 }}>
-        No sales recorded in the selected date range.
-      </div>
-    )
-  }
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: 'auto', display: 'block' }} role="img" aria-label="Sales trend chart">
@@ -442,11 +442,9 @@ export default function ReportsPage() {
 
           <div className="card table-scroll" style={{ overflow: 'hidden' }}>
             <table className="data-table">
-              <thead>
-                <tr>
+              <thead><tr>
                   <th>Item Code</th><th>Name</th><th>Category</th><th>UOM</th><th>Qty on Hand</th><th>Unit Cost</th><th>Total Value</th><th>Status</th>
-                </tr>
-              </thead>
+                </tr></thead>
               <tbody>
                 {stockRows.map((row) => (
                   <tr key={row.item_code}>
@@ -464,8 +462,7 @@ export default function ReportsPage() {
                   <td colSpan={6} style={{ fontWeight: 700, color: '#0F172A', textAlign: 'right' }}>TOTAL INVENTORY VALUE</td>
                   <td style={{ fontWeight: 800, color: '#3B82F6', fontSize: 15 }}>{formatCurrency(totalValue)}</td>
                   <td />
-                </tr>
-              </tbody>
+                </tr></tbody>
             </table>
           </div>
         </div>
@@ -528,11 +525,9 @@ export default function ReportsPage() {
 
           <div className="card table-scroll" style={{ overflow: 'hidden' }}>
             <table className="data-table">
-              <thead>
-                <tr>
+              <thead><tr>
                   <th>Item Code</th><th>Name</th><th>Qty Sold</th><th>Unit Cost</th><th>COGS</th><th>Revenue</th><th>Gross Margin</th><th>Margin %</th>
-                </tr>
-              </thead>
+                </tr></thead>
               <tbody>
                 {cogsRows.map((row) => (
                   <tr key={`${row.item_code}-${row.qty_sold}`}>
@@ -559,8 +554,7 @@ export default function ReportsPage() {
                   <td style={{ fontWeight: 800, color: '#10B981' }}>{formatCurrency(totalRev)}</td>
                   <td style={{ fontWeight: 800, color: '#2563EB' }}>{formatCurrency(totalMargin)}</td>
                   <td />
-                </tr>
-              </tbody>
+                </tr></tbody>
             </table>
           </div>
         </div>
@@ -606,11 +600,9 @@ export default function ReportsPage() {
 
           <div className="card table-scroll" style={{ overflow: 'hidden' }}>
             <table className="data-table">
-              <thead>
-                <tr>
+              <thead><tr>
                   <th>Item Code</th><th>Name</th><th>Category</th><th>Qty</th><th>UOM</th><th>Last Movement</th><th>Days No Movement</th><th>Risk</th>
-                </tr>
-              </thead>
+                </tr></thead>
               <tbody>
                 {agingRows.map((row) => (
                   <tr key={row.item_code}>
@@ -678,8 +670,7 @@ export default function ReportsPage() {
                   <td style={{ fontWeight: 700 }}>{totalTxn}</td>
                   <td style={{ fontWeight: 800, color: '#10B981', fontSize: 15 }}>{formatCurrency(totalSales)}</td>
                   <td style={{ color: '#475569' }}>{formatCurrency(aov)}</td>
-                </tr>
-              </tbody>
+                </tr></tbody>
             </table>
           </div>
         </div>

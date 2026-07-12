@@ -95,7 +95,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'This role cannot perform that action' }, { status: 403 })
     }
 
-    const state = await applyDatabaseMutation(tenantId, body)
+    const state = await applyDatabaseMutation(tenantId, body, request.nextUrl.origin)
     const response = NextResponse.json({
       state,
       activeTenantId: tenantId,
@@ -113,6 +113,7 @@ export async function POST(request: NextRequest) {
     })
     return response
   } catch (error) {
+    console.error('[api/system] mutation failed:', error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to apply mutation' },
       { status: 500 }

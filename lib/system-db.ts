@@ -3,6 +3,7 @@ import type { DemoSystemState } from '@/lib/demo-system'
 import {
   addOrUpdateProduct,
   acknowledgeAlert,
+  closeShift,
   createCategory,
   createPurchaseOrder,
   cancelPurchaseOrder,
@@ -11,13 +12,17 @@ import {
   createLocation,
   createSupplier,
   deleteProduct,
+  deleteProducts,
   deleteSupplier,
   importProducts,
   normalizeBusinessType,
+  openShift,
   receivePurchaseOrder,
+  recordCashMovement,
   recordSale,
   recordWaste,
   remapStateTenantId,
+  refundTransaction,
   resolveAlert,
   seedDemoSystem,
   toggleUserActive,
@@ -25,10 +30,15 @@ import {
   updateSupplier,
   updateTenantSettings,
   updateUser,
+  markInviteResent,
+  voidTransaction,
   createRecipe,
   updateRecipe,
   deleteRecipe,
+  createProductionTemplate,
+  deleteProductionTemplate,
   produceFinishedGood,
+  createTransfer,
   type CategoryDraft,
   type LocationDraft,
   type ProductDraft,
@@ -39,7 +49,7 @@ import {
   type UserDraft,
 } from '@/lib/demo-system'
 import { getSupabaseAdminClient } from '@/lib/supabase-admin'
-import type { BusinessType, PaymentMethod, SubscriptionPlan, SubscriptionStatus, UserRole } from '@/types/database'
+import type { BusinessType, CashMovementKind, PaymentMethod, SubscriptionPlan, SubscriptionStatus, UserRole } from '@/types/database'
 
 type AnyRow = Record<string, any>
 
@@ -50,7 +60,8 @@ type MutationPayload =
   | { action: 'addUnitOfMeasure'; draft: UnitOfMeasureDraft }
   | { action: 'addLocation'; draft: LocationDraft }
   | { action: 'saveProduct'; draft: ProductDraft; productId?: string }
-  | { action: 'removeProduct'; productId: string }
+  | { action: 'removeProduct'; productId: string; itemCode?: string }
+  | { action: 'removeProducts'; productIds: string[]; itemCodes?: string[] }
   | { action: 'importProductRows'; drafts: ProductDraft[] }
   | { action: 'addSupplier'; draft: SupplierDraft }
   | { action: 'editSupplier'; supplierId: string; draft: SupplierDraft }
@@ -58,16 +69,25 @@ type MutationPayload =
   | { action: 'addUser'; draft: UserDraft }
   | { action: 'editUser'; userId: string; draft: { full_name: string; email: string; role: UserRole } }
   | { action: 'toggleUser'; userId: string }
+  | { action: 'resendInvite'; draft: UserDraft }
   | { action: 'createRecipe'; finishedGoodId: string; ingredientId: string; quantityPerUnit: number; uomId?: string | null }
   | { action: 'updateRecipe'; recipeId: string; quantityPerUnit: number; uomId?: string | null }
   | { action: 'deleteRecipe'; recipeId: string }
+  | { action: 'createProductionTemplate'; name: string; finishedGoodId: string; quantity: number; locationId?: string | null; notes?: string | null }
+  | { action: 'deleteProductionTemplate'; templateId: string }
   | { action: 'produceFinishedGood'; finishedGoodId: string; quantity: number; locationId?: string | null }
-  | { action: 'createPO'; draft: PurchaseOrderDraft }
+  | { action: 'createPO'; draft: PurchaseOrderDraft; orderId: string }
   | { action: 'receivePO'; purchaseOrderId: string }
-  | { action: 'completeSale'; payload: { payment_method: PaymentMethod; payment_provider?: string; payment_reference?: string | null; amount_tendered: number; location_id: string | null; notes?: string; items: SaleDraftItem[] } }
+  | { action: 'completeSale'; payload: { payment_method: PaymentMethod; payment_provider?: string; payment_reference?: string | null; amount_tendered: number; location_id: string | null; notes?: string; items: SaleDraftItem[]; receiptNumber?: string; transactionId?: string; itemIds?: string[]; movementIds?: string[]; auditLogId?: string } }
+  | { action: 'voidSale'; transactionId: string; reason?: string }
+  | { action: 'refundSale'; transactionId: string; reason?: string }
+  | { action: 'openShift'; payload: { openingFloat: number; locationId?: string | null; notes?: string } }
+  | { action: 'closeShift'; payload: { shiftId: string; countedCash: number; notes?: string } }
+  | { action: 'recordCashMovement'; payload: { shiftId: string; kind: CashMovementKind; amount: number; note?: string | null; denominations?: Record<string, number> | null } }
   | { action: 'acknowledge'; alertId: string }
   | { action: 'resolve'; alertId: string }
   | { action: 'recordWaste'; productId: string; wasteType: 'waste' | 'defect' | 'reject'; quantity: number; reason?: string }
+  | { action: 'transferStock'; payload: { productId: string; fromLocationId: string | null; toLocationId: string | null; quantity: number; notes?: string } }
   | { action: 'updatePurchaseOrder'; purchaseOrderId: string; draft: PurchaseOrderDraft }
   | { action: 'cancelPurchaseOrder'; purchaseOrderId: string }
 
@@ -132,6 +152,8 @@ export async function loadTenantState(tenantId?: string | null) {
     movementResult,
     auditLogsResult,
     recipesResult,
+    cashShiftsResult,
+    cashMovementsResult,
   ] = await Promise.all([
     client.from('categories').select('*').eq('tenant_id', tenant.id),
     client.from('units_of_measure').select('*').eq('tenant_id', tenant.id),
@@ -147,6 +169,8 @@ export async function loadTenantState(tenantId?: string | null) {
     client.from('stock_movements').select('*').eq('tenant_id', tenant.id),
     client.from('audit_logs').select('*').eq('tenant_id', tenant.id).order('performed_at', { ascending: false }),
     client.from('product_recipes').select('*').eq('tenant_id', tenant.id),
+    client.from('cash_shifts').select('*').eq('tenant_id', tenant.id),
+    client.from('cash_movements').select('*').eq('tenant_id', tenant.id),
   ])
 
   const categories = asArray(categoriesResult.data)
@@ -163,6 +187,24 @@ export async function loadTenantState(tenantId?: string | null) {
   const stockMovements = asArray(movementResult.data)
   const auditLogs = asArray(auditLogsResult.data)
   const productRecipes = asArray(recipesResult.data)
+  const cashShiftsRaw = asArray(cashShiftsResult.data)
+  const cashMovementsRaw = asArray(cashMovementsResult.data)
+
+  let inventoryLots: AnyRow[] = []
+  try {
+    const lotsResult = await client.from('inventory_lots').select('*').eq('tenant_id', tenant.id)
+    inventoryLots = asArray(lotsResult.data)
+  } catch {
+    inventoryLots = []
+  }
+
+  let productionTemplates: AnyRow[] = []
+  try {
+    const templatesResult = await client.from('production_templates').select('*').eq('tenant_id', tenant.id)
+    productionTemplates = asArray(templatesResult.data)
+  } catch {
+    productionTemplates = []
+  }
 
   const categoryById = new Map(categories.map((row) => [row.id, row]))
   const uomById = new Map(unitsOfMeasure.map((row) => [row.id, row]))
@@ -216,6 +258,15 @@ export async function loadTenantState(tenantId?: string | null) {
   const salesTransactions = mapRow(salesTransactionsRaw, (row) => ({
     ...row,
     shift_id: row.shift_id ?? null,
+    payment_provider: row.payment_provider ?? null,
+    payment_reference: row.payment_reference ?? null,
+    voided_by: row.voided_by ?? null,
+    voided_at: row.voided_at ?? null,
+    void_reason: row.void_reason ?? null,
+    refunded_by: row.refunded_by ?? null,
+    refunded_at: row.refunded_at ?? null,
+    refund_reason: row.refund_reason ?? null,
+    parent_transaction_id: row.parent_transaction_id ?? null,
     cashier: row.cashier_id ? userById.get(row.cashier_id) ?? undefined : undefined,
     items: salesItemsByTxId.get(row.id) ?? [],
   }))
@@ -234,7 +285,12 @@ export async function loadTenantState(tenantId?: string | null) {
     suppliers,
     products,
     users,
-    cashShifts: [],
+    cashShifts: cashShiftsRaw.map((row) => ({
+      ...row,
+      opened_by_user: userById.get(row.opened_by) ?? undefined,
+      closed_by_user: row.closed_by ? userById.get(row.closed_by) ?? null : null,
+      location: row.location_id ? locationById.get(row.location_id) ?? undefined : undefined,
+    })),
     purchaseOrders,
     purchaseOrderItems,
     salesTransactions,
@@ -243,6 +299,11 @@ export async function loadTenantState(tenantId?: string | null) {
     alerts,
     auditLogs,
     productRecipes,
+    productionTemplates: productionTemplates as DemoSystemState['productionTemplates'],
+    cashMovements: cashMovementsRaw.map((row) => ({
+      ...row,
+    })),
+    inventoryLots: inventoryLots as DemoSystemState['inventoryLots'],
   } satisfies DemoSystemState
 }
 
@@ -268,6 +329,24 @@ export async function upsertTenantState(state: DemoSystemState) {
     if (deleteError) throw deleteError
   }
 
+  // sales_transaction_items / purchase_order_items have no tenant_id column
+  // (they're isolated via their parent transaction / PO). Prune orphaned rows
+  // for this tenant by scoping to the parent ids we still keep, then dropping
+  // any row whose id isn't in the current state (e.g. an item referencing a
+  // product that was just deleted).
+  const pruneByParent = async (table: string, parentColumn: string, parentKeepIds: string[], keepRowIds: string[]) => {
+    if (!parentKeepIds.length) return
+    const { data, error } = await client.from(table).select('id').in(parentColumn, parentKeepIds)
+    if (error) throw error
+
+    const currentIds = asArray(data).map((row) => String(row.id))
+    const staleIds = currentIds.filter((id) => !keepRowIds.includes(id))
+    if (!staleIds.length) return
+
+    const { error: deleteError } = await client.from(table).delete().in('id', staleIds)
+    if (deleteError) throw deleteError
+  }
+
   const tenantRow = {
     ...state.tenant,
     plan: state.tenant.plan as SubscriptionPlan,
@@ -276,12 +355,15 @@ export async function upsertTenantState(state: DemoSystemState) {
 
   const productRows = state.products.map(({ category, supplier, location, uom, ...row }) => row)
   const purchaseOrderRows = state.purchaseOrders.map(({ supplier, items, ...row }) => row)
-  const salesTransactionRows = state.salesTransactions.map(({ cashier, items, shift_id, ...row }) => row)
+  const salesTransactionRows = state.salesTransactions.map(({ cashier, items, ...row }) => row)
   const purchaseOrderItemRows = state.purchaseOrderItems.map(({ product, ...row }) => row)
   const salesTransactionItemRows = state.salesTransactionItems.map(({ product, ...row }) => row)
   const alertRows = state.alerts.map(({ product, ...row }) => row)
-  const auditLogRows = state.auditLogs.map((row) => row)
+  const auditLogRows = state.auditLogs.map(({ performed_by, ...row }) => row)
   const recipeRows = state.productRecipes.map((row) => row)
+  const stockMovementRows = state.stockMovements.map(({ product, ...row }) => row)
+  const cashShiftRows = state.cashShifts.map(({ opened_by_user, closed_by_user, location, ...row }) => row)
+  const cashMovementRows = state.cashMovements.map(({ performed_by, ...row }) => row)
 
   await upsert('tenants', [tenantRow])
   await upsert('categories', state.categories)
@@ -295,9 +377,38 @@ export async function upsertTenantState(state: DemoSystemState) {
   await upsert('purchase_order_items', purchaseOrderItemRows)
   await upsert('sales_transaction_items', salesTransactionItemRows)
   await upsert('alerts', alertRows)
-  await upsert('stock_movements', state.stockMovements)
+  await upsert('stock_movements', stockMovementRows)
   await upsert('audit_logs', auditLogRows)
   await upsert('product_recipes', recipeRows)
+  await upsert('cash_shifts', cashShiftRows)
+  await upsert('cash_movements', cashMovementRows)
+
+  try {
+    await upsert('inventory_lots', state.inventoryLots)
+    await prune('inventory_lots', state.inventoryLots.map((row) => row.id))
+  } catch {
+    // inventory_lots table may not exist in older deployments; FIFO lots are best-effort persisted.
+  }
+
+  try {
+    await upsert('production_templates', state.productionTemplates)
+    await prune('production_templates', state.productionTemplates.map((row) => row.id))
+  } catch {
+    // production_templates table may not exist in older deployments; templates are best-effort persisted.
+  }
+
+  // Prune product-dependent rows FIRST. Several child tables use
+  // ON DELETE RESTRICT on product_id, so deleting a product while its rows
+  // still exist fails with a 500. Removing the children before the products
+  // guarantees the product prune (below) succeeds.
+  await Promise.all([
+    pruneByParent('sales_transaction_items', 'transaction_id', state.salesTransactions.map((row) => row.id), state.salesTransactionItems.map((row) => row.id)),
+    pruneByParent('purchase_order_items', 'po_id', state.purchaseOrders.map((row) => row.id), state.purchaseOrderItems.map((row) => row.id)),
+    prune('stock_movements', state.stockMovements.map((row) => row.id)),
+    prune('inventory_lots', state.inventoryLots.map((row) => row.id)),
+    prune('alerts', state.alerts.map((row) => row.id)),
+    prune('product_recipes', state.productRecipes.map((row) => row.id)),
+  ])
 
   await Promise.all([
     prune('categories', state.categories.map((row) => row.id)),
@@ -308,10 +419,10 @@ export async function upsertTenantState(state: DemoSystemState) {
     prune('products', state.products.map((row) => row.id)),
     prune('purchase_orders', state.purchaseOrders.map((row) => row.id)),
     prune('sales_transactions', state.salesTransactions.map((row) => row.id)),
-    prune('alerts', state.alerts.map((row) => row.id)),
-    prune('stock_movements', state.stockMovements.map((row) => row.id)),
     prune('audit_logs', state.auditLogs.map((row) => row.id)),
-    prune('product_recipes', state.productRecipes.map((row) => row.id)),
+    prune('production_templates', state.productionTemplates.map((row) => row.id)),
+    prune('cash_shifts', state.cashShifts.map((row) => row.id)),
+    prune('cash_movements', state.cashMovements.map((row) => row.id)),
   ])
 }
 
@@ -319,35 +430,77 @@ function normalizeSeedState(state: DemoSystemState, tenantId?: string) {
   return tenantId ? remapStateTenantId(state, tenantId) : state
 }
 
-async function provisionTenantUserAccess(tenantId: string, draft: UserDraft) {
+// Builds the "set up your password" URL invitees are redirected to. Prefers the
+// live request origin (so a link created on localhost points back to localhost,
+// and one created on the deployed domain points to that domain), and falls back
+// to NEXT_PUBLIC_APP_URL, then to the Supabase-configured Site URL.
+// NOTE: whatever origin is used must be listed under Supabase Auth -> URL
+// Configuration -> Redirect URLs, otherwise Supabase rejects the invite.
+function resolveInviteRedirect(origin?: string | null) {
+  const base = (origin || process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '')
+  return base ? `${base}/set-password` : undefined
+}
+
+async function provisionTenantUserAccess(tenantId: string, draft: UserDraft, origin?: string | null) {
   const client = getSupabaseAdminClient()
   const email = draft.email.trim().toLowerCase()
   if (!email) {
     throw new Error('email is required')
   }
 
+  // Pull the tenant name so the invitation email can greet the invitee with
+  // the store they are being invited to.
+  const { data: tenantRow } = await client
+    .from('tenants')
+    .select('name')
+    .eq('id', tenantId)
+    .maybeSingle()
+  const tenantName: string | null = tenantRow?.name ?? null
+
   const { data: usersResult, error: listError } = await client.auth.admin.listUsers({ page: 1, perPage: 1000 })
   if (listError) {
     throw new Error(`listUsers failed: ${listError.message}`)
   }
 
-  let authUserId = usersResult.users.find((entry) => entry.email?.toLowerCase() === email)?.id ?? null
-  if (!authUserId) {
-    const { data, error } = await client.auth.admin.createUser({
-      email,
-      password: `${randomUUID()}!Temp1`,
-      email_confirm: true,
-    })
+  const existing = usersResult.users.find((entry) => entry.email?.toLowerCase() === email) ?? null
 
-    if (error) {
-      throw new Error(`createUser failed: ${error.message}`)
-    }
+  // Where the invitee lands to choose their password. Falls back to the
+  // Supabase-configured Site URL when no origin/app URL is available.
+  const redirectTo = resolveInviteRedirect(origin)
 
-    authUserId = data.user.id
+  const inviteMetadata = {
+    full_name: draft.full_name?.trim() || null,
+    invited_role: draft.role,
+    tenant_name: tenantName,
+    invitation: true,
   }
 
-  if (!authUserId) {
-    throw new Error('Could not resolve auth user')
+  let authUserId: string
+  if (existing) {
+    // The person already has a Codentra login. Don't send an invite (they
+    // already have a password) — just grant them access to this tenant. Make
+    // sure their display name is populated for a nicer experience.
+    authUserId = existing.id
+    if (draft.full_name?.trim() && !existing.user_metadata?.full_name) {
+      await client.auth.admin.updateUserById(authUserId, {
+        user_metadata: { ...existing.user_metadata, full_name: draft.full_name.trim() },
+      })
+    }
+  } else {
+    // Brand-new team member: send a dedicated invitation email that carries a
+    // "set up your password" link (Supabase "Invite user" template), NOT the
+    // generic password-reset email.
+    const { data, error } = await client.auth.admin.inviteUserByEmail(email, {
+      data: inviteMetadata,
+      ...(redirectTo ? { redirectTo } : {}),
+    })
+    if (error) {
+      throw new Error(`inviteUserByEmail failed: ${error.message}`)
+    }
+    if (!data.user) {
+      throw new Error('Invitation did not return a user')
+    }
+    authUserId = data.user.id
   }
 
   const { error: membershipError } = await client.from('tenant_memberships').upsert({
@@ -364,10 +517,106 @@ async function provisionTenantUserAccess(tenantId: string, draft: UserDraft) {
     throw new Error(`membership upsert failed: ${membershipError.message}`)
   }
 
-  const redirectTo = process.env.NEXT_PUBLIC_APP_URL ? `${process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')}/reset-password` : undefined
-  const { error: resetError } = await client.auth.resetPasswordForEmail(email, redirectTo ? { redirectTo } : undefined)
-  if (resetError) {
-    throw new Error(`resetPasswordForEmail failed: ${resetError.message}`)
+  return authUserId
+}
+
+// Re-sends the "set up your password" email to a pending invitee (someone who
+// was invited but has not activated their account yet). Safe: it never touches
+// a user who has already signed in / confirmed, so an active account can never
+// be reset by this action.
+async function resendTenantInvite(tenantId: string, draft: UserDraft, origin?: string | null) {
+  const client = getSupabaseAdminClient()
+  const email = draft.email.trim().toLowerCase()
+  if (!email) {
+    throw new Error('email is required')
+  }
+
+  const { data: tenantRow } = await client
+    .from('tenants')
+    .select('name')
+    .eq('id', tenantId)
+    .maybeSingle()
+  const tenantName: string | null = tenantRow?.name ?? null
+
+  const { data: usersResult, error: listError } = await client.auth.admin.listUsers({ page: 1, perPage: 1000 })
+  if (listError) {
+    throw new Error(`listUsers failed: ${listError.message}`)
+  }
+  const existing = usersResult.users.find((entry) => entry.email?.toLowerCase() === email) ?? null
+
+  // If the auth account no longer exists, fall back to a full (re)provision.
+  if (!existing) {
+    return provisionTenantUserAccess(tenantId, draft, origin)
+  }
+
+  // Never re-invite (which could reset) an account that is already active.
+  if (existing.email_confirmed_at || existing.last_sign_in_at) {
+    throw new Error('This user has already activated their account.')
+  }
+
+  const redirectTo = resolveInviteRedirect(origin)
+  const inviteMetadata = {
+    full_name: draft.full_name?.trim() || null,
+    invited_role: draft.role,
+    tenant_name: tenantName,
+    invitation: true,
+  }
+
+  // Pending invitee. Supabase's inviteUserByEmail refuses to re-send to an
+  // already-registered user ("already registered"), and a password-reset email
+  // is the wrong (and often rate-limited) message. So delete the stale pending
+  // account and invite fresh — this reliably delivers a real invitation email.
+  const previousAuthUserId = existing.id
+  const { error: deleteError } = await client.auth.admin.deleteUser(previousAuthUserId)
+  if (deleteError) {
+    throw new Error(`could not refresh invitation: ${deleteError.message}`)
+  }
+
+  const { data: invited, error: inviteError } = await client.auth.admin.inviteUserByEmail(email, {
+    data: inviteMetadata,
+    ...(redirectTo ? { redirectTo } : {}),
+  })
+  if (inviteError || !invited?.user) {
+    throw new Error(`inviteUserByEmail failed: ${inviteError?.message ?? 'no user returned'}`)
+  }
+  const authUserId = invited.user.id
+
+  // Relink the tenant membership to the fresh auth user id (the old row pointed
+  // at the account we just deleted). Fall back to an upsert if nothing matched.
+  const { data: relinked, error: relinkError } = await client.from('tenant_memberships')
+    .update({ auth_user_id: authUserId })
+    .eq('tenant_id', tenantId)
+    .eq('auth_user_id', previousAuthUserId)
+    .select('id')
+  if (relinkError) {
+    throw new Error(`membership relink failed: ${relinkError.message}`)
+  }
+  if (!relinked || relinked.length === 0) {
+    const { error: membershipError } = await client.from('tenant_memberships').upsert({
+      id: randomUUID(),
+      tenant_id: tenantId,
+      auth_user_id: authUserId,
+      role: draft.role,
+      is_default: false,
+    }, {
+      onConflict: 'tenant_id,auth_user_id',
+    })
+    if (membershipError) {
+      throw new Error(`membership upsert failed: ${membershipError.message}`)
+    }
+  }
+
+  // The app `users` row is keyed by the auth user id (users.id === auth id).
+  // Since we deleted and recreated the auth account, its id changed, so the
+  // stored row must be re-pointed too — otherwise sign-in can't find it to
+  // stamp `last_login`, and the app can't recognize the user after they log in.
+  // Safe here: a pending invitee has no activity rows referencing this id yet.
+  const { error: userRelinkError } = await client.from('users')
+    .update({ id: authUserId, updated_at: new Date().toISOString() })
+    .eq('tenant_id', tenantId)
+    .eq('id', previousAuthUserId)
+  if (userRelinkError) {
+    throw new Error(`user record relink failed: ${userRelinkError.message}`)
   }
 
   return authUserId
@@ -384,7 +633,8 @@ export async function ensureDatabaseState(tenantId?: string | null, businessType
 
 export async function applyDatabaseMutation(
   currentTenantId: string,
-  mutation: MutationPayload
+  mutation: MutationPayload,
+  origin?: string | null
 ): Promise<DemoSystemState> {
   let state = await ensureDatabaseState(currentTenantId)
 
@@ -410,7 +660,10 @@ export async function applyDatabaseMutation(
       state = addOrUpdateProduct(state, mutation.draft, mutation.productId)
       break
     case 'removeProduct':
-      state = deleteProduct(state, mutation.productId)
+      state = deleteProduct(state, mutation.productId, mutation.itemCode)
+      break
+    case 'removeProducts':
+      state = deleteProducts(state, mutation.productIds, mutation.itemCodes)
       break
     case 'importProductRows':
       state = importProducts(state, mutation.drafts)
@@ -425,7 +678,7 @@ export async function applyDatabaseMutation(
       state = deleteSupplier(state, mutation.supplierId)
       break
     case 'addUser':
-      const authUserId = await provisionTenantUserAccess(currentTenantId, mutation.draft)
+      const authUserId = await provisionTenantUserAccess(currentTenantId, mutation.draft, origin)
       state = createUser(state, mutation.draft, authUserId)
       break
     case 'editUser':
@@ -433,6 +686,10 @@ export async function applyDatabaseMutation(
       break
     case 'toggleUser':
       state = toggleUserActive(state, mutation.userId)
+      break
+    case 'resendInvite':
+      await resendTenantInvite(currentTenantId, mutation.draft, origin)
+      state = markInviteResent(state, mutation.draft.email)
       break
     case 'createRecipe':
       state = createRecipe(state, mutation.finishedGoodId, mutation.ingredientId, mutation.quantityPerUnit, mutation.uomId)
@@ -443,17 +700,40 @@ export async function applyDatabaseMutation(
     case 'deleteRecipe':
       state = deleteRecipe(state, mutation.recipeId)
       break
+    case 'createProductionTemplate':
+      state = createProductionTemplate(state, { name: mutation.name, finishedGoodId: mutation.finishedGoodId, quantity: mutation.quantity, locationId: mutation.locationId, notes: mutation.notes })
+      break
+    case 'deleteProductionTemplate':
+      state = deleteProductionTemplate(state, mutation.templateId)
+      break
     case 'produceFinishedGood':
       state = produceFinishedGood(state, mutation.finishedGoodId, mutation.quantity, mutation.locationId)
       break
     case 'createPO':
-      state = createPurchaseOrder(state, mutation.draft)
+      state = createPurchaseOrder(state, mutation.draft, mutation.orderId)
       break
     case 'receivePO':
       state = receivePurchaseOrder(state, mutation.purchaseOrderId)
       break
     case 'completeSale':
       state = recordSale(state, mutation.payload).state
+      break
+    case 'voidSale':
+      state = voidTransaction(state, { transactionId: mutation.transactionId, reason: mutation.reason })
+      break
+    case 'refundSale':
+      state = refundTransaction(state, { transactionId: mutation.transactionId, reason: mutation.reason })
+      break
+    case 'openShift':
+      state = openShift(state, mutation.payload)
+      break
+    case 'closeShift':
+      const closed = closeShift(state, mutation.payload)
+      if (!closed) throw new Error('Shift not found or already closed')
+      state = closed
+      break
+    case 'recordCashMovement':
+      state = recordCashMovement(state, mutation.payload)
       break
     case 'acknowledge':
       state = acknowledgeAlert(state, mutation.alertId)
@@ -463,6 +743,9 @@ export async function applyDatabaseMutation(
       break
     case 'recordWaste':
       state = recordWaste(state, { productId: mutation.productId, wasteType: mutation.wasteType, quantity: mutation.quantity, reason: mutation.reason })
+      break
+    case 'transferStock':
+      state = createTransfer(state, mutation.payload)
       break
     case 'updatePurchaseOrder':
       state = updatePurchaseOrder(state, { purchaseOrderId: mutation.purchaseOrderId, draft: mutation.draft })

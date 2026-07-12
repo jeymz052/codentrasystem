@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useMemo, useState } from 'react'
 import { ArrowLeftRight, Filter, Package, Search, SlidersHorizontal } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
+import { formatTimestamp } from '@/lib/utils'
 
 const TYPE_LABELS: Record<string, string> = {
   inbound: 'Inbound',
@@ -11,6 +12,9 @@ const TYPE_LABELS: Record<string, string> = {
   adjustment: 'Adjustment',
   return: 'Return',
   production: 'Production',
+  waste: 'Waste',
+  defect: 'Defect',
+  reject: 'Reject',
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -19,6 +23,9 @@ const TYPE_COLORS: Record<string, string> = {
   adjustment: '#8B5CF6',
   return: '#F59E0B',
   production: '#3B82F6',
+  waste: '#F97316',
+  defect: '#EF4444',
+  reject: '#F43F5E',
 }
 
 export default function MovementsPage() {
@@ -32,7 +39,7 @@ export default function MovementsPage() {
 
     return state.stockMovements
       .slice()
-      .reverse()
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
       .filter((movement) => {
         const matchesType = typeFilter === 'all' || movement.movement_type === typeFilter
         const matchesProduct = productFilter === 'all' || movement.product_id === productFilter
@@ -56,14 +63,20 @@ export default function MovementsPage() {
     const inbound = state.stockMovements.filter((movement) => movement.movement_type === 'inbound')
     const outbound = state.stockMovements.filter((movement) => movement.movement_type === 'outbound')
     const adjustments = state.stockMovements.filter((movement) => movement.movement_type === 'adjustment')
+    const production = state.stockMovements.filter((movement) => movement.movement_type === 'production')
+    const waste = state.stockMovements.filter(
+      (movement) => movement.movement_type === 'waste' || movement.movement_type === 'defect' || movement.movement_type === 'reject'
+    )
     const totalUnits = state.stockMovements.reduce((sum, movement) => sum + Number(movement.quantity ?? 0), 0)
 
     return [
-      { label: 'Total movements', value: String(state.stockMovements.length), hint: 'Audit trail entries' },
-      { label: 'Inbound', value: String(inbound.length), hint: `${inbound.reduce((sum, movement) => sum + Number(movement.quantity ?? 0), 0)} units` },
-      { label: 'Outbound', value: String(outbound.length), hint: `${outbound.reduce((sum, movement) => sum + Number(movement.quantity ?? 0), 0)} units` },
-      { label: 'Adjustments', value: String(adjustments.length), hint: `${adjustments.reduce((sum, movement) => sum + Number(movement.quantity ?? 0), 0)} units adjusted` },
-      { label: 'Units moved', value: String(totalUnits), hint: 'All movement quantities' },
+      { label: 'Total movements', value: String(state.stockMovements.length), hint: 'Audit trail entries', color: '#0F172A' },
+      { label: 'Inbound', value: String(inbound.length), hint: `${inbound.reduce((sum, movement) => sum + Number(movement.quantity ?? 0), 0)} units`, color: '#10B981' },
+      { label: 'Outbound', value: String(outbound.length), hint: `${outbound.reduce((sum, movement) => sum + Number(movement.quantity ?? 0), 0)} units`, color: '#EF4444' },
+      { label: 'Adjustments', value: String(adjustments.length), hint: `${adjustments.reduce((sum, movement) => sum + Number(movement.quantity ?? 0), 0)} units adjusted`, color: '#8B5CF6' },
+      { label: 'Production', value: String(production.length), hint: `${production.reduce((sum, movement) => sum + Number(movement.quantity ?? 0), 0)} units made`, color: '#3B82F6' },
+      { label: 'Waste / Defect / Reject', value: String(waste.length), hint: `${waste.reduce((sum, movement) => sum + Number(movement.quantity ?? 0), 0)} units written off`, color: '#F97316' },
+      { label: 'Units moved', value: String(totalUnits), hint: 'All movement quantities', color: '#0EA5E9' },
     ]
   }, [state.stockMovements, state.products])
 
@@ -101,10 +114,10 @@ export default function MovementsPage() {
       </section>
 
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 14 }}>
-        {summary.map((item, index) => (
+        {summary.map((item) => (
           <div key={item.label} className="card" style={{ padding: '16px 18px', borderRadius: 18 }}>
             <div style={{ fontSize: 12, color: '#64748B', marginBottom: 6 }}>{item.label}</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: index === 0 ? '#0F172A' : index === 1 ? '#10B981' : index === 2 ? '#EF4444' : index === 3 ? '#8B5CF6' : '#3B82F6' }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: item.color }}>
               {item.value}
             </div>
             <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 4 }}>{item.hint}</div>
@@ -196,7 +209,7 @@ export default function MovementsPage() {
                   const color = TYPE_COLORS[movement.movement_type] ?? '#64748B'
                   return (
                     <tr key={movement.id}>
-                      <td style={{ color: '#475569', fontSize: 12, whiteSpace: 'nowrap' }}>{new Date(movement.created_at).toLocaleString()}</td>
+                      <td style={{ color: '#475569', fontSize: 12, whiteSpace: 'nowrap' }}>{formatTimestamp(movement.created_at)}</td>
                       <td>
                         <div style={{ fontWeight: 700, color: '#0F172A' }}>{product?.name ?? 'Unknown item'}</div>
                         <div style={{ fontSize: 11, color: '#94A3B8' }}>{product?.item_code ?? 'No code'}</div>
@@ -228,7 +241,7 @@ export default function MovementsPage() {
             <div key={movement.id} className="card" style={{ padding: 16, borderRadius: 18 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
                 <div>
-                  <div style={{ fontSize: 12, color: '#94A3B8' }}>{new Date(movement.created_at).toLocaleString()}</div>
+                  <div style={{ fontSize: 12, color: '#94A3B8' }}>{formatTimestamp(movement.created_at)}</div>
                   <div style={{ marginTop: 6, fontSize: 15, fontWeight: 800, color: '#0F172A' }}>{product?.name ?? 'Unknown item'}</div>
                   <div style={{ marginTop: 2, fontSize: 12, color: '#64748B' }}>{movement.reference_type ?? 'Manual movement'}</div>
                 </div>

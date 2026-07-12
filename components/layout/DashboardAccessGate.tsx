@@ -3,7 +3,7 @@
 import { useEffect } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { useDemoSystem } from '@/components/demo-system-provider'
-import { canAccessDashboardPath } from '@/lib/access-control'
+import { canAccessDashboardPath, defaultPathForRole } from '@/lib/access-control'
 
 export function DashboardAccessGate({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -15,7 +15,7 @@ export function DashboardAccessGate({ children }: { children: React.ReactNode })
   useEffect(() => {
     if (!hydrated) return
     if (!canAccessDashboardPath(role, pathname)) {
-      router.replace('/dashboard')
+      router.replace(defaultPathForRole(role))
     }
   }, [hydrated, pathname, role, router])
 

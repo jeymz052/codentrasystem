@@ -3,7 +3,7 @@
 import Image from 'next/image'
 import { useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowRight, Building2, CalendarDays, CircleDollarSign, Layers3 } from 'lucide-react'
+import { ArrowRight, Building2, CalendarDays, CircleDollarSign, Factory, Layers3, ShoppingBag } from 'lucide-react'
 import { SUBSCRIPTION_PLANS } from '@/lib/subscription-plans'
 
 type OnboardingFormState = {
@@ -16,7 +16,7 @@ type OnboardingFormState = {
 
 const DEFAULT_STATE: OnboardingFormState = {
   business_name: '',
-  business_type: 'general',
+  business_type: 'retail',
   billing_email: '',
   plan: 'starter',
   timezone: 'Asia/Manila',
@@ -79,7 +79,7 @@ export function OnboardingForm({ initialPlan }: { initialPlan?: string }) {
           </div>
           <h1 className="auth-title">Set up your first business</h1>
           <p className="auth-copy">
-            We&apos;ll create the tenant, connect the first subscription record, and load the operational template that matches your business type.
+            We&apos;ll create your workspace and apply the right setup — buy &amp; sell (sell everything in inventory) or production (sell only the finished goods you make).
           </p>
         </div>
       </div>
@@ -92,18 +92,58 @@ export function OnboardingForm({ initialPlan }: { initialPlan?: string }) {
             <input value={form.business_name} onChange={(event) => setForm((current) => ({ ...current, business_name: event.target.value }))} placeholder="Brew House Cafe" required />
           </div>
         </label>
-        <label className="auth-field">
-          <span>Business type</span>
-          <select className="auth-select" value={form.business_type} onChange={(event) => setForm((current) => ({ ...current, business_type: event.target.value }))}>
-            <option value="coffee_shop">Coffee shop</option>
-            <option value="manufacturing">Manufacturer</option>
-            <option value="convenience_store">Sari-sari / Convenience store</option>
-            <option value="restaurant">Restaurant</option>
-            <option value="retail">Retail</option>
-            <option value="pharmacy">Pharmacy</option>
-            <option value="general">General</option>
-          </select>
-        </label>
+        <div className="auth-field" style={{ gridColumn: '1 / -1' }}>
+          <span>How does this business operate?</span>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12, marginTop: 6 }}>
+            {[
+              {
+                mode: 'retail',
+                title: 'Buy & Sell',
+                desc: 'Sell everything in inventory at the POS. Best for sari-sari stores, retail, and convenience shops.',
+                icon: ShoppingBag,
+                tint: '#DBEAFE',
+                color: '#2563EB',
+              },
+              {
+                mode: 'manufacturing',
+                title: 'Production',
+                desc: 'Make finished goods from raw materials. Only finished goods are sold at the POS; raw materials are for production only.',
+                icon: Factory,
+                tint: '#F3E8FF',
+                color: '#8B5CF6',
+              },
+            ].map((option) => {
+              const selected = form.business_type === option.mode
+              const Icon = option.icon
+              return (
+                <button
+                  type="button"
+                  key={option.mode}
+                  onClick={() => setForm((current) => ({ ...current, business_type: option.mode }))}
+                  style={{
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    padding: '14px 16px',
+                    borderRadius: 14,
+                    border: selected ? `2px solid ${option.color}` : '1px solid #E2E8F0',
+                    background: selected ? option.tint : '#FFFFFF',
+                    display: 'flex',
+                    gap: 12,
+                    alignItems: 'flex-start',
+                  }}
+                >
+                  <div style={{ width: 34, height: 34, borderRadius: 10, background: option.tint, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <Icon size={18} color={option.color} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>{option.title}</div>
+                    <div style={{ fontSize: 12, color: '#64748B', marginTop: 3 }}>{option.desc}</div>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
         <label className="auth-field">
           <span>Billing email</span>
           <div className="auth-input-wrap">

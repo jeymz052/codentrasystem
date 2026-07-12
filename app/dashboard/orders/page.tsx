@@ -1,10 +1,14 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { Ban, CalendarDays, CheckCircle2, Clock3, DollarSign, Edit2, Package, Plus, Search, ShoppingCart, Truck, X } from 'lucide-react'
+import { Ban, CalendarDays, CheckCircle2, Clock3, DollarSign, Edit2, Package, Plus, ShoppingCart, Truck, X } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import type { PurchaseOrderDraft } from '@/lib/demo-system'
 import type { PurchaseOrder } from '@/types/database'
+import { useTableState } from '@/lib/use-table-state'
+import { TableToolbar } from '@/components/ui/table/TableToolbar'
+import { SortHeader } from '@/components/ui/table/SortHeader'
+import { Pagination } from '@/components/ui/table/Pagination'
 
 type PoForm = {
   supplierId: string
@@ -21,7 +25,7 @@ const EMPTY_FORM: PoForm = {
   supplierId: '',
   productId: '',
   quantity: '10',
-  unitCost: '0',
+  unitCost: '',
   expectedDate: TODAY,
   notes: '',
 }
@@ -34,8 +38,6 @@ export default function OrdersPage() {
     supplierId: state.suppliers[0]?.id ?? '',
     productId: state.products[0]?.id ?? '',
   }))
-  const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState('all')
   const [editId, setEditId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState<PoForm>(() => ({
     ...EMPTY_FORM,
@@ -43,6 +45,47 @@ export default function OrdersPage() {
     productId: state.products[0]?.id ?? '',
   }))
   const [cancelId, setCancelId] = useState<string | null>(null)
+
+  const ordersWithTotals = useMemo(
+    () =>
+      [...state.purchaseOrders]
+        .map((order) => ({
+          ...order,
+          total: state.purchaseOrderItems
+            .filter((item) => item.po_id === order.id)
+            .reduce((sum, item) => sum + Number(item.unit_cost ?? 0) * item.quantity_ordered, 0),
+        }))
+        .sort((a, b) => b.created_at.localeCompare(a.created_at)),
+    [state.purchaseOrders, state.purchaseOrderItems]
+  )
+
+  const STATUS_FILTERS = [
+    { value: 'all', label: 'All statuses' },
+    { value: 'draft', label: 'Draft' },
+    { value: 'pending_approval', label: 'Pending approval' },
+    { value: 'approved', label: 'Approved' },
+    { value: 'ordered', label: 'Ordered' },
+    { value: 'partially_received', label: 'Partially received' },
+    { value: 'received', label: 'Received' },
+    { value: 'cancelled', label: 'Cancelled' },
+  ]
+
+  const table = useTableState({
+    data: ordersWithTotals,
+    initialSort: { key: 'created_at', direction: 'desc' },
+    searchKeys: (order) => {
+      const supplier = state.suppliers.find((entry) => entry.id === order.supplier_id)
+      return [supplier?.name ?? '', order.po_number, order.notes ?? '']
+    },
+    filterFields: [
+      {
+        key: 'status',
+        label: 'Status',
+        options: STATUS_FILTERS,
+        getValue: (order) => order.status,
+      },
+    ],
+  })
 
   const selectedProduct = useMemo(() => state.products.find((product) => product.id === form.productId), [form.productId, state.products])
   const selectedSupplier = useMemo(() => state.suppliers.find((supplier) => supplier.id === form.supplierId), [form.supplierId, state.suppliers])
@@ -72,7 +115,7 @@ export default function OrdersPage() {
       supplierId: state.suppliers[0]?.id ?? '',
       productId: state.products[0]?.id ?? '',
       quantity: '10',
-      unitCost: '0',
+      unitCost: '',
       expectedDate: TODAY,
       notes: '',
     })
@@ -104,19 +147,7 @@ export default function OrdersPage() {
     resetForm()
   }
 
-  const filtered = useMemo(() => {
-    const query = search.trim().toLowerCase()
-    return state.purchaseOrders
-      .filter((order) => {
-        const supplier = state.suppliers.find((entry) => entry.id === order.supplier_id)
-        const haystack = [supplier?.name ?? '', order.po_number, order.notes ?? ''].join(' ').toLowerCase()
-        const matchesSearch = !query || haystack.includes(query)
-        const matchesStatus = statusFilter === 'all' || order.status === statusFilter
-        return matchesSearch && matchesStatus
-      })
-      .slice()
-      .sort((a, b) => b.created_at.localeCompare(a.created_at))
-  }, [state.purchaseOrders, state.suppliers, search, statusFilter])
+  const filtered = table.sortedAndFiltered
 
   function openEdit(order: PurchaseOrder) {
     const items = state.purchaseOrderItems.filter((item) => item.po_id === order.id)
@@ -220,22 +251,22 @@ export default function OrdersPage() {
         })}
       </section>
 
-      <section className="card" style={{ padding: '12px 16px', marginBottom: 16, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-        <div style={{ position: 'relative', flex: 1, minWidth: 220 }}>
-          <Search size={14} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
-          <input className="input" placeholder="Search by supplier, PO number, or notes..." value={search} onChange={(event) => setSearch(event.target.value)} style={{ paddingLeft: 36, height: 36, fontSize: 13 }} />
-        </div>
-        <select className="input" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} style={{ width: 'auto', height: 36, fontSize: 13 }}>
-          <option value="all">All statuses</option>
-          <option value="draft">Draft</option>
-          <option value="pending_approval">Pending approval</option>
-          <option value="approved">Approved</option>
-          <option value="ordered">Ordered</option>
-          <option value="partially_received">Partially received</option>
-          <option value="received">Received</option>
-          <option value="cancelled">Cancelled</option>
-        </select>
-      </section>
+      <TableToolbar
+        search={table.search}
+        onSearch={table.setSearch}
+        searchPlaceholder="Search by supplier, PO number, or notes..."
+        filters={[
+          {
+            key: 'status',
+            label: 'Status',
+            value: table.filters.status,
+            onChange: (value) => table.setFilter('status', value),
+            options: STATUS_FILTERS,
+          },
+        ]}
+        showReset={table.totalItems !== state.purchaseOrders.length || Boolean(table.search)}
+        onReset={table.resetFilters}
+      />
 
       <section className="card table-scroll" style={{ overflow: 'hidden', borderRadius: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '16px 18px', borderBottom: '1px solid #E2E8F0' }}>
@@ -243,24 +274,22 @@ export default function OrdersPage() {
             <h3 style={{ fontSize: 15, fontWeight: 800, color: '#0F172A' }}>Purchase orders</h3>
             <p style={{ fontSize: 12, color: '#64748B', marginTop: 3 }}>Newest procurement records and receiving status.</p>
           </div>
-          <div style={{ fontSize: 12, color: '#64748B' }}>{filtered.length} of {state.purchaseOrders.length}</div>
+          <div style={{ fontSize: 12, color: '#64748B' }}>{table.totalItems} of {state.purchaseOrders.length}</div>
         </div>
 
         <div style={{ overflowX: 'auto' }}>
           <table className="data-table">
-            <thead>
-              <tr>
-                <th>PO Number</th>
+            <thead><tr>
+                <SortHeader label="PO Number" column="po_number" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
                 <th>Supplier</th>
-                <th>Status</th>
-                <th>Expected</th>
+                <SortHeader label="Status" column="status" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
+                <SortHeader label="Expected" column="expected_date" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
                 <th>Items</th>
-                <th>Total</th>
-                <th />
-              </tr>
-            </thead>
+                <SortHeader label="Total" column="total" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
+                <th style={{ width: 140, textAlign: 'left' }}>Action</th>
+              </tr></thead>
             <tbody>
-              {filtered.map((order) => {
+              {table.paginated.map((order) => {
                 const supplier = state.suppliers.find((item) => item.id === order.supplier_id)
                 const items = state.purchaseOrderItems.filter((item) => item.po_id === order.id)
                 const total = items.reduce((sum, item) => sum + Number(item.unit_cost ?? 0) * item.quantity_ordered, 0)
@@ -282,22 +311,16 @@ export default function OrdersPage() {
                     <td style={{ color: '#475569' }}>{items.length}</td>
                     <td style={{ fontWeight: 700, color: '#0F172A' }}>{formatCurrency(total)}</td>
                     <td>
-                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-start', flexWrap: 'nowrap' }}>
                         {order.status === 'received' ? (
                           <span className="badge badge-green">Received</span>
                         ) : order.status === 'cancelled' ? (
                           <span className="badge" style={{ background: '#FEE2E2', color: '#DC2626' }}>Cancelled</span>
                         ) : (
                           <>
-                            <button className="btn btn-ghost btn-sm" onClick={() => openEdit(order)}>
-                              <Edit2 size={14} /> Edit
-                            </button>
-                            <button className="btn btn-ghost btn-sm" onClick={() => receivePO(order.id)}>
-                              <CheckCircle2 size={14} /> Receive
-                            </button>
-                            <button className="btn btn-danger btn-sm" onClick={() => setCancelId(order.id)}>
-                              <Ban size={14} /> Cancel
-                            </button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => openEdit(order)} style={{ padding: '4px 8px' }} title="Edit purchase order"><Edit2 size={14} /></button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => receivePO(order.id)} style={{ padding: '4px 8px', color: '#10B981' }} title="Receive purchase order"><CheckCircle2 size={14} /></button>
+                            <button className="btn btn-danger btn-sm" onClick={() => setCancelId(order.id)} style={{ padding: '4px 8px' }} title="Cancel purchase order"><Ban size={14} /></button>
                           </>
                         )}
                       </div>
@@ -305,7 +328,7 @@ export default function OrdersPage() {
                   </tr>
                 )
               })}
-              {filtered.length === 0 && (
+              {table.paginated.length === 0 && (
                 <tr>
                   <td colSpan={7} style={{ textAlign: 'center', padding: 48, color: '#94A3B8' }}>
                     <Package size={32} style={{ marginBottom: 8, opacity: 0.35 }} />
@@ -317,6 +340,17 @@ export default function OrdersPage() {
           </table>
         </div>
       </section>
+
+      <Pagination
+        page={table.page}
+        totalPages={table.totalPages}
+        onPageChange={table.setPage}
+        pageSize={table.pageSize}
+        onPageSizeChange={table.setPageSize}
+        rangeStart={table.range.start}
+        rangeEnd={table.range.end}
+        totalItems={table.totalItems}
+      />
 
       {showCreateModal && (
         <div className="modal-overlay" onClick={(event) => event.target === event.currentTarget && setShowCreateModal(false)}>

@@ -5,6 +5,7 @@ import { CheckCircle2, X, AlertTriangle } from 'lucide-react'
 import {
   addOrUpdateProduct,
   acknowledgeAlert,
+  closeShift,
   computeDashboardStats,
   createCategory,
   createPurchaseOrder,
@@ -14,11 +15,16 @@ import {
   createUser,
   cancelPurchaseOrder,
   deleteProduct,
+  deleteProducts,
   deleteSupplier,
+  deleteSuppliers,
   formatCurrency,
+  id,
   importProducts,
   normalizeBusinessType,
+  openShift,
   receivePurchaseOrder,
+  recordCashMovement,
   recordSale,
   recordWaste,
   remapStateTenantId,
@@ -29,10 +35,16 @@ import {
   updateSupplier,
   updateTenantSettings,
   updateUser,
+  markInviteResent,
+  voidTransaction,
+  refundTransaction,
   createRecipe,
   updateRecipe,
   deleteRecipe,
+  createProductionTemplate,
+  deleteProductionTemplate,
   produceFinishedGood,
+  createTransfer,
   type DemoSystemState,
   type CategoryDraft,
   type LocationDraft,
@@ -70,6 +82,8 @@ type DemoSystemContextValue = {
   addLocation: (draft: LocationDraft) => void
   saveProduct: (draft: ProductDraft, productId?: string) => void
   removeProduct: (productId: string) => void
+  removeProducts: (productIds: string[]) => void
+  removeSuppliers: (supplierIds: string[]) => void
   importProductRows: (drafts: ProductDraft[]) => void
   addSupplier: (draft: SupplierDraft) => void
   editSupplier: (supplierId: string, draft: SupplierDraft) => void
@@ -77,18 +91,27 @@ type DemoSystemContextValue = {
   addUser: (draft: UserDraft) => void
   editUser: (userId: string, draft: { full_name: string; email: string; role: UserRole }) => void
   toggleUser: (userId: string) => void
+  resendInvite: (draft: UserDraft) => void
   createRecipe: (finishedGoodId: string, ingredientId: string, quantityPerUnit: number, uomId?: string | null) => void
   updateRecipe: (recipeId: string, quantityPerUnit: number, uomId?: string | null) => void
   deleteRecipe: (recipeId: string) => void
+  createProductionTemplate: (draft: { name: string; finishedGoodId: string; quantity: number; locationId?: string | null; notes?: string | null }) => void
+  deleteProductionTemplate: (templateId: string) => void
   produceFinishedGood: (finishedGoodId: string, quantity: number, locationId?: string | null) => void
   createPO: (draft: PurchaseOrderDraft) => void
   receivePO: (purchaseOrderId: string) => void
   updatePO: (purchaseOrderId: string, draft: PurchaseOrderDraft) => void
   cancelPO: (purchaseOrderId: string) => void
-  completeSale: (payload: { payment_method: PaymentMethod; payment_provider?: string; payment_reference?: string | null; amount_tendered: number; location_id: string | null; notes?: string; items: SaleDraftItem[] }) => { receiptNumber: string }
+  completeSale: (payload: { payment_method: PaymentMethod; payment_provider?: string; payment_reference?: string | null; amount_tendered: number; location_id: string | null; notes?: string; items: SaleDraftItem[] }) => { receiptNumber: string; transactionId: string }
+  voidSale: (transactionId: string, reason?: string) => void
+  refundSale: (transactionId: string, reason?: string) => void
+  openShift: (payload: { openingFloat: number; locationId?: string | null; notes?: string; station?: string | null }) => void
+  closeShift: (shiftId: string, countedCash: number, notes?: string) => void
+  recordCashMovement: (shiftId: string, kind: 'cash_in' | 'cash_out' | 'denomination_adjustment', amount: number, note?: string | null, denominations?: Record<string, number> | null) => void
   acknowledge: (alertId: string) => void
   resolve: (alertId: string) => void
   recordWaste: (productId: string, wasteType: 'waste' | 'defect' | 'reject', quantity: number, reason?: string) => void
+  transferStock: (payload: { productId: string; fromLocationId: string | null; toLocationId: string | null; quantity: number; notes?: string }) => void
   switchTenant: (tenantId: string) => Promise<void>
   signOut: () => Promise<void>
   formatCurrency: (amount: number) => string
@@ -97,6 +120,55 @@ type DemoSystemContextValue = {
 }
 
 const DemoSystemContext = createContext<DemoSystemContextValue | null>(null)
+
+// Union two id-keyed arrays keeping the local (optimistic) record on id match
+// and appending any remote-only record. Used so optimistic stock movements /
+// lots are never dropped when a stale server snapshot arrives.
+function mergeArray<T extends { id: string }>(localItems: T[], remoteItems: T[]): T[] {
+  const localById = new Map(localItems.map((item) => [item.id, item]))
+  const merged = [...localItems]
+  for (const remoteItem of remoteItems) {
+    if (!localById.has(remoteItem.id)) {
+      merged.push(remoteItem)
+    }
+  }
+  return merged
+}
+
+// Products are reconciled by item_code (the real business key), not just id.
+// A client optimistic product and its server-persisted twin can carry different
+// random ids (e.g. imported items), which would otherwise both survive a plain
+// id merge and show up as duplicates / "come back" after a delete. Here the
+// server record wins for a shared item_code, and any client-only duplicate is
+// dropped — so deleting by item_code on the server leaves the list empty.
+type ProductLike = { id: string; item_code?: string | null }
+function mergeProducts<T extends ProductLike>(localItems: T[], remoteItems: T[]): T[] {
+  const keyFor = (item: ProductLike) => {
+    const code = String(item.item_code ?? '').trim().toLowerCase()
+    return code ? `code:${code}` : `id:${item.id}`
+  }
+  const result = new Map<string, T>()
+  for (const item of remoteItems) result.set(keyFor(item), item)
+  for (const item of localItems) {
+    const key = keyFor(item)
+    if (!result.has(key)) result.set(key, item)
+  }
+  return Array.from(result.values())
+}
+
+// Users need special handling: when a user is invited, the optimistic local row
+// gets a temporary random id while the server persists the row with the real
+// Supabase auth-user id. A plain id-based merge would keep both and show a
+// duplicate. The server is authoritative, so prefer remote rows and only keep
+// local rows that have no remote match by id OR email.
+function mergeUsers<T extends { id: string; email: string }>(localItems: T[], remoteItems: T[]): T[] {
+  const remoteIds = new Set(remoteItems.map((item) => item.id))
+  const remoteEmails = new Set(remoteItems.map((item) => item.email.trim().toLowerCase()))
+  const localOnly = localItems.filter(
+    (item) => !remoteIds.has(item.id) && !remoteEmails.has(item.email.trim().toLowerCase())
+  )
+  return [...remoteItems, ...localOnly]
+}
 
 type FeedbackItem = {
   id: string
@@ -166,11 +238,21 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         const cachedTenantId = window.localStorage.getItem(ACTIVE_TENANT_KEY)
         const remote = await fetchRemoteState(initialTenantId ?? cachedTenantId)
         if (!mounted) return
-        setState(remote.state)
+        // Don't clobber local state if the user already started mutating it
+        // while this initial load was still in flight (e.g. marking a PO
+        // received). Otherwise the late snapshot would reset the record back
+        // to its server-side status (e.g. draft) after a few seconds.
+        const hasMutated = requestIdRef.current > 0
+        if (!hasMutated) {
+          setState((prev) => ({
+            ...remote.state,
+            currentUserId: resolveCurrentUserId(remote.state),
+          }))
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(remote.state))
+        }
         setAvailableTenants(remote.availableTenants)
         setActiveTenantId(remote.activeTenantId)
         window.localStorage.setItem(ACTIVE_TENANT_KEY, remote.activeTenantId)
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(remote.state))
       } catch {
         if (!mounted) return
         const cached = loadCachedState()
@@ -221,7 +303,46 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     setFeedback((current) => [...current, { id, kind, message }].slice(-3))
   }
 
-  function sync<T>(optimistic: (current: DemoSystemState) => DemoSystemState, mutation: Record<string, unknown>) {
+  // The real signed-in user is identified by their auth email (passed from the
+  // server layout). The persisted demo state defaults currentUserId to the
+  // superadmin/admin seed, so we re-point it at the matching user row. This
+  // makes the POS show the actual cashier (not "superadmin") and attribute
+  // sales/actions to the right person.
+  function resolveCurrentUserId(next: DemoSystemState): string {
+    if (authUserEmail) {
+      const normalized = authUserEmail.trim().toLowerCase()
+      const match = next.users.find((u) => (u.email ?? '').trim().toLowerCase() === normalized)
+      if (match) return match.id
+    }
+    return next.currentUserId
+  }
+
+  function mergeState(local: DemoSystemState, remote: DemoSystemState): DemoSystemState {
+    return {
+      ...remote,
+      currentUserId: resolveCurrentUserId(remote),
+      categories: mergeArray(local.categories, remote.categories),
+      unitsOfMeasure: mergeArray(local.unitsOfMeasure, remote.unitsOfMeasure),
+      locations: mergeArray(local.locations, remote.locations),
+      suppliers: mergeArray(local.suppliers, remote.suppliers),
+      users: mergeUsers(local.users, remote.users),
+      products: mergeProducts(local.products, remote.products),
+      purchaseOrders: mergeArray(local.purchaseOrders, remote.purchaseOrders),
+      purchaseOrderItems: mergeArray(local.purchaseOrderItems, remote.purchaseOrderItems),
+      salesTransactions: mergeArray(local.salesTransactions, remote.salesTransactions),
+      salesTransactionItems: mergeArray(local.salesTransactionItems, remote.salesTransactionItems),
+      stockMovements: mergeArray(local.stockMovements, remote.stockMovements ?? []),
+      alerts: mergeArray(local.alerts, remote.alerts),
+      auditLogs: mergeArray(local.auditLogs, remote.auditLogs),
+      productRecipes: mergeArray(local.productRecipes, remote.productRecipes),
+      productionTemplates: mergeArray(local.productionTemplates, remote.productionTemplates),
+      cashShifts: mergeArray(local.cashShifts, remote.cashShifts),
+      cashMovements: mergeArray(local.cashMovements, remote.cashMovements),
+      inventoryLots: mergeArray(local.inventoryLots, remote.inventoryLots ?? []),
+    }
+  }
+
+  function sync<T>(optimistic: (current: DemoSystemState) => DemoSystemState, mutation: Record<string, unknown>, options?: { successMessage?: string; errorLabel?: string }) {
     requestIdRef.current += 1
     const currentRequest = requestIdRef.current
     const tenantId = state.tenant.id
@@ -232,16 +353,23 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     void postMutation(tenantId, mutation)
       .then((remote) => {
         if (currentRequest === requestIdRef.current) {
-          setState(remote.state)
+          setState((prev) => mergeState(prev, remote.state))
           setAvailableTenants(remote.availableTenants)
           setActiveTenantId(remote.activeTenantId)
         }
+        if (options?.successMessage) {
+          pushFeedback('success', options.successMessage)
+        }
       })
-      .catch(() => {
+      .catch((error) => {
+        if (options?.errorLabel) {
+          const detail = error instanceof Error ? error.message : 'Something went wrong'
+          pushFeedback('error', `${options.errorLabel}: ${detail}`)
+        }
         void fetchRemoteState(tenantId)
           .then((remote) => {
             if (currentRequest === requestIdRef.current) {
-              setState(remote.state)
+              setState((prev) => mergeState(prev, remote.state))
               setAvailableTenants(remote.availableTenants)
               setActiveTenantId(remote.activeTenantId)
             }
@@ -284,10 +412,13 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       (current) => addOrUpdateProduct(current, draft, productId),
       { action: 'saveProduct', draft, productId }
     ),
-    removeProduct: (productId) => sync(
-      (current) => deleteProduct(current, productId),
-      { action: 'removeProduct', productId }
-    ),
+    removeProduct: (productId) => {
+      const itemCode = state.products.find((entry) => entry.id === productId)?.item_code
+      sync(
+        (current) => deleteProduct(current, productId),
+        { action: 'removeProduct', productId, itemCode }
+      )
+    },
     importProductRows: (drafts) => sync(
       (current) => importProducts(current, drafts),
       { action: 'importProductRows', drafts }
@@ -304,9 +435,23 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       (current) => deleteSupplier(current, supplierId),
       { action: 'removeSupplier', supplierId }
     ),
+    removeProducts: (productIds) => {
+      const itemCodes = state.products
+        .filter((entry) => productIds.includes(entry.id))
+        .map((entry) => entry.item_code)
+      sync(
+        (current) => deleteProducts(current, productIds),
+        { action: 'removeProducts', productIds, itemCodes }
+      )
+    },
+    removeSuppliers: (supplierIds) => sync(
+      (current) => deleteSuppliers(current, supplierIds),
+      { action: 'removeSuppliers', supplierIds }
+    ),
   addUser: (draft) => sync(
     (current) => createUser(current, draft),
-    { action: 'addUser', draft }
+    { action: 'addUser', draft },
+    { successMessage: 'Invitation sent. They\u2019ll get an email to set up their password.', errorLabel: 'Could not send invitation' }
   ),
   editUser: (userId, draft) => sync(
     (current) => updateUser(current, userId, draft),
@@ -315,6 +460,11 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
   toggleUser: (userId) => sync(
     (current) => toggleUserActive(current, userId),
     { action: 'toggleUser', userId }
+  ),
+  resendInvite: (draft) => sync(
+    (current) => markInviteResent(current, draft.email),
+    { action: 'resendInvite', draft },
+    { successMessage: 'Invitation resent. We\u2019ve emailed a fresh setup link.', errorLabel: 'Could not resend invitation' }
   ),
   createRecipe: (finishedGoodId, ingredientId, quantityPerUnit, uomId) => sync(
     (current) => createRecipe(current, finishedGoodId, ingredientId, quantityPerUnit, uomId),
@@ -328,14 +478,25 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     (current) => deleteRecipe(current, recipeId),
     { action: 'deleteRecipe', recipeId }
   ),
+  createProductionTemplate: (draft) => sync(
+    (current) => createProductionTemplate(current, draft),
+    { action: 'createProductionTemplate', ...draft }
+  ),
+  deleteProductionTemplate: (templateId) => sync(
+    (current) => deleteProductionTemplate(current, templateId),
+    { action: 'deleteProductionTemplate', templateId }
+  ),
   produceFinishedGood: (finishedGoodId, quantity, locationId) => sync(
     (current) => produceFinishedGood(current, finishedGoodId, quantity, locationId),
     { action: 'produceFinishedGood', finishedGoodId, quantity, locationId }
   ),
-  createPO: (draft) => sync(
-    (current) => createPurchaseOrder(current, draft),
-    { action: 'createPO', draft }
-  ),
+  createPO: (draft) => {
+    const orderId = id()
+    sync(
+      (current) => createPurchaseOrder(current, draft, orderId),
+      { action: 'createPO', draft, orderId }
+    )
+  },
   receivePO: (purchaseOrderId) => sync(
     (current) => receivePurchaseOrder(current, purchaseOrderId),
     { action: 'receivePO', purchaseOrderId }
@@ -352,10 +513,49 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       const local = recordSale(state, payload)
       sync(
         () => local.state,
-        { action: 'completeSale', payload: { ...payload, receiptNumber: local.receiptNumber } }
+        {
+          action: 'completeSale',
+          payload: {
+            ...payload,
+            receiptNumber: local.receiptNumber,
+            transactionId: local.transactionId,
+            itemIds: local.itemIds,
+            movementIds: local.movementIds,
+            auditLogId: local.auditLogId,
+          },
+        }
       )
-      return { receiptNumber: local.receiptNumber }
+      return { receiptNumber: local.receiptNumber, transactionId: local.transactionId }
     },
+    voidSale: (transactionId, reason) =>
+      sync(
+        (current) => voidTransaction(current, { transactionId, reason }),
+        { action: 'voidSale', transactionId, reason }
+      ),
+    refundSale: (transactionId, reason) =>
+      sync(
+        (current) => refundTransaction(current, { transactionId, reason }),
+        { action: 'refundSale', transactionId, reason }
+      ),
+    openShift: (payload) =>
+      sync(
+        (current) => openShift(current, payload),
+        { action: 'openShift', payload }
+      ),
+    closeShift: (shiftId, countedCash, notes) =>
+      sync(
+        (current) => {
+          const updated = closeShift(current, { shiftId, countedCash, notes })
+          if (!updated) throw new Error('Shift not found or already closed')
+          return updated
+        },
+        { action: 'closeShift', payload: { shiftId, countedCash, notes } }
+      ),
+    recordCashMovement: (shiftId, kind, amount, note, denominations) =>
+      sync(
+        (current) => recordCashMovement(current, { shiftId, kind, amount, note, denominations }),
+        { action: 'recordCashMovement', payload: { shiftId, kind, amount, note, denominations } }
+      ),
     acknowledge: (alertId) => sync(
       (current) => acknowledgeAlert(current, alertId),
       { action: 'acknowledge', alertId }
@@ -367,6 +567,10 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     recordWaste: (productId, wasteType, quantity, reason) => sync(
       (current) => recordWaste(current, { productId, wasteType, quantity, reason }),
       { action: 'recordWaste', productId, wasteType, quantity, reason }
+    ),
+    transferStock: (payload) => sync(
+      (current) => createTransfer(current, payload),
+      { action: 'transferStock', payload }
     ),
     switchTenant: async (tenantId: string) => {
       const response = await fetch('/api/session/tenant', {

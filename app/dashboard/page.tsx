@@ -5,6 +5,7 @@ import { useMemo } from 'react'
 import { AlertTriangle, ArrowRight, ArrowUpDown, BarChart3, CheckCircle2, CreditCard, DollarSign, LayoutDashboard, Package, PieChart, ShoppingCart, TrendingDown, Users, X } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { formatRoleLabel } from '@/lib/access-control'
+import { formatTimestamp } from '@/lib/utils'
 import { SUBSCRIPTION_PLANS } from '@/lib/subscription-plans'
 
 function formatShortDate(value: string | null) {
@@ -383,7 +384,7 @@ export default function DashboardPage() {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{product?.name ?? 'Unknown item'}</div>
                       <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>{alert.message}</div>
-                      <div style={{ fontSize: 10, color: '#94A3B8', marginTop: 4 }}>{new Date(alert.created_at).toLocaleString()}</div>
+                       <div style={{ fontSize: 10, color: '#94A3B8', marginTop: 4 }}>{formatTimestamp(alert.created_at)}</div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                       <span className="badge" style={{ background: `${color}14`, color, fontSize: 10 }}>{alert.status}</span>

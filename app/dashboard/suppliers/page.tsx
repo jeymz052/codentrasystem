@@ -1,8 +1,13 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { Building2, Clock3, Plus, Save, Search, Truck, Trash2, Users, X } from 'lucide-react'
+import { Building2, Clock3, Pencil, Plus, Save, Search, Truck, Trash2, Users, X } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
+import { useTableState } from '@/lib/use-table-state'
+import { TableToolbar } from '@/components/ui/table/TableToolbar'
+import { SortHeader } from '@/components/ui/table/SortHeader'
+import { Pagination } from '@/components/ui/table/Pagination'
+import { SelectAllCheckbox, RowCheckbox, BulkActionBar } from '@/components/ui/table/TableSelection'
 
 const EMPTY = {
   name: '',
@@ -17,23 +22,28 @@ const EMPTY = {
 type SupplierForm = typeof EMPTY
 
 export default function SuppliersPage() {
-  const { state, addSupplier, editSupplier, removeSupplier } = useDemoSystem()
+  const { state, addSupplier, editSupplier, removeSupplier, removeSuppliers } = useDemoSystem()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<SupplierForm>(EMPTY)
   const [showModal, setShowModal] = useState(false)
-  const [search, setSearch] = useState('')
+  const [bulkConfirm, setBulkConfirm] = useState(false)
 
-  const filteredSuppliers = useMemo(() => {
-    const query = search.trim().toLowerCase()
-    return state.suppliers.filter((supplier) => {
-      if (!query) return true
-      return [supplier.name, supplier.contact_name, supplier.email, supplier.phone, supplier.address]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase()
-        .includes(query)
-    })
-  }, [search, state.suppliers])
+  const table = useTableState({
+    data: state.suppliers,
+    searchKeys: (supplier) => [
+      supplier.name,
+      supplier.contact_name,
+      supplier.email,
+      supplier.phone,
+      supplier.address,
+    ].filter(Boolean) as string[],
+  })
+
+  function handleDeleteSelected() {
+    removeSuppliers(table.selectedIds)
+    setBulkConfirm(false)
+    table.clearSelection()
+  }
 
   const summary = useMemo(() => {
     const avgLead = state.suppliers.length
@@ -41,10 +51,10 @@ export default function SuppliersPage() {
       : 0
     return [
       { label: 'Suppliers', value: String(state.suppliers.length), hint: 'Total vendor records', icon: Truck, color: '#3B82F6', tint: '#DBEAFE' },
-      { label: 'Filtered', value: String(filteredSuppliers.length), hint: 'Matches current search', icon: Users, color: '#8B5CF6', tint: '#EDE9FE' },
+      { label: 'Filtered', value: String(table.totalItems), hint: 'Matches current search', icon: Users, color: '#8B5CF6', tint: '#EDE9FE' },
       { label: 'Avg lead time', value: `${avgLead} days`, hint: 'Across all suppliers', icon: Clock3, color: '#F59E0B', tint: '#FEF3C7' },
     ]
-  }, [filteredSuppliers.length, state.suppliers])
+  }, [table.totalItems, state.suppliers])
 
   function startCreate() {
     setEditingId(null)
@@ -154,18 +164,20 @@ export default function SuppliersPage() {
         })}
       </section>
 
-      <section className="card" style={{ padding: 16, borderRadius: 20 }}>
-        <div style={{ position: 'relative' }}>
-          <Search size={14} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
-          <input
-            className="input"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search supplier name, contact, phone, email, or address..."
-            style={{ height: 42, paddingLeft: 38, borderRadius: 12 }}
-          />
-        </div>
-      </section>
+      <TableToolbar
+        search={table.search}
+        onSearch={table.setSearch}
+        searchPlaceholder="Search supplier name, contact, phone, email, or address..."
+        showReset={table.totalItems !== state.suppliers.length || Boolean(table.search)}
+        onReset={table.resetFilters}
+      />
+
+      <BulkActionBar
+        count={table.selectedCount}
+        onClear={table.clearSelection}
+        onDelete={() => setBulkConfirm(true)}
+        deleteLabel={`Delete ${table.selectedCount} selected`}
+      />
 
       <section className="card" style={{ overflow: 'hidden', borderRadius: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '16px 18px', borderBottom: '1px solid #E2E8F0' }}>
@@ -178,47 +190,59 @@ export default function SuppliersPage() {
 
         <div style={{ overflowX: 'auto' }}>
           <table className="data-table">
-            <thead>
-              <tr>
-                <th>Name</th>
+            <thead><tr>
+                <th style={{ width: 36 }}>
+                  <SelectAllCheckbox
+                    checked={table.isAllFilteredSelected}
+                    indeterminate={table.isSomeFilteredSelected}
+                    onToggle={table.selectAllFiltered}
+                    disabled={table.totalItems === 0}
+                  />
+                </th>
+                <SortHeader label="Name" column="name" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
                 <th>Contact</th>
-                <th>Lead Time</th>
+                <SortHeader label="Lead Time" column="lead_days" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} align="right" />
                 <th>Phone</th>
                 <th>Email</th>
-                <th />
-              </tr>
-            </thead>
+                <th style={{ width: 80, textAlign: 'right' }}>Action</th>
+              </tr></thead>
             <tbody>
-              {filteredSuppliers.map((supplier) => (
-                <tr key={supplier.id}>
-                  <td>
-                    <div style={{ fontWeight: 700, color: '#0F172A' }}>{supplier.name}</div>
-                    <div style={{ fontSize: 11, color: '#94A3B8' }}>{supplier.address ?? 'No address'}</div>
-                  </td>
-                  <td>{supplier.contact_name ?? '-'}</td>
-                  <td>
-                    <span className="badge badge-blue" style={{ fontSize: 10, textTransform: 'capitalize' }}>
-                      {supplier.lead_days} days
-                    </span>
-                  </td>
-                  <td>{supplier.phone ?? '-'}</td>
-                  <td>{supplier.email ?? '-'}</td>
-                  <td>
-                    <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                      <button className="btn btn-ghost btn-sm" onClick={() => startEdit(supplier.id)}>
-                        Edit
-                      </button>
-                      <button className="btn btn-danger btn-sm" onClick={() => removeSupplier(supplier.id)}>
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {table.paginated.map((supplier) => {
+                const isSelected = table.selected.has(supplier.id)
+                return (
+                  <tr key={supplier.id} style={isSelected ? { background: '#EFF6FF' } : undefined}>
+                    <td>
+                      <RowCheckbox checked={isSelected} onToggle={() => table.toggleSelect(supplier.id)} />
+                    </td>
+                    <td>
+                      <div style={{ fontWeight: 700, color: '#0F172A' }}>{supplier.name}</div>
+                      <div style={{ fontSize: 11, color: '#94A3B8' }}>{supplier.address ?? 'No address'}</div>
+                    </td>
+                    <td>{supplier.contact_name ?? '-'}</td>
+                    <td style={{ textAlign: 'right' }}>
+                      <span className="badge badge-blue" style={{ fontSize: 10, textTransform: 'capitalize' }}>
+                        {supplier.lead_days} days
+                      </span>
+                    </td>
+                    <td>{supplier.phone ?? '-'}</td>
+                    <td>{supplier.email ?? '-'}</td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                        <button className="btn btn-ghost btn-sm" style={{ padding: '4px 8px' }} onClick={() => startEdit(supplier.id)} title="Edit supplier">
+                          <Pencil size={13} />
+                        </button>
+                        <button className="btn btn-danger btn-sm" style={{ padding: '4px 8px' }} onClick={() => removeSupplier(supplier.id)} title="Delete supplier">
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
 
-              {filteredSuppliers.length === 0 && (
+              {table.paginated.length === 0 && (
                 <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: 48, color: '#94A3B8' }}>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: 48, color: '#94A3B8' }}>
                     <Building2 size={32} style={{ marginBottom: 8, opacity: 0.35 }} />
                     <p>No suppliers found</p>
                   </td>
@@ -228,6 +252,33 @@ export default function SuppliersPage() {
           </table>
         </div>
       </section>
+
+      <Pagination
+        page={table.page}
+        totalPages={table.totalPages}
+        onPageChange={table.setPage}
+        pageSize={table.pageSize}
+        onPageSizeChange={table.setPageSize}
+        rangeStart={table.range.start}
+        rangeEnd={table.range.end}
+        totalItems={table.totalItems}
+      />
+
+      {bulkConfirm && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ maxWidth: 400, textAlign: 'center' }}>
+            <div style={{ width: 52, height: 52, borderRadius: '50%', background: '#FEE2E2', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+              <Trash2 size={24} color="#EF4444" />
+            </div>
+            <h3 style={{ fontSize: 17, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>Delete {table.selectedCount} suppliers?</h3>
+            <p style={{ fontSize: 13, color: '#475569', marginBottom: 24 }}>This action cannot be undone. The selected suppliers will be permanently removed.</p>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+              <button className="btn btn-ghost" onClick={() => setBulkConfirm(false)}>Cancel</button>
+              <button className="btn btn-danger" onClick={handleDeleteSelected}>Delete Suppliers</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showModal && (
         <div className="modal-overlay" onClick={(event) => event.target === event.currentTarget && setShowModal(false)}>

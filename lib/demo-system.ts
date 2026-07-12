@@ -1,9 +1,12 @@
 import type {
   Alert,
+  InventoryLot,
   AlertStatus,
   AlertType,
   AuditLog,
   BusinessType,
+  CashMovement,
+  CashMovementKind,
   CashShift,
   Category,
   DashboardStats,
@@ -12,6 +15,7 @@ import type {
   OrderStatus,
   PaymentMethod,
   Product,
+  ProductionTemplate,
   ProductRecipe,
   PurchaseOrder,
   PurchaseOrderItem,
@@ -41,6 +45,7 @@ export type ProductDraft = {
   supplier: string
   location: string
   description?: string
+  is_finished_good?: boolean
 }
 
 export type SupplierDraft = {
@@ -105,6 +110,7 @@ export type DemoSystemState = {
   products: Product[]
   users: User[]
   cashShifts: CashShift[]
+  cashMovements: CashMovement[]
   purchaseOrders: PurchaseOrder[]
   purchaseOrderItems: PurchaseOrderItem[]
   salesTransactions: SalesTransaction[]
@@ -113,6 +119,8 @@ export type DemoSystemState = {
   alerts: Alert[]
   auditLogs: AuditLog[]
   productRecipes: ProductRecipe[]
+  productionTemplates: ProductionTemplate[]
+  inventoryLots: InventoryLot[]
 }
 
 const PLAN_LIMITS: Record<SubscriptionPlan, Pick<Tenant, 'max_users' | 'max_products' | 'max_locations'>> = {
@@ -121,7 +129,7 @@ const PLAN_LIMITS: Record<SubscriptionPlan, Pick<Tenant, 'max_users' | 'max_prod
   enterprise: { max_users: 999, max_products: 9999, max_locations: 99 },
 }
 
-function id() {
+export function id() {
   const crypto = globalThis.crypto
   if (crypto?.randomUUID) return crypto.randomUUID()
 
@@ -130,6 +138,27 @@ function id() {
     const value = char === 'x' ? rand : (rand & 0x3) | 0x8
     return value.toString(16)
   })
+}
+
+// Deterministic, UUID-shaped id derived from string parts. Unlike id() (random),
+// this lets the client's optimistic record and the server's persisted record
+// share the same id, so reconciliation merges them into one (instead of
+// duplicating or dropping). The output is a valid RFC-4122-format string so it
+// can be stored in a Postgres `uuid` primary key column.
+export function deterministicUuid(...parts: string[]): string {
+  const input = parts.join('::')
+  const fnv = (seed: number) => {
+    let hash = seed >>> 0
+    for (let i = 0; i < input.length; i++) {
+      hash ^= input.charCodeAt(i)
+      hash = Math.imul(hash, 0x01000193)
+    }
+    return hash >>> 0
+  }
+  const hex = [fnv(0x811c9dc5), fnv(0x9e3779b1), fnv(0x85ebca77), fnv(0xc2b2ae3d)]
+    .map((value) => value.toString(16).padStart(8, '0'))
+    .join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(12, 15)}-8${hex.slice(15, 18)}-${hex.slice(18, 30)}`
 }
 
 function nowIso() {
@@ -173,6 +202,7 @@ function baseTenant(businessType: BusinessType): Tenant {
     max_users: limits.max_users,
     max_products: limits.max_products,
     max_locations: limits.max_locations,
+    enable_production: businessType === 'manufacturing',
     is_active: true,
     created_at: timestamp,
     updated_at: timestamp,
@@ -180,6 +210,14 @@ function baseTenant(businessType: BusinessType): Tenant {
     stripe_customer_id: null,
     stripe_subscription_id: null,
     stripe_price_id: null,
+    gcash_account: null,
+    gcash_qr_url: null,
+    maya_account: null,
+    maya_qr_url: null,
+    bdo_account: null,
+    bdo_qr_url: null,
+    maribank_account: null,
+    maribank_qr_url: null,
   }
 }
 
@@ -194,6 +232,7 @@ function emptyState(businessType: BusinessType): DemoSystemState {
     products: [],
     users: [],
     cashShifts: [],
+    cashMovements: [],
     purchaseOrders: [],
     purchaseOrderItems: [],
     salesTransactions: [],
@@ -202,6 +241,8 @@ function emptyState(businessType: BusinessType): DemoSystemState {
     alerts: [],
     auditLogs: [],
     productRecipes: [],
+    productionTemplates: [],
+    inventoryLots: [],
   }
 }
 
@@ -274,6 +315,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       barcode: null,
       image_url: null,
       is_active: true,
+      is_finished_good: false,
       expiry_date: null,
       created_at: addMinutes(baseTime, 30),
       updated_at: addMinutes(baseTime, 35),
@@ -302,6 +344,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       barcode: null,
       image_url: null,
       is_active: true,
+      is_finished_good: false,
       expiry_date: null,
       created_at: addMinutes(baseTime, 31),
       updated_at: addMinutes(baseTime, 39),
@@ -330,6 +373,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       barcode: null,
       image_url: null,
       is_active: true,
+      is_finished_good: false,
       expiry_date: null,
       created_at: addMinutes(baseTime, 32),
       updated_at: addMinutes(baseTime, 40),
@@ -358,6 +402,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       barcode: null,
       image_url: null,
       is_active: true,
+      is_finished_good: false,
       expiry_date: null,
       created_at: addMinutes(baseTime, 33),
       updated_at: addMinutes(baseTime, 41),
@@ -386,6 +431,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       barcode: null,
       image_url: null,
       is_active: true,
+      is_finished_good: false,
       expiry_date: null,
       created_at: addMinutes(baseTime, 34),
       updated_at: addMinutes(baseTime, 34),
@@ -414,6 +460,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       barcode: null,
       image_url: null,
       is_active: true,
+      is_finished_good: false,
       expiry_date: null,
       created_at: addMinutes(baseTime, 35),
       updated_at: addMinutes(baseTime, 35),
@@ -442,6 +489,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       barcode: null,
       image_url: null,
       is_active: true,
+      is_finished_good: false,
       expiry_date: null,
       created_at: addMinutes(baseTime, 36),
       updated_at: addMinutes(baseTime, 42),
@@ -450,9 +498,39 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       location: bulkStorage,
       uom: packUom,
     },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      item_code: 'COF050',
+      name: 'Iced Caramel Macchiato',
+      description: 'Ready-to-serve iced coffee (finished good)',
+      category_id: coffeeCat.id,
+      supplier_id: null,
+      location_id: mainStorage.id,
+      uom_id: pcsUom.id,
+      quantity_on_hand: 0,
+      quantity_reserved: 0,
+      reorder_point: 12,
+      reorder_quantity: 24,
+      max_stock: null,
+      unit_cost: 45,
+      selling_price: 120,
+      barcode: null,
+      image_url: null,
+      is_active: true,
+      is_finished_good: true,
+      expiry_date: null,
+      created_at: addMinutes(baseTime, 37),
+      updated_at: addMinutes(baseTime, 43),
+      category: coffeeCat,
+      supplier: undefined,
+      location: mainStorage,
+      uom: pcsUom,
+    },
   ]
 
   const [espresso, milk, sugar, , , , hotChocolate] = products
+  const icedCoffee = products.find((p) => p.item_code === 'COF050')!
 
   const stockMovements: StockMovement[] = [
     {
@@ -463,7 +541,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       quantity: 20,
       quantity_before: 0,
       quantity_after: 20,
-      reference_id: 'seed-opening',
+      reference_id: id(),
       reference_type: 'seed',
       location_id: espresso.location_id,
       performed_by: null,
@@ -479,7 +557,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       quantity: 50,
       quantity_before: 0,
       quantity_after: 50,
-      reference_id: 'po-seed-001',
+      reference_id: id(),
       reference_type: 'purchase_order',
       location_id: milk.location_id,
       performed_by: null,
@@ -495,7 +573,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       quantity: 5,
       quantity_before: 50,
       quantity_after: 45,
-      reference_id: 'rcp-seed-001',
+      reference_id: id(),
       reference_type: 'sales_transaction',
       location_id: milk.location_id,
       performed_by: null,
@@ -511,7 +589,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       quantity: 3,
       quantity_before: 30,
       quantity_after: 33,
-      reference_id: 'adj-seed-001',
+      reference_id: id(),
       reference_type: 'inventory_adjustment',
       location_id: sugar.location_id,
       performed_by: null,
@@ -527,7 +605,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       quantity: 6,
       quantity_before: 0,
       quantity_after: 6,
-      reference_id: 'prod-seed-001',
+      reference_id: id(),
       reference_type: 'production_batch',
       location_id: hotChocolate.location_id,
       performed_by: null,
@@ -584,7 +662,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       target_id: adminUser.id,
       details: { role: adminUser.role, email: adminUser.email },
       performed_by: null,
-      performed_at: adminUser.created_at,
+      performed_at: addMinutes(adminUser.created_at, 1),
     },
     {
       id: id(),
@@ -595,7 +673,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       target_id: managerUser.id,
       details: { role: managerUser.role, email: managerUser.email },
       performed_by: adminUser.id,
-      performed_at: managerUser.created_at,
+      performed_at: addMinutes(managerUser.created_at, 1),
     },
     {
       id: id(),
@@ -606,7 +684,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       target_id: cashierUser.id,
       details: { role: cashierUser.role, email: cashierUser.email },
       performed_by: adminUser.id,
-      performed_at: cashierUser.created_at,
+      performed_at: addMinutes(cashierUser.created_at, 1),
     },
   ]
 
@@ -620,6 +698,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
     products,
     users: [adminUser, managerUser, cashierUser],
     cashShifts: [],
+    cashMovements: [],
     purchaseOrders: [],
     purchaseOrderItems: [],
     salesTransactions: [],
@@ -627,7 +706,26 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
     stockMovements,
     alerts: [],
     auditLogs: seedAuditLogs,
-    productRecipes: [],
+    productRecipes: [
+      { id: id(), tenant_id: tenant.id, finished_good_id: icedCoffee.id, ingredient_id: espresso.id, quantity_per_unit: 0.02, uom_id: null, created_at: addMinutes(baseTime, 38) },
+      { id: id(), tenant_id: tenant.id, finished_good_id: icedCoffee.id, ingredient_id: milk.id, quantity_per_unit: 0.15, uom_id: null, created_at: addMinutes(baseTime, 38) },
+      { id: id(), tenant_id: tenant.id, finished_good_id: icedCoffee.id, ingredient_id: hotChocolate.id, quantity_per_unit: 0.05, uom_id: null, created_at: addMinutes(baseTime, 38) },
+    ],
+    productionTemplates: [
+      { id: id(), tenant_id: tenant.id, name: 'Morning Batch', finished_good_id: icedCoffee.id, quantity: 20, location_id: mainStorage.id, notes: 'Daily opening batch', created_at: addMinutes(baseTime, 39) },
+    ],
+    inventoryLots: products.map((product) => ({
+      id: id(),
+      tenant_id: tenant.id,
+      product_id: product.id,
+      quantity: product.quantity_on_hand,
+      unit_cost: product.unit_cost ?? 0,
+      received_at: product.created_at ?? baseTime,
+      source: 'seed' as const,
+      reference_id: id(),
+      location_id: product.location_id,
+      created_at: product.created_at ?? baseTime,
+    })),
   })
 }
 
@@ -679,6 +777,11 @@ export function remapStateTenantId(state: DemoSystemState, tenantId: string): De
     salesTransactions: remapArrayTenantId(state.salesTransactions, tenantId),
     stockMovements: remapArrayTenantId(state.stockMovements, tenantId),
     alerts: remapArrayTenantId(state.alerts, tenantId),
+    auditLogs: remapArrayTenantId(state.auditLogs, tenantId),
+    productRecipes: remapArrayTenantId(state.productRecipes, tenantId),
+    cashMovements: remapArrayTenantId(state.cashMovements, tenantId),
+    productionTemplates: remapArrayTenantId(state.productionTemplates, tenantId),
+    inventoryLots: remapArrayTenantId(state.inventoryLots, tenantId),
   }
 }
 
@@ -771,6 +874,113 @@ function syncAlerts(state: DemoSystemState): DemoSystemState {
   }
 }
 
+// ----- FIFO inventory lot helpers -----
+
+function lotQuantity(state: DemoSystemState, productId: string, locationId?: string | null) {
+  return lotsForProduct(state, productId, locationId)
+    .reduce((sum, lot) => sum + lot.quantity, 0)
+}
+
+function lotsForProduct(state: DemoSystemState, productId: string, locationId?: string | null) {
+  return state.inventoryLots
+    .filter((lot) => lot.product_id === productId && lot.quantity > 0 && (locationId == null || lot.location_id === locationId))
+    .sort((a, b) => a.received_at.localeCompare(b.received_at) || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
+}
+
+function addLot(
+  state: DemoSystemState,
+  lot: Omit<InventoryLot, 'id' | 'created_at'> & { id?: string; created_at?: string }
+): DemoSystemState {
+  const fullLot: InventoryLot = {
+    id: lot.id ?? id(),
+    created_at: lot.created_at ?? nowIso(),
+    tenant_id: lot.tenant_id,
+    product_id: lot.product_id,
+    quantity: lot.quantity,
+    unit_cost: lot.unit_cost,
+    received_at: lot.received_at,
+    source: lot.source,
+    reference_id: lot.reference_id,
+    location_id: lot.location_id,
+  }
+  return { ...state, inventoryLots: [...state.inventoryLots, fullLot] }
+}
+
+function syncProductQuantity(state: DemoSystemState, productId: string): DemoSystemState {
+  const quantity = lotQuantity(state, productId)
+  return {
+    ...state,
+    products: state.products.map((product) =>
+      product.id === productId ? { ...product, quantity_on_hand: quantity } : product
+    ),
+  }
+}
+
+// Consume `quantity` from the oldest lots first (FIFO). Returns the next state
+// plus the total cost of the consumed units.
+function consumeFifo(
+  state: DemoSystemState,
+  productId: string,
+  quantity: number,
+  locationId?: string | null
+): { state: DemoSystemState; consumedQuantity: number; consumedCost: number } {
+  let lots = lotsForProduct(state, productId, locationId)
+
+  // A product can have on-hand stock without any FIFO lot row (stock created
+  // directly, or lots never seeded). Treat the on-hand quantity as a single
+  // implicit lot so the sale can proceed and the ledger stays accurate.
+  if (lots.length === 0) {
+    const product = state.products.find((entry) => entry.id === productId)
+    const onHand = Number(product?.quantity_on_hand ?? 0)
+    if (onHand > 0) {
+      lots = [{
+        id: id(),
+        tenant_id: state.tenant.id,
+        product_id: productId,
+        quantity: onHand,
+        unit_cost: Number(product?.unit_cost ?? 0),
+        received_at: product?.created_at ?? nowIso(),
+        source: 'adjustment',
+        reference_id: null,
+        location_id: locationId ?? product?.location_id ?? null,
+        created_at: nowIso(),
+      }]
+    }
+  }
+
+  const available = lots.reduce((sum, lot) => sum + lot.quantity, 0)
+  const take = Math.max(0, Math.min(quantity, available))
+
+  let remaining = take
+  let cost = 0
+  const kept: InventoryLot[] = []
+
+  for (const lot of lots) {
+    if (remaining <= 0) {
+      kept.push(lot)
+      continue
+    }
+    const fromLot = Math.min(lot.quantity, remaining)
+    cost += fromLot * lot.unit_cost
+    remaining -= fromLot
+    if (fromLot < lot.quantity) {
+      kept.push({ ...lot, quantity: lot.quantity - fromLot })
+    }
+  }
+
+  // When consuming from a specific location, only remove lots of that product
+  // at that location; lots elsewhere are preserved.
+  const nextLots = [
+    ...state.inventoryLots.filter(
+      (lot) => !(lot.product_id === productId && (locationId == null || lot.location_id === locationId))
+    ),
+    ...kept,
+  ]
+  let nextState: DemoSystemState = { ...state, inventoryLots: nextLots }
+  nextState = syncProductQuantity(nextState, productId)
+  return { state: nextState, consumedQuantity: take, consumedCost: cost }
+}
+
 function setCurrentUser(state: DemoSystemState) {
   const currentUserId =
     state.users.find((user) => user.role === 'super_admin')?.id ??
@@ -828,7 +1038,7 @@ export function addOrUpdateProduct(state: DemoSystemState, draft: ProductDraft, 
   ensurePlanCapacity(state, 'products', isUpdate)
 
   const category = draft.category ? findCategory(state, draft.category) ?? {
-    id: id(),
+    id: deterministicUuid(state.tenant.id, 'category', normalizeName(draft.category)),
     tenant_id: state.tenant.id,
     name: normalizeName(draft.category),
     description: null,
@@ -838,7 +1048,7 @@ export function addOrUpdateProduct(state: DemoSystemState, draft: ProductDraft, 
   } : null
 
   const supplier = draft.supplier ? findSupplier(state, draft.supplier) ?? {
-    id: id(),
+    id: deterministicUuid(state.tenant.id, 'supplier', normalizeName(draft.supplier)),
     tenant_id: state.tenant.id,
     name: normalizeName(draft.supplier),
     contact_name: null,
@@ -853,7 +1063,7 @@ export function addOrUpdateProduct(state: DemoSystemState, draft: ProductDraft, 
   } : null
 
   const location = draft.location ? findLocation(state, draft.location) ?? {
-    id: id(),
+    id: deterministicUuid(state.tenant.id, 'location', normalizeName(draft.location)),
     tenant_id: state.tenant.id,
     code: normalizeName(draft.location).slice(0, 12).toUpperCase().replace(/[^A-Z0-9]/g, ''),
     name: normalizeName(draft.location),
@@ -863,7 +1073,7 @@ export function addOrUpdateProduct(state: DemoSystemState, draft: ProductDraft, 
   } : null
 
   const uom = draft.uom ? findUom(state, draft.uom) ?? {
-    id: id(),
+    id: deterministicUuid(state.tenant.id, 'uom', normalizeName(draft.uom)),
     tenant_id: state.tenant.id,
     name: normalizeName(draft.uom),
     abbreviation: normalizeName(draft.uom),
@@ -871,9 +1081,11 @@ export function addOrUpdateProduct(state: DemoSystemState, draft: ProductDraft, 
     created_at: nowIso(),
   } : null
 
-  const existing = productId ? state.products.find((row) => row.id === productId) : undefined
+  const existing = productId
+    ? state.products.find((row) => row.id === productId)
+    : state.products.find((row) => lower(row.item_code) === lower(normalizeName(draft.item_code)))
   const product: Product = {
-    id: existing?.id ?? id(),
+    id: existing?.id ?? deterministicUuid(state.tenant.id, 'product', normalizeName(draft.item_code)),
     tenant_id: state.tenant.id,
     item_code: normalizeName(draft.item_code),
     name: normalizeName(draft.name),
@@ -892,6 +1104,7 @@ export function addOrUpdateProduct(state: DemoSystemState, draft: ProductDraft, 
     barcode: existing?.barcode ?? null,
     image_url: existing?.image_url ?? null,
     is_active: existing?.is_active ?? true,
+    is_finished_good: draft.is_finished_good ?? existing?.is_finished_good ?? false,
     expiry_date: existing?.expiry_date ?? null,
     created_at: existing?.created_at ?? nowIso(),
     updated_at: nowIso(),
@@ -905,22 +1118,128 @@ export function addOrUpdateProduct(state: DemoSystemState, draft: ProductDraft, 
     ? state.products.map((row) => (row.id === existing.id ? product : row))
     : [...state.products, product]
 
-  return syncAlerts({
+  let nextState: DemoSystemState = {
     ...state,
     categories: category && !state.categories.some((row) => row.id === category.id) ? [...state.categories, category] : state.categories,
     suppliers: supplier && !state.suppliers.some((row) => row.id === supplier.id) ? [...state.suppliers, supplier] : state.suppliers,
     locations: location && !state.locations.some((row) => row.id === location.id) ? [...state.locations, location] : state.locations,
     unitsOfMeasure: uom && !state.unitsOfMeasure.some((row) => row.id === uom.id) ? [...state.unitsOfMeasure, uom] : state.unitsOfMeasure,
     products: nextProducts,
-  })
+  }
+
+  // For a new product with on-hand stock and no existing lots, open a FIFO lot.
+  // For an existing product, reconcile lots with the draft quantity if needed.
+  if (!existing && product.quantity_on_hand > 0 && !nextState.inventoryLots.some((lot) => lot.product_id === product.id)) {
+    const cost = Number(product.unit_cost ?? 0)
+    nextState = addLot(nextState, {
+      id: deterministicUuid(product.id, 'lot', 'import'),
+      tenant_id: state.tenant.id,
+      product_id: product.id,
+      quantity: product.quantity_on_hand,
+      unit_cost: cost,
+      received_at: product.created_at ?? nowIso(),
+      source: 'import',
+      reference_id: null,
+      location_id: product.location_id,
+    })
+  } else if (existing) {
+    const currentLotQty = lotQuantity(state, product.id)
+    const draftQty = Number(product.quantity_on_hand ?? 0)
+    const delta = draftQty - currentLotQty
+    if (Math.abs(delta) > 0.0001) {
+      const beforeQty = Number(state.products.find((row) => row.id === product.id)?.quantity_on_hand ?? 0)
+      const couldAddLot = draftQty > currentLotQty && currentLotQty === 0
+      const couldConsume = draftQty < currentLotQty && currentLotQty > 0
+
+      if (couldAddLot || (delta > 0 && currentLotQty > 0)) {
+        nextState = addLot(nextState, {
+          tenant_id: state.tenant.id,
+          product_id: product.id,
+          quantity: Math.abs(delta),
+          unit_cost: Number(product.unit_cost ?? 0),
+          received_at: nowIso(),
+          source: 'adjustment',
+          reference_id: null,
+          location_id: product.location_id,
+        })
+      } else if (couldConsume) {
+        const result = consumeFifo(nextState, product.id, currentLotQty - draftQty)
+        nextState = result.state
+      }
+
+      const afterQty = Number(nextState.products.find((row) => row.id === product.id)?.quantity_on_hand ?? 0)
+      const movement: StockMovement = {
+        id: id(),
+        tenant_id: state.tenant.id,
+        product_id: product.id,
+        movement_type: 'adjustment',
+        quantity: Number(delta.toFixed(4)),
+        quantity_before: beforeQty,
+        quantity_after: afterQty,
+        reference_id: null,
+        reference_type: 'inventory_adjustment',
+        location_id: product.location_id,
+        performed_by: state.currentUserId || null,
+        notes: 'Manual stock adjustment',
+        created_at: nowIso(),
+        product: nextState.products.find((row) => row.id === product.id),
+      }
+      nextState = { ...nextState, stockMovements: [...nextState.stockMovements, movement] }
+    }
+  }
+
+  // Keep product quantity in sync with its lots.
+  nextState = syncProductQuantity(nextState, product.id)
+
+  // If this product is an ingredient in any finished good, recompute those costs.
+  const affectedFinishedGoods = new Set(
+    state.productRecipes.filter((r) => r.ingredient_id === product.id).map((r) => r.finished_good_id)
+  )
+  for (const finishedGoodId of affectedFinishedGoods) {
+    nextState = rollUpFinishedGoodCost(nextState, finishedGoodId)
+  }
+
+  return syncAlerts(nextState)
 }
 
-export function deleteProduct(state: DemoSystemState, productId: string): DemoSystemState {
+export function deleteProduct(state: DemoSystemState, productId: string, itemCode?: string): DemoSystemState {
+  const code = itemCode ? lower(normalizeName(itemCode)) : null
+  const matchedIds = new Set(
+    state.products
+      .filter((row) => row.id === productId || (code !== null && lower(normalizeName(row.item_code)) === code))
+      .map((row) => row.id)
+  )
+  if (matchedIds.size === 0) return state
+  return stripProducts(state, matchedIds)
+}
+
+export function deleteProducts(state: DemoSystemState, productIds: string[], itemCodes: string[] = []): DemoSystemState {
+  const ids = new Set(productIds)
+  const codes = new Set(itemCodes.map((value) => lower(normalizeName(value))))
+  const matchedIds = new Set(
+    state.products
+      .filter((row) => ids.has(row.id) || (row.item_code && codes.has(lower(normalizeName(row.item_code)))))
+      .map((row) => row.id)
+  )
+  if (matchedIds.size === 0) return state
+  return stripProducts(state, matchedIds)
+}
+
+// Remove the given products and every dependent row that references them.
+// Several tables (sales_transaction_items, purchase_order_items, stock_movements)
+// use ON DELETE RESTRICT on product_id, so leaving them behind makes the
+// persisted delete fail with a 500 — which in turn made the client re-fetch and
+// "bring back" the deleted items. Stripping them here lets the server delete
+// succeed cleanly.
+function stripProducts(state: DemoSystemState, matchedIds: Set<string>): DemoSystemState {
   return syncAlerts({
     ...state,
-    products: state.products.filter((row) => row.id !== productId),
-    alerts: state.alerts.filter((alert) => alert.product_id !== productId),
-    stockMovements: state.stockMovements.filter((movement) => movement.product_id !== productId),
+    products: state.products.filter((row) => !matchedIds.has(row.id)),
+    alerts: state.alerts.filter((alert) => !matchedIds.has(alert.product_id)),
+    stockMovements: state.stockMovements.filter((movement) => !matchedIds.has(movement.product_id)),
+    inventoryLots: state.inventoryLots.filter((lot) => !matchedIds.has(lot.product_id)),
+    salesTransactionItems: state.salesTransactionItems.filter((item) => !matchedIds.has(item.product_id)),
+    purchaseOrderItems: state.purchaseOrderItems.filter((item) => !matchedIds.has(item.product_id)),
   })
 }
 
@@ -1068,6 +1387,20 @@ export function deleteSupplier(state: DemoSystemState, supplierId: string): Demo
   }
 }
 
+export function deleteSuppliers(state: DemoSystemState, supplierIds: string[]): DemoSystemState {
+  const ids = new Set(supplierIds)
+  if (ids.size === 0) return state
+  return {
+    ...state,
+    suppliers: state.suppliers.filter((supplier) => !ids.has(supplier.id)),
+    products: state.products.map((product) =>
+      product.supplier_id && ids.has(product.supplier_id)
+        ? { ...product, supplier_id: null, supplier: undefined, updated_at: nowIso() }
+        : product
+    ),
+  }
+}
+
 export function createUser(state: DemoSystemState, draft: UserDraft, userId?: string): DemoSystemState {
   ensurePlanCapacity(state, 'users')
   const user: User = {
@@ -1152,6 +1485,49 @@ export function updateUser(state: DemoSystemState, userId: string, draft: { full
   return updated
 }
 
+// Records that a pending invitee was sent a fresh invitation. Matched by email
+// so it stays correct regardless of any auth-id changes on the server. Does not
+// alter the user's id, so optimistic state merges cleanly.
+export function markInviteResent(state: DemoSystemState, email: string): DemoSystemState {
+  const normalized = email.trim().toLowerCase()
+  const target = state.users.find((entry) => entry.email.toLowerCase() === normalized)
+  if (!target) return state
+  return {
+    ...state,
+    users: state.users.map((entry) =>
+      entry.id === target.id ? { ...entry, last_login: null, updated_at: nowIso() } : entry
+    ),
+    auditLogs: [
+      ...state.auditLogs,
+      {
+        id: id(),
+        tenant_id: state.tenant.id,
+        user_id: target.id,
+        action: 'user.invite_resent',
+        target_type: 'user',
+        target_id: target.id,
+        details: { email: normalized },
+        performed_by: state.currentUserId,
+        performed_at: nowIso(),
+      },
+    ],
+  }
+}
+
+export function rollUpFinishedGoodCost(state: DemoSystemState, finishedGoodId: string): DemoSystemState {
+  const recipes = state.productRecipes.filter((r) => r.finished_good_id === finishedGoodId)
+  const cost = recipes.reduce((sum, recipe) => {
+    const ingredient = state.products.find((p) => p.id === recipe.ingredient_id)
+    return sum + Number(recipe.quantity_per_unit) * Number(ingredient?.unit_cost ?? 0)
+  }, 0)
+  return {
+    ...state,
+    products: state.products.map((p) =>
+      p.id === finishedGoodId ? { ...p, unit_cost: Number(cost.toFixed(4)) } : p
+    ),
+  }
+}
+
 export function createRecipe(state: DemoSystemState, finishedGoodId: string, ingredientId: string, quantityPerUnit: number, uomId?: string | null): DemoSystemState {
   const existing = state.productRecipes.find(
     (r) => r.finished_good_id === finishedGoodId && r.ingredient_id === ingredientId
@@ -1168,25 +1544,70 @@ export function createRecipe(state: DemoSystemState, finishedGoodId: string, ing
     created_at: nowIso(),
   }
 
-  return {
+  let nextState: DemoSystemState = {
     ...state,
     productRecipes: [...state.productRecipes, recipe],
+    products: state.products.map((p) =>
+      p.id === finishedGoodId ? { ...p, is_finished_good: true } : p
+    ),
   }
+  nextState = rollUpFinishedGoodCost(nextState, finishedGoodId)
+  return nextState
 }
 
 export function updateRecipe(state: DemoSystemState, recipeId: string, quantityPerUnit: number, uomId?: string | null): DemoSystemState {
-  return {
+  const nextState: DemoSystemState = {
     ...state,
     productRecipes: state.productRecipes.map((r) =>
       r.id === recipeId ? { ...r, quantity_per_unit: quantityPerUnit, uom_id: uomId ?? r.uom_id } : r
     ),
   }
+  const recipe = state.productRecipes.find((r) => r.id === recipeId)
+  return recipe ? rollUpFinishedGoodCost(nextState, recipe.finished_good_id) : nextState
 }
 
 export function deleteRecipe(state: DemoSystemState, recipeId: string): DemoSystemState {
-  return {
+  const recipe = state.productRecipes.find((r) => r.id === recipeId)
+  const nextState: DemoSystemState = {
     ...state,
     productRecipes: state.productRecipes.filter((r) => r.id !== recipeId),
+  }
+  return recipe ? rollUpFinishedGoodCost(nextState, recipe.finished_good_id) : nextState
+}
+
+export type ProductionTemplateDraft = {
+  name: string
+  finishedGoodId: string
+  quantity: number
+  locationId?: string | null
+  notes?: string | null
+}
+
+export function createProductionTemplate(state: DemoSystemState, draft: ProductionTemplateDraft): DemoSystemState {
+  const name = normalizeName(draft.name)
+  if (!name || !draft.finishedGoodId || !(Number(draft.quantity ?? 0) > 0)) return state
+
+  const template: ProductionTemplate = {
+    id: deterministicUuid(state.tenant.id, 'production-template', name, draft.finishedGoodId, String(draft.quantity ?? 0)),
+    tenant_id: state.tenant.id,
+    name,
+    finished_good_id: draft.finishedGoodId,
+    quantity: Number(draft.quantity ?? 0),
+    location_id: draft.locationId ?? null,
+    notes: draft.notes?.trim() || null,
+    created_at: nowIso(),
+  }
+
+  return {
+    ...state,
+    productionTemplates: [...state.productionTemplates, template],
+  }
+}
+
+export function deleteProductionTemplate(state: DemoSystemState, templateId: string): DemoSystemState {
+  return {
+    ...state,
+    productionTemplates: state.productionTemplates.filter((template) => template.id !== templateId),
   }
 }
 
@@ -1197,25 +1618,27 @@ export function produceFinishedGood(state: DemoSystemState, finishedGoodId: stri
   const finishedGood = state.products.find((p) => p.id === finishedGoodId)
   if (!finishedGood) return state
 
-  const updatedProducts = new Map(state.products.map((p) => [p.id, { ...p }]))
+  const now = nowIso()
+  let nextState: DemoSystemState = { ...state }
   const newMovements: StockMovement[] = []
 
   for (const line of recipeLines) {
-    const ingredient = updatedProducts.get(line.ingredient_id)
+    const ingredient = nextState.products.find((p) => p.id === line.ingredient_id)
     if (!ingredient) continue
 
     const deductQty = Number((line.quantity_per_unit * quantity).toFixed(4))
-    const before = ingredient.quantity_on_hand
-    const after = Math.max(0, before - deductQty)
-    ingredient.quantity_on_hand = after
-    ingredient.updated_at = nowIso()
+    const before = Number(ingredient.quantity_on_hand ?? 0)
+    const result = consumeFifo(nextState, line.ingredient_id, deductQty)
+    nextState = result.state
+    const consumed = result.consumedQuantity
+    const after = Number(nextState.products.find((p) => p.id === line.ingredient_id)?.quantity_on_hand ?? 0)
 
     newMovements.push({
-      id: id(),
+      id: deterministicUuid(state.tenant.id, line.ingredient_id, 'production-out', String(before), String(-consumed)),
       tenant_id: state.tenant.id,
       product_id: line.ingredient_id,
       movement_type: 'production',
-      quantity: -deductQty,
+      quantity: -consumed,
       quantity_before: before,
       quantity_after: after,
       reference_id: null,
@@ -1223,19 +1646,30 @@ export function produceFinishedGood(state: DemoSystemState, finishedGoodId: stri
       location_id: locationId ?? finishedGood.location_id,
       performed_by: state.currentUserId || null,
       notes: `Produced ${quantity} x ${finishedGood.name}`,
-      created_at: nowIso(),
+      created_at: now,
+      product: nextState.products.find((p) => p.id === line.ingredient_id),
     })
   }
 
-  const fg = updatedProducts.get(finishedGoodId)
-  if (fg) {
-    const beforeQty = fg.quantity_on_hand
-    const afterQty = beforeQty + quantity
-    fg.quantity_on_hand = afterQty
-    fg.updated_at = nowIso()
+  const fg = nextState.products.find((p) => p.id === finishedGoodId)
+  if (fg && quantity > 0) {
+    const beforeQty = Number(fg.quantity_on_hand ?? 0)
+    nextState = addLot(nextState, {
+      id: deterministicUuid(finishedGoodId, 'production-lot', String(quantity), String(beforeQty)),
+      tenant_id: state.tenant.id,
+      product_id: finishedGoodId,
+      quantity,
+      unit_cost: Number(fg.unit_cost ?? 0),
+      received_at: now,
+      source: 'production',
+      reference_id: null,
+      location_id: locationId ?? finishedGood.location_id,
+    })
+    nextState = syncProductQuantity(nextState, finishedGoodId)
+    const afterQty = Number(nextState.products.find((p) => p.id === finishedGoodId)?.quantity_on_hand ?? 0)
 
     newMovements.push({
-      id: id(),
+      id: deterministicUuid(state.tenant.id, finishedGoodId, 'production-in', String(beforeQty), String(quantity)),
       tenant_id: state.tenant.id,
       product_id: finishedGoodId,
       movement_type: 'production',
@@ -1247,23 +1681,23 @@ export function produceFinishedGood(state: DemoSystemState, finishedGoodId: stri
       location_id: locationId ?? finishedGood.location_id,
       performed_by: state.currentUserId || null,
       notes: `Produced ${quantity} x ${finishedGood.name}`,
-      created_at: nowIso(),
+      created_at: now,
+      product: nextState.products.find((p) => p.id === finishedGoodId),
     })
   }
 
   return {
-    ...state,
-    products: Array.from(updatedProducts.values()),
-    stockMovements: [...state.stockMovements, ...newMovements],
+    ...nextState,
+    stockMovements: [...nextState.stockMovements, ...newMovements],
   }
 }
 
-export function createPurchaseOrder(state: DemoSystemState, draft: PurchaseOrderDraft): DemoSystemState {
+export function createPurchaseOrder(state: DemoSystemState, draft: PurchaseOrderDraft, orderId?: string): DemoSystemState {
   const supplier = state.suppliers.find((row) => row.id === draft.supplier_id) ?? null
-  const orderId = id()
+  const orderIdToUse = orderId ?? id()
   const createdAt = nowIso()
   const po: PurchaseOrder = {
-    id: orderId,
+    id: orderIdToUse,
     tenant_id: state.tenant.id,
     po_number: nextCode('PO', state.purchaseOrders.length),
     supplier_id: draft.supplier_id,
@@ -1280,11 +1714,11 @@ export function createPurchaseOrder(state: DemoSystemState, draft: PurchaseOrder
     items: [],
   }
 
-  const items: PurchaseOrderItem[] = draft.items.map((item) => {
+  const items: PurchaseOrderItem[] = draft.items.map((item, index) => {
     const product = state.products.find((row) => row.id === item.product_id)
     return {
-      id: id(),
-      po_id: orderId,
+      id: deterministicUuid(orderIdToUse, 'item', String(index)),
+      po_id: orderIdToUse,
       product_id: item.product_id,
       quantity_ordered: Number(item.quantity_ordered ?? 0),
       quantity_received: 0,
@@ -1367,25 +1801,42 @@ export function receivePurchaseOrder(state: DemoSystemState, purchaseOrderId: st
   const orderItems = state.purchaseOrderItems.filter((row) => row.po_id === purchaseOrderId)
   const now = nowIso()
   const movements: StockMovement[] = []
-  const updatedProducts = [...state.products]
+  let nextState: DemoSystemState = { ...state }
 
-  for (const item of orderItems) {
-    const index = updatedProducts.findIndex((row) => row.id === item.product_id)
-    if (index < 0) continue
-    const product = updatedProducts[index]
+  orderItems.forEach((item, index) => {
+    const product = nextState.products.find((row) => row.id === item.product_id)
+    if (!product) return
+    const received = Number(item.quantity_ordered ?? 0)
+    if (received <= 0) return
     const before = Number(product.quantity_on_hand ?? 0)
-    const after = before + Number(item.quantity_ordered ?? 0)
-    updatedProducts[index] = {
-      ...product,
-      quantity_on_hand: after,
-      updated_at: now,
-    }
+    const cost = Number(item.unit_cost ?? product.unit_cost ?? 0)
+
+    // Deterministic ids so the optimistic client record and the server-persisted
+    // record share the same id. This keeps reconciliation (merge) from dropping
+    // or duplicating the inbound movement / lot.
+    const lotId = deterministicUuid(order.id, product.id, String(index), 'lot')
+    const movementId = deterministicUuid(order.id, product.id, String(index), 'mv')
+
+    nextState = addLot(nextState, {
+      id: lotId,
+      tenant_id: state.tenant.id,
+      product_id: product.id,
+      quantity: received,
+      unit_cost: cost,
+      received_at: now,
+      source: 'purchase_order',
+      reference_id: order.id,
+      location_id: product.location_id,
+    })
+    nextState = syncProductQuantity(nextState, product.id)
+
+    const after = Number(nextState.products.find((row) => row.id === product.id)?.quantity_on_hand ?? 0)
     movements.push({
-      id: id(),
+      id: movementId,
       tenant_id: state.tenant.id,
       product_id: product.id,
       movement_type: 'inbound',
-      quantity: Number(item.quantity_ordered ?? 0),
+      quantity: received,
       quantity_before: before,
       quantity_after: after,
       reference_id: order.id,
@@ -1394,14 +1845,13 @@ export function receivePurchaseOrder(state: DemoSystemState, purchaseOrderId: st
       performed_by: state.currentUserId || null,
       notes: order.notes,
       created_at: now,
-      product: updatedProducts[index],
+      product: nextState.products.find((row) => row.id === product.id),
     })
-  }
+  })
 
   return syncAlerts({
-    ...state,
-    products: updatedProducts,
-    purchaseOrders: state.purchaseOrders.map((row) =>
+    ...nextState,
+    purchaseOrders: nextState.purchaseOrders.map((row) =>
       row.id === purchaseOrderId
         ? {
             ...row,
@@ -1411,10 +1861,10 @@ export function receivePurchaseOrder(state: DemoSystemState, purchaseOrderId: st
           }
         : row
     ),
-    purchaseOrderItems: state.purchaseOrderItems.map((row) =>
+    purchaseOrderItems: nextState.purchaseOrderItems.map((row) =>
       row.po_id === purchaseOrderId ? { ...row, quantity_received: Number(row.quantity_ordered ?? 0) } : row
     ),
-    stockMovements: [...state.stockMovements, ...movements],
+    stockMovements: [...nextState.stockMovements, ...movements],
   })
 }
 
@@ -1432,44 +1882,51 @@ export function recordSale(
     location_id: string | null
     notes?: string
     items: SaleDraftItem[]
+    receiptNumber?: string
+    transactionId?: string
+    itemIds?: string[]
+    movementIds?: string[]
+    auditLogId?: string
   }
-): { state: DemoSystemState; receiptNumber: string } {
+): { state: DemoSystemState; receiptNumber: string; transactionId: string; itemIds: string[]; movementIds: string[]; auditLogId: string } {
   const now = nowIso()
-  const transactionId = id()
-  const receiptNumber = buildSaleTransactionId(state)
+  const receiptNumber = payload.receiptNumber ?? buildSaleTransactionId(state)
+  const transactionId = payload.transactionId ?? id()
+  const itemIdIter = payload.itemIds ? payload.itemIds.values() : null
+  const movementIdIter = payload.movementIds ? payload.movementIds.values() : null
 
-  const updatedProducts = [...state.products]
+  let nextState: DemoSystemState = { ...state }
   const items: SalesTransactionItem[] = []
   const movements: StockMovement[] = []
 
   for (const item of payload.items) {
-    const index = updatedProducts.findIndex((row) => row.id === item.product_id)
-    if (index < 0) continue
-    const product = updatedProducts[index]
+    const product = nextState.products.find((row) => row.id === item.product_id)
+    if (!product) continue
     const before = Number(product.quantity_on_hand ?? 0)
-    const sold = Math.max(0, Number(item.quantity ?? 0))
-    const after = Math.max(0, before - sold)
-    updatedProducts[index] = {
-      ...product,
-      quantity_on_hand: after,
-      updated_at: now,
-    }
+    const requested = Math.max(0, Number(item.quantity ?? 0))
+
+    const result = consumeFifo(nextState, product.id, requested)
+    nextState = result.state
+    const sold = result.consumedQuantity
+    if (sold <= 0) continue
+    const after = Number(nextState.products.find((row) => row.id === product.id)?.quantity_on_hand ?? 0)
+    const unitCost = sold > 0 ? result.consumedCost / sold : 0
 
     items.push({
-      id: id(),
+      id: itemIdIter?.next().value ?? id(),
       transaction_id: transactionId,
       product_id: product.id,
       quantity: sold,
       unit_price: Number(item.unit_price ?? 0),
-      unit_cost: item.unit_cost ?? product.unit_cost ?? null,
+      unit_cost: unitCost,
       discount: Number(item.discount ?? 0),
       subtotal: (Number(item.unit_price ?? 0) * sold) - Number(item.discount ?? 0),
       created_at: now,
-      product: updatedProducts[index],
+      product: nextState.products.find((row) => row.id === product.id),
     })
 
     movements.push({
-      id: id(),
+      id: movementIdIter?.next().value ?? id(),
       tenant_id: state.tenant.id,
       product_id: product.id,
       movement_type: 'outbound',
@@ -1482,19 +1939,20 @@ export function recordSale(
       performed_by: state.currentUserId || null,
       notes: payload.notes?.trim() || null,
       created_at: now,
-      product: updatedProducts[index],
+      product: nextState.products.find((row) => row.id === product.id),
     })
   }
 
   const subtotal = items.reduce((sum, row) => sum + Number(row.subtotal ?? 0), 0)
   const totalAmount = subtotal
   const changeAmount = Math.max(0, Number(payload.amount_tendered ?? 0) - totalAmount)
+  const openShiftId = state.cashShifts.find((row) => row.status === 'open')?.id ?? null
   const transaction: SalesTransaction = {
     id: transactionId,
     tenant_id: state.tenant.id,
     receipt_number: receiptNumber,
     cashier_id: state.currentUserId || null,
-    shift_id: state.cashShifts[0]?.id ?? null,
+    shift_id: openShiftId,
     location_id: payload.location_id,
     status: 'completed',
     payment_method: payload.payment_method,
@@ -1510,20 +1968,43 @@ export function recordSale(
     voided_by: null,
     voided_at: null,
     void_reason: null,
+    refunded_by: null,
+    refunded_at: null,
+    refund_reason: null,
+    parent_transaction_id: null,
     created_at: now,
     cashier: state.users.find((user) => user.id === state.currentUserId) ?? undefined,
     items,
   }
 
-  const nextState = syncAlerts({
-    ...state,
-    products: updatedProducts,
-    salesTransactions: [...state.salesTransactions, transaction],
-    salesTransactionItems: [...state.salesTransactionItems, ...items],
-    stockMovements: [...state.stockMovements, ...movements],
+  const finalState = syncAlerts({
+    ...nextState,
+    salesTransactions: [...nextState.salesTransactions, transaction],
+    salesTransactionItems: [...nextState.salesTransactionItems, ...items],
+    stockMovements: [...nextState.stockMovements, ...movements],
+    auditLogs: [
+      ...nextState.auditLogs,
+      {
+        id: payload.auditLogId ?? id(),
+        tenant_id: state.tenant.id,
+        user_id: state.currentUserId || null,
+        action: 'sale.completed',
+        target_type: 'sale',
+        target_id: transactionId,
+        details: {
+          receipt_number: receiptNumber,
+          total_amount: totalAmount,
+          payment_method: payload.payment_method,
+          items: items.length,
+          shift_id: openShiftId,
+        },
+        performed_by: state.currentUserId || null,
+        performed_at: now,
+      },
+    ],
   })
 
-  return { state: nextState, receiptNumber }
+  return { state: finalState, receiptNumber, transactionId, itemIds: items.map((i) => i.id), movementIds: movements.map((m) => m.id), auditLogId: payload.auditLogId ?? finalState.auditLogs[finalState.auditLogs.length - 1]?.id ?? id() }
 }
 
 export type WasteType = 'waste' | 'defect' | 'reject'
@@ -1532,28 +2013,23 @@ export function recordWaste(
   state: DemoSystemState,
   payload: { productId: string; wasteType: WasteType; quantity: number; reason?: string }
 ): DemoSystemState {
-  const productIndex = state.products.findIndex((product) => product.id === payload.productId)
-  if (productIndex < 0) return state
+  const product = state.products.find((row) => row.id === payload.productId)
+  if (!product) return state
 
-  const product = state.products[productIndex]
   const before = Number(product.quantity_on_hand ?? 0)
-  const quantity = Math.max(0, Math.min(Number(payload.quantity ?? 0), before))
-  if (quantity <= 0) return state
+  const requested = Math.max(0, Number(payload.quantity ?? 0))
+  const result = consumeFifo(state, payload.productId, requested)
+  if (result.consumedQuantity <= 0) return state
 
-  const after = before - quantity
+  const after = Number(result.state.products.find((row) => row.id === payload.productId)?.quantity_on_hand ?? 0)
   const now = nowIso()
-  const updatedProduct: Product = {
-    ...product,
-    quantity_on_hand: after,
-    updated_at: now,
-  }
 
   const movement: StockMovement = {
-    id: id(),
+    id: deterministicUuid(state.tenant.id, product.id, payload.wasteType, String(before), String(result.consumedQuantity)),
     tenant_id: state.tenant.id,
     product_id: product.id,
     movement_type: payload.wasteType,
-    quantity,
+    quantity: result.consumedQuantity,
     quantity_before: before,
     quantity_after: after,
     reference_id: null,
@@ -1562,13 +2038,430 @@ export function recordWaste(
     performed_by: state.currentUserId || null,
     notes: payload.reason?.trim() || `${payload.wasteType} write-off`,
     created_at: now,
-    product: updatedProduct,
+    product: result.state.products.find((row) => row.id === product.id),
+  }
+
+  return {
+    ...result.state,
+    stockMovements: [...result.state.stockMovements, movement],
+  }
+}
+
+export function openShift(
+  state: DemoSystemState,
+  payload: { openingFloat: number; locationId?: string | null; notes?: string; station?: string | null }
+): DemoSystemState {
+  const now = nowIso()
+  const shift: CashShift = {
+    id: id(),
+    tenant_id: state.tenant.id,
+    shift_code: '',
+    opened_by: state.currentUserId || '',
+    closed_by: null,
+    location_id: payload.locationId ?? null,
+    status: 'open',
+    opening_float: Number(payload.openingFloat ?? 0),
+    closing_float: null,
+    expected_cash: null,
+    counted_cash: null,
+    cash_sales_total: 0,
+    qr_sales_total: 0,
+    total_sales: 0,
+    variance_amount: null,
+    notes: payload.notes?.trim() || null,
+    close_notes: null,
+    station: payload.station?.trim() || null,
+    opened_at: now,
+    closed_at: null,
+    created_at: now,
+    updated_at: now,
   }
 
   return {
     ...state,
-    products: state.products.map((row, index) => (index === productIndex ? updatedProduct : row)),
-    stockMovements: [...state.stockMovements, movement],
+    cashShifts: [...state.cashShifts, shift],
+    auditLogs: [
+      ...state.auditLogs,
+      {
+        id: id(),
+        tenant_id: state.tenant.id,
+        user_id: state.currentUserId || null,
+        action: 'shift.opened',
+        target_type: 'shift',
+        target_id: shift.id,
+        details: { opening_float: shift.opening_float, location_id: shift.location_id },
+        performed_by: state.currentUserId || null,
+        performed_at: now,
+      },
+    ],
+  }
+}
+
+export function closeShift(
+  state: DemoSystemState,
+  payload: { shiftId: string; countedCash: number; notes?: string }
+): DemoSystemState | null {
+  const shift = state.cashShifts.find((row) => row.id === payload.shiftId)
+  if (!shift || shift.status !== 'open') return null
+
+  const now = nowIso()
+  const expected = shift.opening_float + shift.total_sales
+  const variance = Number(payload.countedCash) - expected
+
+  const updatedShift: CashShift = {
+    ...shift,
+    status: 'closed',
+    closed_by: state.currentUserId || null,
+    closing_float: Number(payload.countedCash) || 0,
+    expected_cash: expected,
+    counted_cash: Number(payload.countedCash) || 0,
+    variance_amount: variance,
+    close_notes: payload.notes?.trim() || null,
+    closed_at: now,
+    updated_at: now,
+  }
+
+  return {
+    ...state,
+    cashShifts: state.cashShifts.map((row) => (row.id === payload.shiftId ? updatedShift : row)),
+    auditLogs: [
+      ...state.auditLogs,
+      {
+        id: id(),
+        tenant_id: state.tenant.id,
+        user_id: state.currentUserId || null,
+        action: 'shift.closed',
+        target_type: 'shift',
+        target_id: shift.id,
+        details: {
+          shift_code: shift.shift_code,
+          expected_cash: expected,
+          counted_cash: Number(payload.countedCash) || 0,
+          variance_amount: variance,
+        },
+        performed_by: state.currentUserId || null,
+        performed_at: now,
+      },
+    ],
+  }
+}
+
+export function recordCashMovement(
+  state: DemoSystemState,
+  payload: {
+    shiftId: string
+    kind: CashMovementKind
+    amount: number
+    note?: string | null
+    denominations?: Record<string, number> | null
+  }
+): DemoSystemState {
+  const shift = state.cashShifts.find((row) => row.id === payload.shiftId)
+  if (!shift || shift.status !== 'open') return state
+
+  const now = nowIso()
+  const movement: CashMovement = {
+    id: id(),
+    tenant_id: state.tenant.id,
+    shift_id: payload.shiftId,
+    kind: payload.kind,
+    amount: Number(payload.amount ?? 0),
+    note: payload.note?.trim() || null,
+    denominations: payload.denominations ?? null,
+    performed_by: state.currentUserId || null,
+    created_at: now,
+  }
+
+  let nextTotal = Number(shift.total_sales ?? 0)
+
+  if (payload.kind === 'cash_in') {
+    nextTotal += Number(payload.amount ?? 0)
+  } else if (payload.kind === 'cash_out') {
+    nextTotal -= Number(payload.amount ?? 0)
+  }
+
+  const updatedShift: CashShift = {
+    ...shift,
+    total_sales: nextTotal,
+    updated_at: now,
+  }
+
+  return {
+    ...state,
+    cashShifts: state.cashShifts.map((row) => (row.id === payload.shiftId ? updatedShift : row)),
+    cashMovements: [...state.cashMovements, movement],
+  }
+}
+
+export function voidTransaction(
+  state: DemoSystemState,
+  payload: { transactionId: string; reason?: string }
+): DemoSystemState {
+  const transaction = state.salesTransactions.find((row) => row.id === payload.transactionId)
+  if (!transaction || transaction.status === 'voided' || transaction.status === 'refunded') return state
+
+  const items = state.salesTransactionItems.filter((item) => item.transaction_id === payload.transactionId)
+  const userId = state.currentUserId || null
+  const now = nowIso()
+
+  let nextState = {
+    ...state,
+    salesTransactions: state.salesTransactions.map((row) =>
+      row.id === payload.transactionId
+        ? {
+            ...row,
+            status: 'voided' as TransactionStatus,
+            voided_by: userId,
+            voided_at: now,
+            void_reason: payload.reason?.trim() || null,
+          }
+        : row
+    ),
+  }
+
+  for (const item of items) {
+    const product = nextState.products.find((row) => row.id === item.product_id)
+    if (!product) continue
+    const before = Number(product.quantity_on_hand ?? 0)
+    const after = before + Number(item.quantity ?? 0)
+
+    nextState = {
+      ...nextState,
+      products: nextState.products.map((row) =>
+        row.id === item.product_id ? { ...row, quantity_on_hand: after } : row
+      ),
+      stockMovements: [
+        ...nextState.stockMovements,
+        {
+          id: id(),
+          tenant_id: state.tenant.id,
+          product_id: item.product_id,
+          movement_type: 'return' as MovementType,
+          quantity: Number(item.quantity ?? 0),
+          quantity_before: before,
+          quantity_after: after,
+          reference_id: payload.transactionId,
+          reference_type: 'voided_sale',
+          location_id: transaction.location_id,
+          performed_by: userId,
+          notes: `Voided ${transaction.receipt_number}`,
+          created_at: now,
+          product,
+        },
+      ],
+    }
+  }
+
+  nextState = {
+    ...nextState,
+    auditLogs: [
+      ...nextState.auditLogs,
+      {
+        id: id(),
+        tenant_id: state.tenant.id,
+        user_id: userId,
+        action: 'sale.voided',
+        target_type: 'sale',
+        target_id: transaction.id,
+        details: {
+          receipt_number: transaction.receipt_number,
+          total_amount: Number(transaction.total_amount ?? 0),
+          reason: payload.reason?.trim() || null,
+        },
+        performed_by: userId,
+        performed_at: now,
+      },
+    ],
+  }
+
+  return syncAlerts(nextState)
+}
+
+export function refundTransaction(
+  state: DemoSystemState,
+  payload: { transactionId: string; reason?: string }
+): DemoSystemState {
+  const transaction = state.salesTransactions.find((row) => row.id === payload.transactionId)
+  if (!transaction || transaction.status === 'refunded' || transaction.status === 'voided') return state
+
+  const items = state.salesTransactionItems.filter((item) => item.transaction_id === payload.transactionId)
+  const userId = state.currentUserId || null
+  const now = nowIso()
+  const refundAmount = Number(transaction.total_amount ?? 0)
+
+  let nextState = {
+    ...state,
+    salesTransactions: state.salesTransactions.map((row) =>
+      row.id === payload.transactionId
+        ? {
+            ...row,
+            status: 'refunded' as TransactionStatus,
+            refunded_by: userId,
+            refunded_at: now,
+            refund_reason: payload.reason?.trim() || null,
+            parent_transaction_id: transaction.id,
+          }
+        : row
+    ),
+  }
+
+  for (const item of items) {
+    const product = nextState.products.find((row) => row.id === item.product_id)
+    if (!product) continue
+    const before = Number(product.quantity_on_hand ?? 0)
+    const after = before + Number(item.quantity ?? 0)
+
+    nextState = {
+      ...nextState,
+      products: nextState.products.map((row) =>
+        row.id === item.product_id ? { ...row, quantity_on_hand: after } : row
+      ),
+      stockMovements: [
+        ...nextState.stockMovements,
+        {
+          id: id(),
+          tenant_id: state.tenant.id,
+          product_id: item.product_id,
+          movement_type: 'return' as MovementType,
+          quantity: Number(item.quantity ?? 0),
+          quantity_before: before,
+          quantity_after: after,
+          reference_id: payload.transactionId,
+          reference_type: 'refunded_sale',
+          location_id: transaction.location_id,
+          performed_by: userId,
+          notes: `Refunded ${transaction.receipt_number}`,
+          created_at: now,
+          product,
+        },
+      ],
+    }
+  }
+
+  if (transaction.shift_id) {
+    const shift = nextState.cashShifts.find((s) => s.id === transaction.shift_id)
+    if (shift) {
+      const updatedShift: CashShift = {
+        ...shift,
+        total_sales: Number(shift.total_sales ?? 0) - refundAmount,
+        updated_at: now,
+      }
+      nextState = {
+        ...nextState,
+        cashShifts: nextState.cashShifts.map((s) => (s.id === transaction.shift_id ? updatedShift : s)),
+      }
+    }
+  }
+
+  nextState = {
+    ...nextState,
+    auditLogs: [
+      ...nextState.auditLogs,
+      {
+        id: id(),
+        tenant_id: state.tenant.id,
+        user_id: userId,
+        action: 'sale.refunded',
+        target_type: 'sale',
+        target_id: transaction.id,
+        details: {
+          receipt_number: transaction.receipt_number,
+          refund_amount: refundAmount,
+          reason: payload.reason?.trim() || null,
+        },
+        performed_by: userId,
+        performed_at: now,
+      },
+    ],
+  }
+
+  return syncAlerts(nextState)
+}
+
+export function createTransfer(
+  state: DemoSystemState,
+  payload: { productId: string; fromLocationId: string | null; toLocationId: string | null; quantity: number; notes?: string }
+): DemoSystemState {
+  const product = state.products.find((row) => row.id === payload.productId)
+  if (!product) return state
+
+  const fromLocationId = payload.fromLocationId ?? product.location_id ?? null
+  const toLocationId = payload.toLocationId ?? null
+  const requested = Math.max(0, Number(payload.quantity ?? 0))
+  if (requested <= 0 || !toLocationId || toLocationId === fromLocationId) return state
+
+  const consume = consumeFifo(state, product.id, requested, fromLocationId)
+  const qty = consume.consumedQuantity
+  if (qty <= 0) return state
+
+  const avgCost = qty > 0 ? consume.consumedCost / qty : 0
+  const now = nowIso()
+
+  const fromLoc = state.locations.find((loc) => loc.id === fromLocationId)
+  const toLoc = state.locations.find((loc) => loc.id === toLocationId)
+  const fromName = fromLoc?.name ?? 'Unknown'
+  const toName = toLoc?.name ?? 'Unknown'
+
+  const sourceAfter = lotQuantity(consume.state, product.id, fromLocationId)
+  const sourceBefore = sourceAfter + qty
+  const destBefore = lotQuantity(state, product.id, toLocationId)
+
+  const destLot: InventoryLot = {
+    id: deterministicUuid(product.id, toLocationId ?? 'none', 'transfer-dest', String(qty), String(destBefore)),
+    tenant_id: state.tenant.id,
+    product_id: product.id,
+    quantity: qty,
+    unit_cost: avgCost,
+    received_at: now,
+    source: 'transfer',
+    reference_id: null,
+    location_id: toLocationId,
+    created_at: now,
+  }
+
+  let nextState: DemoSystemState = { ...consume.state, inventoryLots: [...consume.state.inventoryLots, destLot] }
+  nextState = syncProductQuantity(nextState, product.id)
+
+  const productRef = nextState.products.find((row) => row.id === product.id)
+  const destAfter = lotQuantity(nextState, product.id, toLocationId)
+
+  const outMovement: StockMovement = {
+    id: deterministicUuid(product.id, fromLocationId ?? 'none', 'transfer-out', String(qty), String(sourceBefore)),
+    tenant_id: state.tenant.id,
+    product_id: product.id,
+    movement_type: 'outbound',
+    quantity: qty,
+    quantity_before: sourceBefore,
+    quantity_after: sourceAfter,
+    reference_id: null,
+    reference_type: 'transfer',
+    location_id: fromLocationId,
+    performed_by: state.currentUserId || null,
+    notes: `Transfer out → ${toName}`,
+    created_at: now,
+    product: productRef,
+  }
+
+  const inMovement: StockMovement = {
+    id: deterministicUuid(product.id, toLocationId ?? 'none', 'transfer-in', String(qty), String(destBefore)),
+    tenant_id: state.tenant.id,
+    product_id: product.id,
+    movement_type: 'inbound',
+    quantity: qty,
+    quantity_before: destBefore,
+    quantity_after: destAfter,
+    reference_id: null,
+    reference_type: 'transfer',
+    location_id: toLocationId,
+    performed_by: state.currentUserId || null,
+    notes: `Transfer in ← ${fromName}`,
+    created_at: now,
+    product: productRef,
+  }
+
+  return {
+    ...nextState,
+    stockMovements: [...nextState.stockMovements, outMovement, inMovement],
   }
 }
 

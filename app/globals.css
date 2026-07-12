@@ -553,9 +553,17 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
   overflow-x: auto;
 }
 
-.inventory-mobile-list {
-  display: none;
-}
+  .inventory-mobile-list {
+    display: none;
+  }
+
+  .tenant-mobile-list {
+    display: none;
+  }
+
+  .production-mobile-list {
+    display: none;
+  }
 
 .inventory-toolbar {
   display: flex;
@@ -587,6 +595,10 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
   .topbar-tenant-card,
   .topbar-open-alerts {
     display: none !important;
+  }
+
+  .topbar-tenant-select {
+    max-width: 130px;
   }
 
   .dashboard-overlay {
@@ -637,6 +649,24 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
   }
 
   .inventory-mobile-list {
+    display: grid;
+    gap: 12px;
+  }
+
+  .tenant-desktop-table {
+    display: none;
+  }
+
+  .tenant-mobile-list {
+    display: grid;
+    gap: 12px;
+  }
+
+  .production-desktop-table {
+    display: none;
+  }
+
+  .production-mobile-list {
     display: grid;
     gap: 12px;
   }

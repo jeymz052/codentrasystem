@@ -61,28 +61,29 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       padding: '0 12px 0 14px', background: '#FFFFFF', flexShrink: 0,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: '1 1 auto' }}>
         <button
           type="button"
           className="btn btn-ghost btn-sm topbar-menu-button"
           onClick={onToggleSidebar}
           aria-label="Toggle navigation menu"
+          style={{ flexShrink: 0 }}
         >
           <Menu size={16} />
         </button>
-        <h1 style={{ fontSize: 17, fontWeight: 700, color: '#0F172A', letterSpacing: '-0.02em' }}>
+        <h1 style={{ fontSize: 17, fontWeight: 700, color: '#0F172A', letterSpacing: '-0.02em', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {title}
         </h1>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
         <div className="topbar-tenant-card" style={{
           display: 'flex', alignItems: 'center', gap: 8,
           background: '#F8FBFF', border: '1px solid #D8E4F2',
-          borderRadius: 8, padding: '5px 12px',
+          borderRadius: 8, padding: '5px 12px', maxWidth: 200,
         }}>
-          <Building2 size={13} color="#3B82F6" />
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <span style={{ fontSize: 12, color: '#475569', fontWeight: 600 }}>{state.tenant.name}</span>
+          <Building2 size={13} color="#3B82F6" style={{ flexShrink: 0 }} />
+          <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            <span style={{ fontSize: 12, color: '#475569', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{state.tenant.name}</span>
             <span style={{ fontSize: 11, color: '#94A3B8' }}>{state.tenant.business_type.replaceAll('_', ' ')}</span>
           </div>
         </div>
@@ -94,9 +95,10 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
         }}>
           <span style={{ fontSize: 11, color: '#64748B', whiteSpace: 'nowrap' }}>Tenant</span>
           <select
+            className="topbar-tenant-select"
             value={activeTenantId || state.tenant.id}
             onChange={(event) => void switchTenant(event.target.value)}
-            style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 12, color: '#0F172A' }}
+            style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 12, color: '#0F172A', maxWidth: 160 }}
           >
             {availableTenants.map((tenant) => (
               <option key={tenant.id} value={tenant.id}>

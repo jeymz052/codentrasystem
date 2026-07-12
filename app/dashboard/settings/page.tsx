@@ -1,13 +1,20 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { Building2, Coins, Layers3, MapPin, Plus, RotateCcw, Save, Settings as SettingsIcon, Sparkles, Tag, Users, Warehouse } from 'lucide-react'
+import { useEffect, useState, type ChangeEvent } from 'react'
+import { Building2, Coins, Factory, Landmark, Layers3, MapPin, Plus, RotateCcw, Save, Settings as SettingsIcon, Sparkles, Tag, Users, Wallet, Warehouse } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import type { BusinessType, SubscriptionPlan, SubscriptionStatus } from '@/types/database'
 
 function humanize(value: string) {
   return value.replaceAll('_', ' ')
 }
+
+const PAYMENT_ACCOUNT_FIELDS = [
+  { key: 'gcash', label: 'GCash', accountLabel: 'GCash number / account', Icon: Wallet },
+  { key: 'maya', label: 'Maya', accountLabel: 'Maya account', Icon: Wallet },
+  { key: 'bdo', label: 'BDO', accountLabel: 'BDO account number', Icon: Landmark },
+  { key: 'maribank', label: 'Maribank', accountLabel: 'Maribank account', Icon: Landmark },
+] as const
 
 export default function SettingsPage() {
   const { state, updateTenant, resetDemo, addCategory, addUnitOfMeasure, addLocation, notifySuccess, notifyError } = useDemoSystem()
@@ -16,6 +23,16 @@ export default function SettingsPage() {
   const [categoryForm, setCategoryForm] = useState({ name: '', color: '#3B82F6', description: '' })
   const [uomForm, setUomForm] = useState({ name: '', abbreviation: '' })
   const [locationForm, setLocationForm] = useState({ code: '', name: '', zone: '' })
+  const [paymentForm, setPaymentForm] = useState({
+    gcash_account: state.tenant.gcash_account ?? '',
+    gcash_qr_url: state.tenant.gcash_qr_url ?? '',
+    maya_account: state.tenant.maya_account ?? '',
+    maya_qr_url: state.tenant.maya_qr_url ?? '',
+    bdo_account: state.tenant.bdo_account ?? '',
+    bdo_qr_url: state.tenant.bdo_qr_url ?? '',
+    maribank_account: state.tenant.maribank_account ?? '',
+    maribank_qr_url: state.tenant.maribank_qr_url ?? '',
+  })
   const [form, setForm] = useState({
     name: state.tenant.name,
     business_type: state.tenant.business_type,
@@ -39,6 +56,16 @@ export default function SettingsPage() {
       max_users: String(state.tenant.max_users),
       max_products: String(state.tenant.max_products),
       max_locations: String(state.tenant.max_locations),
+    })
+    setPaymentForm({
+      gcash_account: state.tenant.gcash_account ?? '',
+      gcash_qr_url: state.tenant.gcash_qr_url ?? '',
+      maya_account: state.tenant.maya_account ?? '',
+      maya_qr_url: state.tenant.maya_qr_url ?? '',
+      bdo_account: state.tenant.bdo_account ?? '',
+      bdo_qr_url: state.tenant.bdo_qr_url ?? '',
+      maribank_account: state.tenant.maribank_account ?? '',
+      maribank_qr_url: state.tenant.maribank_qr_url ?? '',
     })
   }, [state.tenant])
 
@@ -92,6 +119,44 @@ export default function SettingsPage() {
     })
     notifySuccess('Location added successfully.')
     setLocationForm({ code: '', name: '', zone: '' })
+  }
+
+  function handleSavePayments() {
+    updateTenant({
+      gcash_account: paymentForm.gcash_account.trim() || null,
+      gcash_qr_url: paymentForm.gcash_qr_url.trim() || state.tenant.gcash_qr_url || null,
+      maya_account: paymentForm.maya_account.trim() || null,
+      maya_qr_url: paymentForm.maya_qr_url.trim() || state.tenant.maya_qr_url || null,
+      bdo_account: paymentForm.bdo_account.trim() || null,
+      bdo_qr_url: paymentForm.bdo_qr_url.trim() || state.tenant.bdo_qr_url || null,
+      maribank_account: paymentForm.maribank_account.trim() || null,
+      maribank_qr_url: paymentForm.maribank_qr_url.trim() || state.tenant.maribank_qr_url || null,
+    })
+    notifySuccess('Payment accounts saved successfully.')
+  }
+
+  async function handleQrUpload(method: (typeof PAYMENT_ACCOUNT_FIELDS)[number]['key'], event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    try {
+      const body = new FormData()
+      body.append('file', file)
+      body.append('tenantId', state.tenant.id)
+      body.append('method', method)
+      const response = await fetch('/api/tenant/payment-qr', { method: 'POST', body })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}) as { error?: string })
+        throw new Error(error.error || 'Upload failed')
+      }
+      const data = (await response.json()) as { url: string }
+      setPaymentForm((current) => ({ ...current, [`${method}_qr_url`]: data.url }))
+      updateTenant({ [`${method}_qr_url`]: data.url } as unknown as Parameters<typeof updateTenant>[0])
+      notifySuccess('QR image uploaded and saved.')
+    } catch (error) {
+      notifyError(error instanceof Error ? error.message : 'Upload failed')
+    } finally {
+      event.target.value = ''
+    }
   }
 
   async function handleBilling() {
@@ -198,6 +263,39 @@ export default function SettingsPage() {
             </div>
           )
         })}
+      </section>
+
+      <section className="card" style={{ padding: '18px 20px', borderRadius: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: '#F3E8FF', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8B5CF6', flexShrink: 0 }}>
+            <Factory size={18} />
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: '#0F172A' }}>Enable Production</div>
+            <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>
+              Turn on Bills of Materials and finished goods. When enabled, only finished goods are sold at the POS; raw materials are for production only.
+            </div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => updateTenant({ enable_production: !(state.tenant.enable_production ?? false) })}
+          style={{
+            flexShrink: 0,
+            width: 52,
+            height: 30,
+            borderRadius: 999,
+            border: 'none',
+            cursor: 'pointer',
+            padding: 4,
+            background: state.tenant.enable_production ? '#8B5CF6' : '#CBD5E1',
+            display: 'flex',
+            justifyContent: state.tenant.enable_production ? 'flex-end' : 'flex-start',
+          }}
+          aria-pressed={Boolean(state.tenant.enable_production)}
+        >
+          <span style={{ width: 22, height: 22, borderRadius: '50%', background: '#fff' }} />
+        </button>
       </section>
 
       <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(320px, 0.8fr)', gap: 16, alignItems: 'start' }}>
@@ -317,6 +415,75 @@ export default function SettingsPage() {
             <div style={{ marginTop: 6, fontSize: 14, fontWeight: 700, color: '#0F172A' }}>{state.tenant.billing_email ?? 'Not set'}</div>
             <div style={{ marginTop: 3, fontSize: 12, color: '#64748B' }}>{state.tenant.timezone}</div>
           </div>
+        </div>
+      </section>
+
+      <section className="card" style={{ padding: 20, borderRadius: 20 }}>
+        <div className="auth-badge" style={{ marginBottom: 10 }}>
+          <Wallet size={14} /> Store payment accounts
+        </div>
+        <h3 style={{ fontSize: 18, fontWeight: 900, color: '#0F172A', letterSpacing: '-0.04em' }}>Direct payment accounts</h3>
+        <p style={{ fontSize: 13, color: '#64748B', marginTop: 4, lineHeight: 1.6 }}>
+          Add your store&apos;s own GCash, Maya, BDO, and Maribank details so the POS can show a &quot;Scan this to pay&quot; QR at checkout. These are manual tenders recorded by the cashier — no third-party gateway is involved.
+        </p>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14, marginTop: 16 }}>
+          {PAYMENT_ACCOUNT_FIELDS.map(({ key, label, accountLabel, Icon }) => {
+            const accountKey = `${key}_account` as const
+            const qrKey = `${key}_qr_url` as const
+            return (
+              <div key={key} style={{ padding: 16, borderRadius: 16, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                  <div style={{ width: 34, height: 34, borderRadius: 10, background: '#EFF6FF', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#3B82F6' }}>
+                    <Icon size={16} />
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: '#0F172A' }}>{label}</div>
+                </div>
+                <label className="auth-field">
+                  <span>{accountLabel}</span>
+                  <input
+                    className="input"
+                    value={paymentForm[accountKey]}
+                    onChange={(event) => setPaymentForm((current) => ({ ...current, [accountKey]: event.target.value }))}
+                    placeholder="e.g. 0917 123 4567"
+                  />
+                </label>
+                <label className="auth-field" style={{ marginTop: 10 }}>
+                  <span>QR image</span>
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    onChange={(event) => handleQrUpload(key, event)}
+                    className="input"
+                    style={{ padding: 6, fontSize: 12 }}
+                  />
+                </label>
+                {paymentForm[qrKey] ? (
+                  <div style={{ marginTop: 10, textAlign: 'center', position: 'relative' }}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={paymentForm[qrKey]}
+                      alt={`${label} QR code`}
+                      style={{ width: 120, height: 120, objectFit: 'contain', borderRadius: 10, background: '#fff', border: '1px solid #E2E8F0' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setPaymentForm((current) => ({ ...current, [qrKey]: '' }))}
+                      style={{ marginTop: 8, fontSize: 12, color: '#DC2626', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700 }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+          <button className="btn btn-primary" onClick={handleSavePayments}>
+            <Save size={15} /> Save payment accounts
+          </button>
         </div>
       </section>
 

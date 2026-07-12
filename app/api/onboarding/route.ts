@@ -1,9 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { randomUUID } from 'crypto'
-import { seedDemoSystem, remapStateTenantId } from '@/lib/demo-system'
 import { upsertTenantState } from '@/lib/system-db'
 import { copyResponseCookies, createSupabaseRouteClient, getSupabaseServiceClient } from '@/lib/supabase-server'
-import type { BusinessType, SubscriptionPlan } from '@/types/database'
+import type { BusinessType, SubscriptionPlan, SubscriptionStatus, UserRole } from '@/types/database'
 
 const PLAN_LIMITS: Record<SubscriptionPlan, { max_users: number; max_products: number; max_locations: number }> = {
   starter: { max_users: 3, max_products: 100, max_locations: 1 },
@@ -32,41 +31,77 @@ export async function POST(request: NextRequest) {
   }
 
   const tenantId = randomUUID()
-  const seed = remapStateTenantId(seedDemoSystem(business_type), tenantId)
-  const now = new Date()
-  const trialEndsAt = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString()
+  const now = new Date().toISOString()
+  const trialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString()
   const limits = PLAN_LIMITS[plan]
 
-  seed.tenant = {
-    ...seed.tenant,
-    id: tenantId,
-    name: business_name,
-    business_type,
-    email: billing_email,
-    billing_email,
-    plan,
-    subscription_status: 'trial',
-    trial_ends_at: trialEndsAt,
-    subscription_ends_at: null,
-    timezone,
-    max_users: limits.max_users,
-    max_products: limits.max_products,
-    max_locations: limits.max_locations,
+  const seed = {
+    tenant: {
+      id: tenantId,
+      name: business_name,
+      business_type,
+      logo_url: null,
+      address: null,
+      phone: null,
+      email: billing_email,
+      tax_id: null,
+      currency: 'PHP',
+      timezone,
+      plan,
+      subscription_status: 'trial' as SubscriptionStatus,
+      trial_ends_at: trialEndsAt,
+      subscription_ends_at: null,
+      max_users: limits.max_users,
+      max_products: limits.max_products,
+      max_locations: limits.max_locations,
+      enable_production: business_type === 'manufacturing',
+      is_active: true,
+      billing_email,
+      stripe_customer_id: null,
+      stripe_subscription_id: null,
+      stripe_price_id: null,
+      gcash_account: null,
+      gcash_qr_url: null,
+      maya_account: null,
+      maya_qr_url: null,
+      bdo_account: null,
+      bdo_qr_url: null,
+      maribank_account: null,
+      maribank_qr_url: null,
+      created_at: now,
+      updated_at: now,
+    },
+    currentUserId: user.id,
+    categories: [],
+    unitsOfMeasure: [],
+    locations: [],
+    suppliers: [],
+    products: [],
+    users: [{
+      id: user.id,
+      tenant_id: tenantId,
+      role: 'admin' as UserRole,
+      full_name: String(user.user_metadata?.full_name ?? user.user_metadata?.name ?? user.email ?? business_name).trim(),
+      email: String(user.email ?? billing_email).trim(),
+      avatar_url: null,
+      is_active: true,
+      last_login: null,
+      created_at: now,
+      updated_at: now,
+    }],
+    cashShifts: [],
+    cashMovements: [],
+    purchaseOrders: [],
+    purchaseOrderItems: [],
+    salesTransactions: [],
+    salesTransactionItems: [],
+    stockMovements: [],
+    alerts: [],
+    auditLogs: [],
+    productRecipes: [],
+    productionTemplates: [],
+    inventoryLots: [],
   }
-
-  seed.users = [{
-    id: user.id,
-    tenant_id: tenantId,
-    role: 'admin',
-    full_name: String(user.user_metadata?.full_name ?? user.user_metadata?.name ?? user.email ?? business_name).trim(),
-    email: String(user.email ?? billing_email).trim(),
-    avatar_url: null,
-    is_active: true,
-    last_login: null,
-    created_at: now.toISOString(),
-    updated_at: now.toISOString(),
-  }]
-  seed.currentUserId = user.id
 
   await upsertTenantState(seed)
 

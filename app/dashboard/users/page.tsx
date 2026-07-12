@@ -1,10 +1,15 @@
 'use client'
 
 import { useState } from 'react'
-import { Plus, Save, Users, UserCheck, X, Pencil } from 'lucide-react'
+import { Plus, Save, Users, UserCheck, X, Pencil, MailPlus } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { formatRoleLabel } from '@/lib/access-control'
+import { formatTimestamp } from '@/lib/utils'
 import type { User, UserRole } from '@/types/database'
+import { useTableState } from '@/lib/use-table-state'
+import { TableToolbar } from '@/components/ui/table/TableToolbar'
+import { SortHeader } from '@/components/ui/table/SortHeader'
+import { Pagination } from '@/components/ui/table/Pagination'
 
 const EMPTY = {
   full_name: '',
@@ -13,11 +18,30 @@ const EMPTY = {
 }
 
 export default function UsersPage() {
-  const { state, addUser, editUser, toggleUser, notifySuccess } = useDemoSystem()
+  const { state, addUser, editUser, toggleUser, resendInvite, notifySuccess } = useDemoSystem()
   const [form, setForm] = useState(EMPTY)
   const [showModal, setShowModal] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
-  const visibleUsers = state.users
+
+  const table = useTableState({
+    data: state.users,
+    searchKeys: (user) => [user.full_name, user.email, formatRoleLabel(user.role)],
+    filterFields: [
+      {
+        key: 'role',
+        label: 'Role',
+        options: [
+          { value: 'all', label: 'All roles' },
+          { value: 'admin', label: 'Tenant Admin' },
+          { value: 'manager', label: 'Manager' },
+          { value: 'cashier', label: 'Cashier' },
+        ],
+        getValue: (user) => user.role,
+      },
+    ],
+  })
+
+  const visibleUsers = table.sortedAndFiltered
 
   function handleSave() {
     if (!form.full_name || !form.email) return
@@ -25,8 +49,9 @@ export default function UsersPage() {
       editUser(editingUser.id, form)
       notifySuccess('User updated successfully.')
     } else {
+      // Success/error feedback is reported by the provider once the server
+      // actually sends the invitation email.
       addUser(form)
-      notifySuccess('User invited successfully.')
     }
     setForm(EMPTY)
     setShowModal(false)
@@ -57,48 +82,89 @@ export default function UsersPage() {
         </button>
       </div>
 
+      <TableToolbar
+        search={table.search}
+        onSearch={table.setSearch}
+        searchPlaceholder="Search by name, email, or role..."
+        filters={[
+          {
+            key: 'role',
+            label: 'Role',
+            value: table.filters.role,
+            onChange: (value) => table.setFilter('role', value),
+            options: [
+              { value: 'all', label: 'All roles' },
+              { value: 'admin', label: 'Tenant Admin' },
+              { value: 'manager', label: 'Manager' },
+              { value: 'cashier', label: 'Cashier' },
+            ],
+          },
+        ]}
+        showReset={table.totalItems !== state.users.length || Boolean(table.search)}
+        onReset={table.resetFilters}
+      />
+
       <div className="card table-scroll" style={{ overflow: 'hidden' }}>
-        {visibleUsers.length === 0 ? (
+        {table.paginated.length === 0 ? (
           <div style={{ padding: 28, textAlign: 'center' }}>
-            <h3 style={{ fontSize: 16, fontWeight: 700, color: '#0F172A' }}>No real users yet</h3>
+            <h3 style={{ fontSize: 16, fontWeight: 700, color: '#0F172A' }}>No users found</h3>
             <p style={{ color: '#64748B', fontSize: 13, marginTop: 6 }}>
-              Invite a real team member to create their account and receive a password setup email.
+              {table.totalItems === 0 ? 'Invite a real team member to create their account and receive a password setup email.' : 'Try adjusting your search or filters.'}
             </p>
           </div>
         ) : (
           <table className="data-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Role</th>
-                <th>Email</th>
-                <th>Status</th>
-                <th />
-              </tr>
-            </thead>
+            <thead><tr>
+                <SortHeader label="Name" column="full_name" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
+                <SortHeader label="Role" column="role" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
+                <SortHeader label="Email" column="email" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
+                <SortHeader label="Status" column="is_active" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
+                <th style={{ width: 80, textAlign: 'right' }}>Action</th>
+              </tr></thead>
             <tbody>
-              {visibleUsers.map((user) => (
+              {table.paginated.map((user) => (
                 <tr key={user.id}>
                   <td style={{ fontWeight: 700, color: '#0F172A' }}>{user.full_name}</td>
                   <td><span className="badge badge-blue">{formatRoleLabel(user.role)}</span></td>
                   <td>{user.email}</td>
-                  <td>{user.is_active ? <span className="badge badge-green">Active</span> : <span className="badge badge-red">Inactive</span>}</td>
                   <td>
-                    <div style={{ display: 'flex', gap: 6 }}>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                      {user.is_active ? <span className="badge badge-green">Active</span> : <span className="badge badge-red">Inactive</span>}
+                      {!user.last_login && <span className="badge badge-amber">Pending invite</span>}
+                    </div>
+                  </td>
+                  <td>
+                    <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                      {!user.last_login && (
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          style={{ padding: '4px 8px' }}
+                          onClick={() => {
+                            resendInvite({ full_name: user.full_name, email: user.email, role: user.role })
+                          }}
+                          title="Resend invitation email"
+                        >
+                          <MailPlus size={13} />
+                        </button>
+                      )}
                       <button
                         className="btn btn-ghost btn-sm"
+                        style={{ padding: '4px 8px' }}
                         onClick={() => openEdit(user)}
+                        title="Edit user"
                       >
-                        <Pencil size={13} /> Edit
+                        <Pencil size={13} />
                       </button>
                       <button
                         className="btn btn-ghost btn-sm"
+                        style={{ padding: '4px 8px' }}
                         onClick={() => {
                           toggleUser(user.id)
                           notifySuccess(user.is_active ? 'User deactivated successfully.' : 'User activated successfully.')
                         }}
+                        title={user.is_active ? 'Deactivate user' : 'Activate user'}
                       >
-                        <UserCheck size={13} /> {user.is_active ? 'Deactivate' : 'Activate'}
+                        <UserCheck size={13} />
                       </button>
                     </div>
                   </td>
@@ -108,6 +174,17 @@ export default function UsersPage() {
           </table>
         )}
       </div>
+
+      <Pagination
+        page={table.page}
+        totalPages={table.totalPages}
+        onPageChange={table.setPage}
+        pageSize={table.pageSize}
+        onPageSizeChange={table.setPageSize}
+        rangeStart={table.range.start}
+        rangeEnd={table.range.end}
+        totalItems={table.totalItems}
+      />
 
       {showModal && (
         <div className="modal-overlay" onClick={(event) => event.target === event.currentTarget && setShowModal(false)}>
@@ -171,9 +248,9 @@ export default function UsersPage() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 14, marginTop: 18 }}>
         {[
-          { label: 'Tenant Admins', value: visibleUsers.filter((user) => user.role === 'admin').length, color: '#3B82F6' },
-          { label: 'Managers', value: visibleUsers.filter((user) => user.role === 'manager').length, color: '#8B5CF6' },
-          { label: 'Cashiers', value: visibleUsers.filter((user) => user.role === 'cashier').length, color: '#10B981' },
+          { label: 'Tenant Admins', value: state.users.filter((user) => user.role === 'admin').length, color: '#3B82F6' },
+          { label: 'Managers', value: state.users.filter((user) => user.role === 'manager').length, color: '#8B5CF6' },
+          { label: 'Cashiers', value: state.users.filter((user) => user.role === 'cashier').length, color: '#10B981' },
         ].map((stat) => (
           <div key={stat.label} className="card" style={{ padding: '14px 16px' }}>
             <div style={{ fontSize: 12, color: '#64748B' }}>{stat.label}</div>
@@ -200,7 +277,7 @@ export default function UsersPage() {
                   </div>
                   <div style={{ textAlign: 'right', flexShrink: 0 }}>
                     <div style={{ color: '#475569' }}>{actor ? actor.full_name : 'System'}</div>
-                    <div style={{ color: '#94A3B8', fontSize: 10 }}>{new Date(log.performed_at).toLocaleString()}</div>
+                     <div style={{ color: '#94A3B8', fontSize: 10 }}>{formatTimestamp(log.performed_at)}</div>
                   </div>
                 </div>
               )

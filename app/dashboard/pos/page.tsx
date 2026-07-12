@@ -2,11 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AlertTriangle,
   Banknote,
   Barcode,
   Check,
   Clock3,
   CreditCard,
+  Landmark,
   Minus,
   Package,
   Percent,
@@ -17,9 +19,17 @@ import {
   Search,
   ShoppingBag,
   ShoppingCart,
+  Wallet,
   X,
+  Clock,
+  Repeat,
+  Trash2,
+  UserRound,
 } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
+import { formatTimestamp } from '@/lib/utils'
+import { getRolePermissions } from '@/lib/access-control'
+import type { PaymentMethod, Tenant, CashShift, CashMovementKind, TransactionStatus } from '@/types/database'
 
 type CartItem = {
   productId: string
@@ -32,7 +42,40 @@ type CartItem = {
   discount: number
 }
 
-type PayMethod = 'cash' | 'qr_ph'
+type PayMethod = PaymentMethod
+
+const PAYMENT_LABELS: Record<string, string> = {
+  cash: 'Cash',
+  qr_ph: 'QR Ph (PayMongo)',
+  gcash: 'GCash',
+  maya: 'Maya',
+  bdo: 'BDO',
+  maribank: 'Maribank',
+  card: 'Card',
+  bank_transfer: 'Bank Transfer',
+  other: 'Other',
+}
+
+function paymentLabel(method: string): string {
+  return PAYMENT_LABELS[method] ?? 'Other'
+}
+
+const MANUAL_METHODS = new Set<PayMethod>(['gcash', 'maya', 'bdo', 'maribank'])
+
+function storePaymentDetails(tenant: Tenant, method: PaymentMethod) {
+  switch (method) {
+    case 'gcash':
+      return { account: tenant.gcash_account ?? null, qrUrl: tenant.gcash_qr_url ?? null }
+    case 'maya':
+      return { account: tenant.maya_account ?? null, qrUrl: tenant.maya_qr_url ?? null }
+    case 'bdo':
+      return { account: tenant.bdo_account ?? null, qrUrl: tenant.bdo_qr_url ?? null }
+    case 'maribank':
+      return { account: tenant.maribank_account ?? null, qrUrl: tenant.maribank_qr_url ?? null }
+    default:
+      return { account: null, qrUrl: null }
+  }
+}
 
 type QrSession = {
   intentId: string
@@ -50,6 +93,7 @@ type ReceiptState = {
   payMethod: PayMethod
   tendered: number
   change: number
+  reference: string
   date: Date
   cashierName: string
 }
@@ -73,12 +117,24 @@ const blankCheckout: PendingSale = {
 }
 
 export default function POSPage() {
-  const { state, completeSale, formatCurrency, notifyError, notifySuccess } = useDemoSystem()
+  const { state, availableTenants, activeTenantId, completeSale, formatCurrency, notifyError, notifySuccess, voidSale, refundSale, openShift, closeShift, recordCashMovement } = useDemoSystem()
+  const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
+  const role = activeTenant?.role ?? 'cashier'
+  const perms = getRolePermissions(role)
+
+  function formatClock(value: string | null | undefined): string {
+    if (!value) return '—'
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return '—'
+    return date.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })
+  }
   const [search, setSearch] = useState('')
   const [cat, setCat] = useState('All')
   const [cart, setCart] = useState<CartItem[]>([])
   const [payMethod, setPayMethod] = useState<PayMethod>('cash')
   const [tendered, setTendered] = useState('')
+  const [reference, setReference] = useState('')
+  const [qrZoom, setQrZoom] = useState<string | null>(null)
   const [showReceipt, setShowReceipt] = useState(false)
   const [showQrModal, setShowQrModal] = useState(false)
   const [qrSession, setQrSession] = useState<QrSession | null>(null)
@@ -91,14 +147,41 @@ export default function POSPage() {
   const scanTimer = useRef<number | null>(null)
   const [orderDiscountType, setOrderDiscountType] = useState<'none' | 'pwd_senior' | 'employee'>('none')
   const [manualDiscountPercent, setManualDiscountPercent] = useState(0)
+  const isProduction = state.tenant.enable_production ?? false
+  const [prodType, setProdType] = useState<string>(isProduction ? 'finished' : 'all')
 
-  const categoryOptions = useMemo(() => ['All', ...state.categories.map((category) => category.name)], [state.categories])
-  const recentTransactions = useMemo(() => {
+  const [showShiftModal, setShowShiftModal] = useState(false)
+  const [showCashModal, setShowCashModal] = useState(false)
+  const [showRefundModal, setShowRefundModal] = useState(false)
+  const [showVoidModal, setShowVoidModal] = useState(false)
+  const [targetTx, setTargetTx] = useState<any>(null)
+  const [shiftAction, setShiftAction] = useState<'open' | 'close'>('open')
+  const [cashAction, setCashAction] = useState<'cash_in' | 'cash_out'>('cash_in')
+  const [openingFloat, setOpeningFloat] = useState('')
+  const [countedCash, setCountedCash] = useState('')
+  const [shiftStation, setShiftStation] = useState('')
+  const [shiftNote, setShiftNote] = useState('')
+  const [cashAmount, setCashAmount] = useState('')
+  const [cashNote, setCashNote] = useState('')
+  const [refundReason, setRefundReason] = useState('')
+  const [voidReason, setVoidReason] = useState('')
+  const [noShiftBlock, setNoShiftBlock] = useState(false)
+
+  const currentShift = useMemo(() => state.cashShifts.find((shift) => shift.status === 'open'), [state.cashShifts])
+  const lastClosedShift = useMemo(() => {
+    return [...state.cashShifts]
+      .filter((shift) => shift.status === 'closed' && shift.closed_by === state.currentUserId)
+      .sort((a, b) => (b.closed_at ?? '').localeCompare(a.closed_at ?? ''))[0] ?? null
+  }, [state.cashShifts, state.currentUserId])
+  const currentCashier = state.users.find((user) => user.id === state.currentUserId) ?? null
+  const cashierLabel = currentCashier?.full_name?.trim() || currentCashier?.email || 'Cashier'
+  const recentTx = useMemo(() => {
     return [...state.salesTransactions]
       .slice()
       .reverse()
-      .slice(0, 6)
+      .slice(0, 8)
   }, [state.salesTransactions])
+  const categoryOptions = useMemo(() => ['All', ...state.categories.map((category) => category.name)], [state.categories])
 
   const products = state.products.filter((product) => {
     const categoryName = state.categories.find((category) => category.id === product.category_id)?.name ?? 'Uncategorized'
@@ -107,7 +190,9 @@ export default function POSPage() {
       product.item_code.toLowerCase().includes(search.toLowerCase()) ||
       (product.barcode ?? '').toLowerCase().includes(search.toLowerCase())
     const matchCategory = cat === 'All' || categoryName === cat
-    return product.is_active && matchSearch && matchCategory
+    const hasBom = product.is_finished_good || state.productRecipes.some((r) => r.finished_good_id === product.id)
+    const matchType = isProduction ? hasBom : (prodType === 'all' || (prodType === 'finished' ? hasBom : !hasBom))
+    return product.is_active && matchSearch && matchCategory && matchType
   })
 
   const subtotal = cart.reduce((sum, item) => sum + item.sellingPrice * item.quantity - item.discount, 0)
@@ -130,13 +215,16 @@ export default function POSPage() {
   const stats = useMemo(() => {
     const openOrders = state.purchaseOrders.filter((order) => ['draft', 'pending_approval', 'approved', 'ordered'].includes(order.status)).length
     const todaySales = state.salesTransactions.filter((tx) => tx.status === 'completed' && tx.created_at.slice(0, 10) === new Date().toISOString().slice(0, 10))
+    const shiftTotal = currentShift ? state.salesTransactions.filter((tx) => tx.shift_id === currentShift.id && tx.status === 'completed').reduce((sum, tx) => sum + Number(tx.total_amount), 0) : 0
+    const shiftTxCount = currentShift ? state.salesTransactions.filter((tx) => tx.shift_id === currentShift.id && tx.status === 'completed').length : 0
     return [
       { label: 'Total SKUs', value: String(state.products.filter((product) => product.is_active).length), hint: 'Active products', icon: Package, color: '#3B82F6', tint: '#DBEAFE' },
       { label: "Today's Sales", value: formatCurrency(todaySales.reduce((sum, tx) => sum + Number(tx.total_amount), 0)), hint: `${todaySales.length} transactions`, icon: CreditCard, color: '#10B981', tint: '#D1FAE5' },
+      { label: currentShift ? `Shift Sales (${currentShift.shift_code})` : 'Shift Sales', value: formatCurrency(shiftTotal), hint: `${shiftTxCount} transactions`, icon: Banknote, color: '#F59E0B', tint: '#FEF3C7' },
       { label: 'Pending Orders', value: String(openOrders), hint: 'Purchase orders', icon: ShoppingCart, color: '#8B5CF6', tint: '#EDE9FE' },
-      { label: 'Stock Movements', value: String(state.stockMovements.length), hint: 'Audit trail', icon: ReceiptText, color: '#F59E0B', tint: '#FEF3C7' },
+      { label: 'Stock Movements', value: String(state.stockMovements.length), hint: 'Audit trail', icon: ReceiptText, color: '#EF4444', tint: '#FEE2E2' },
     ]
-  }, [formatCurrency, state.products, state.purchaseOrders, state.salesTransactions, state.stockMovements])
+  }, [formatCurrency, state.products, state.purchaseOrders, state.salesTransactions, state.stockMovements, currentShift])
 
   function addToCart(productId: string) {
     const product = state.products.find((entry) => entry.id === productId)
@@ -205,6 +293,29 @@ export default function POSPage() {
     setCart((current) => current.filter((item) => item.productId !== productId))
   }
 
+  // Price overrides are a manager-level action. A cashier tapping the price
+  // field is denied and nothing changes.
+  function updatePrice(productId: string, value: string) {
+    if (!perms.canChangePrices) {
+      notifyError('Access denied: only a manager can adjust prices.')
+      return
+    }
+    const parsed = Number(value)
+    if (!Number.isFinite(parsed) || parsed < 0) return
+    setCart((current) =>
+      current.map((item) => (item.productId === productId ? { ...item, sellingPrice: parsed } : item))
+    )
+  }
+
+  // Cashier convenience: quick-tender buttons for common peso denominations.
+  function addTender(amount: number) {
+    setTendered((current) => String((Number(current) || 0) + amount))
+  }
+
+  function setExactTender() {
+    setTendered(grandTotal > 0 ? String(grandTotal) : '')
+  }
+
   function oversellingItem() {
     return cart.find((item) => {
       const product = state.products.find((entry) => entry.id === item.productId)
@@ -257,6 +368,7 @@ export default function POSPage() {
             payMethod: 'qr_ph',
             tendered: sale.grandTotal,
             change: 0,
+            reference: '',
             date: new Date(),
             cashierName,
           })
@@ -301,6 +413,10 @@ export default function POSPage() {
 
   async function startQrPhCheckout() {
     if (cart.length === 0 || qrBusy) return
+    if (!currentShift) {
+      notifyError('Open a shift before processing a sale.')
+      return
+    }
     if (guardOversell()) return
     setQrBusy(true)
     setQrError(null)
@@ -371,6 +487,10 @@ export default function POSPage() {
 
   function handleCheckout() {
     if (cart.length === 0) return
+    if (!currentShift) {
+      notifyError('Open a shift before completing a sale.')
+      return
+    }
     if (guardOversell()) return
 
     if (payMethod === 'qr_ph') {
@@ -394,6 +514,7 @@ export default function POSPage() {
     const result = completeSale({
       payment_method: payMethod,
       payment_provider: 'manual',
+      payment_reference: reference.trim() || null,
       amount_tendered: cashEntered,
       location_id: state.locations[0]?.id ?? null,
       notes: `Sold at ${state.tenant.name}`,
@@ -410,6 +531,7 @@ export default function POSPage() {
       payMethod,
       tendered: cashEntered,
       change: payMethod === 'cash' ? Math.max(cashEntered - grandTotal, 0) : 0,
+      reference: reference.trim(),
       date: new Date(),
       cashierName,
     })
@@ -418,6 +540,7 @@ export default function POSPage() {
     setOrderDiscountType('none')
     setManualDiscountPercent(0)
     setTendered('')
+    setReference('')
   }
 
   function closeQrModal() {
@@ -432,7 +555,96 @@ export default function POSPage() {
     window.print()
   }
 
-  const canCheckout = cart.length > 0 && !qrBusy && (payMethod !== 'cash' || cashEntered >= grandTotal)
+  function handleOpenShift() {
+    if (!openingFloat || Number(openingFloat) < 0) {
+      notifyError('Enter a valid starting cash amount.')
+      return
+    }
+    openShift({
+      openingFloat: Number(openingFloat),
+      locationId: state.locations[0]?.id ?? null,
+      notes: shiftNote || undefined,
+      station: shiftStation || undefined,
+    })
+    setShowShiftModal(false)
+    setOpeningFloat('')
+    setShiftStation('')
+    setShiftNote('')
+    notifySuccess('Shift opened')
+  }
+
+  function handleCloseShift() {
+    if (!currentShift) return
+    if (!countedCash || Number(countedCash) < 0) {
+      notifyError('Enter the counted cash amount from the drawer.')
+      return
+    }
+    closeShift(currentShift.id, Number(countedCash), shiftNote || undefined)
+    setShowShiftModal(false)
+    setCountedCash('')
+    setShiftNote('')
+    notifySuccess('Shift closed')
+  }
+
+  function handleCashMovement() {
+    if (!currentShift) {
+      notifyError('No active shift. Open a shift first.')
+      return
+    }
+    if (!cashAmount || Number(cashAmount) <= 0) {
+      notifyError('Enter a valid amount.')
+      return
+    }
+    recordCashMovement(currentShift.id, cashAction, Number(cashAmount), cashNote || undefined)
+    setShowCashModal(false)
+    setCashAmount('')
+    setCashNote('')
+    notifySuccess(cashAction === 'cash_in' ? 'Cash added to drawer' : 'Cash removed from drawer')
+  }
+
+  function confirmVoid() {
+    if (!targetTx) return
+    if (!perms.canVoidSales) {
+      notifyError('Access denied: you are not allowed to void sales.')
+      return
+    }
+    if (!voidReason.trim()) {
+      notifyError('Please provide a reason for voiding.')
+      return
+    }
+    voidSale(targetTx.id, voidReason.trim())
+    setShowVoidModal(false)
+    setTargetTx(null)
+    setVoidReason('')
+    notifySuccess('Transaction voided')
+    if (lastReceipt && targetTx.receipt_number === lastReceipt.receiptNo) {
+      setShowReceipt(false)
+      setLastReceipt(null)
+    }
+  }
+
+  function confirmRefund() {
+    if (!targetTx) return
+    if (!perms.canRefundSales) {
+      notifyError('Access denied: only a manager can process refunds.')
+      return
+    }
+    if (!refundReason.trim()) {
+      notifyError('Please provide a reason for the refund.')
+      return
+    }
+    refundSale(targetTx.id, refundReason.trim())
+    setShowRefundModal(false)
+    setTargetTx(null)
+    setRefundReason('')
+    notifySuccess('Refund processed and stock restored')
+    if (lastReceipt && targetTx.receipt_number === lastReceipt.receiptNo) {
+      setShowReceipt(false)
+      setLastReceipt(null)
+    }
+  }
+
+  const canCheckout = cart.length > 0 && !qrBusy && currentShift && (payMethod !== 'cash' || cashEntered >= grandTotal)
   const receiptDateText = useMemo(
     () =>
       lastReceipt
@@ -461,11 +673,22 @@ export default function POSPage() {
           </div>
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
-            <span className="badge badge-green">Open</span>
+            <span className={`badge ${currentShift ? 'badge-green' : 'badge-red'}`}>
+              {currentShift ? `Shift ${currentShift.shift_code} Open` : 'No Active Shift'}
+            </span>
             <span className="badge badge-blue">Scanner ready</span>
             <span className="badge badge-teal">Thermal print</span>
+            <span className="badge badge-gray" title={`${cashierLabel}${currentShift?.station ? ` · ${currentShift.station}` : ''}`}>
+              <UserRound size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
+              {cashierLabel}
+              {currentShift?.station ? ` · ${currentShift.station}` : ''}
+            </span>
             <span className="badge badge-gray">
-              Cashier: {state.users.find((user) => user.id === state.currentUserId)?.full_name ?? 'Cashier'}
+              {currentShift
+                ? `In ${formatClock(currentShift.opened_at)}`
+                : lastClosedShift
+                  ? `Out ${formatClock(lastClosedShift.closed_at)}`
+                  : 'No shift'}
             </span>
           </div>
         </div>
@@ -474,6 +697,23 @@ export default function POSPage() {
           <button className="btn btn-ghost" type="button" onClick={() => scanRef.current?.focus()}>
             <Barcode size={15} /> Focus scanner
           </button>
+          {currentShift ? (
+            <>
+              <button className="btn btn-ghost" type="button" onClick={() => { setCashAction('cash_in'); setShowCashModal(true) }}>
+                <Plus size={15} /> Cash In
+              </button>
+              <button className="btn btn-ghost" type="button" onClick={() => { setCashAction('cash_out'); setShowCashModal(true) }}>
+                <Minus size={15} /> Cash Out
+              </button>
+              <button className="btn btn-danger" type="button" onClick={() => { setShiftAction('close'); setShowShiftModal(true) }}>
+                <Clock size={15} /> Close Shift
+              </button>
+            </>
+          ) : (
+            <button className="btn btn-primary" type="button" onClick={() => { setShiftAction('open'); setShowShiftModal(true) }}>
+              <Clock size={15} /> Open Shift
+            </button>
+          )}
           <button className="btn btn-primary" type="button" onClick={handleCheckout} disabled={!canCheckout}>
             <Check size={15} /> Complete Sale
           </button>
@@ -590,6 +830,40 @@ export default function POSPage() {
             </button>
           ))}
         </div>
+
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
+          {isProduction ? (
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#15803D', background: '#DCFCE7', padding: '6px 12px', borderRadius: 999 }}>
+              Production business — only finished goods are sold
+            </span>
+          ) : (
+            <>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#64748B', marginRight: 2 }}>Type:</span>
+              {[
+                { value: 'all', label: 'All' },
+                { value: 'finished', label: 'Finished Goods' },
+                { value: 'raw', label: 'Raw Materials' },
+              ].map((option) => (
+                <button
+                  key={option.value}
+                  onClick={() => setProdType(option.value)}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 999,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    border: '1px solid transparent',
+                    background: prodType === option.value ? '#DCFCE7' : '#FFFFFF',
+                    color: prodType === option.value ? '#15803D' : '#475569',
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </>
+          )}
+        </div>
       </section>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 20, alignItems: 'start' }}>
@@ -643,9 +917,17 @@ export default function POSPage() {
                       }}>
                         {categoryName.slice(0, 1).toUpperCase()}
                       </div>
-                      <div>
+                      <div style={{ minWidth: 0 }}>
                         <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', lineHeight: 1.3 }}>{product.name}</div>
                         <div style={{ fontSize: 10, color: '#64748B', marginTop: 2 }}>{product.item_code}</div>
+                        {(() => {
+                          const isFG = product.is_finished_good || state.productRecipes.some((r) => r.finished_good_id === product.id)
+                          const color = isFG ? '#10B981' : '#F59E0B'
+                          const label = isFG ? 'Finished Good' : 'Raw Material'
+                          return (
+                            <span style={{ display: 'inline-block', marginTop: 5, fontSize: 9, fontWeight: 800, padding: '2px 6px', borderRadius: 999, background: `${color}14`, color }}>{label}</span>
+                          )
+                        })()}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <span style={{ fontSize: 14, fontWeight: 900, color: '#10B981' }}>{formatCurrency(Number(product.selling_price ?? 0))}</span>
@@ -697,7 +979,31 @@ export default function POSPage() {
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
                       <div style={{ flex: 1 }}>
                         <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{item.name}</div>
-                        <div style={{ fontSize: 11, color: '#475569' }}>{formatCurrency(item.sellingPrice)} / {item.uom}</div>
+                        {perms.canChangePrices ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 3 }}>
+                            <span style={{ fontSize: 11, color: '#475569' }}>₱</span>
+                            <input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={item.sellingPrice}
+                              onChange={(event) => updatePrice(item.productId, event.target.value)}
+                              title="Override unit price"
+                              style={{ width: 78, fontSize: 11, color: '#0F172A', background: '#FFFFFF', border: '1px solid #D8E4F2', borderRadius: 6, padding: '2px 6px', outline: 'none' }}
+                            />
+                            <span style={{ fontSize: 11, color: '#475569' }}>/ {item.uom}</span>
+                          </div>
+                        ) : (
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => notifyError('Access denied: only a manager can adjust prices.')}
+                            title="Only a manager can adjust prices"
+                            style={{ fontSize: 11, color: '#475569', marginTop: 3, cursor: 'not-allowed', userSelect: 'none' }}
+                          >
+                            {formatCurrency(item.sellingPrice)} / {item.uom}
+                          </div>
+                        )}
                       </div>
                       <button onClick={() => removeItem(item.productId)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: 2 }}>
                         <X size={14} />
@@ -766,15 +1072,28 @@ export default function POSPage() {
               </div>
 
               <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 11, color: '#475569', marginBottom: 6 }}>Manual discount (%)</div>
+                <div style={{ fontSize: 11, color: '#475569', marginBottom: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span>Manual discount (%)</span>
+                  {!perms.canChangePrices && <span style={{ fontSize: 10, color: '#94A3B8', fontWeight: 700 }}>Manager only</span>}
+                </div>
                 <input
                   type="number"
                   min={0}
                   max={100}
                   value={manualDiscountPercent || ''}
-                  onChange={(event) => setManualDiscountPercent(Math.min(100, Math.max(Number(event.target.value) || 0, 0)))}
+                  readOnly={!perms.canChangePrices}
+                  onMouseDown={(event) => {
+                    if (!perms.canChangePrices) {
+                      event.preventDefault()
+                      notifyError('Access denied: only a manager can apply a manual discount.')
+                    }
+                  }}
+                  onChange={(event) => {
+                    if (!perms.canChangePrices) return
+                    setManualDiscountPercent(Math.min(100, Math.max(Number(event.target.value) || 0, 0)))
+                  }}
                   placeholder="0"
-                  style={{ width: '100%', background: '#FFFFFF', border: '1px solid #D8E4F2', borderRadius: 8, padding: '8px 10px', color: '#0F172A', fontSize: 13, outline: 'none' }}
+                  style={{ width: '100%', background: perms.canChangePrices ? '#FFFFFF' : '#F1F5F9', border: '1px solid #D8E4F2', borderRadius: 8, padding: '8px 10px', color: '#0F172A', fontSize: 13, outline: 'none', cursor: perms.canChangePrices ? 'text' : 'not-allowed' }}
                 />
               </div>
 
@@ -823,10 +1142,70 @@ export default function POSPage() {
                 ))}
               </div>
 
+              <div style={{ fontSize: 11, color: '#64748B', fontWeight: 600, margin: '2px 0 8px' }}>
+                Direct (store account / e-wallet)
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, marginBottom: 12 }}>
+                {([
+                  ['gcash', 'GCash', Wallet],
+                  ['maya', 'Maya', Wallet],
+                  ['bdo', 'BDO', Landmark],
+                  ['maribank', 'Maribank', Landmark],
+                ] as const).map(([value, label, Icon]) => (
+                  <button
+                    key={value}
+                    onClick={() => setPayMethod(value)}
+                    style={{
+                      padding: '10px 8px',
+                      borderRadius: 12,
+                      border: `1px solid ${payMethod === value ? '#3B82F6' : '#D8E4F2'}`,
+                      background: payMethod === value ? '#EFF6FF' : '#FFFFFF',
+                      color: payMethod === value ? '#2563EB' : '#475569',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6,
+                      fontSize: 12,
+                      fontWeight: 700,
+                    }}
+                  >
+                    <Icon size={14} />{label}
+                  </button>
+                ))}
+              </div>
+
               {payMethod === 'cash' && (
                 <div style={{ marginBottom: 12 }}>
                   <label style={{ fontSize: 11, color: '#475569', display: 'block', marginBottom: 5 }}>Amount Tendered</label>
                   <input className="input" type="number" placeholder="0.00" value={tendered} onChange={(event) => setTendered(event.target.value)} style={{ height: 42, fontSize: 16, fontWeight: 700, borderRadius: 12 }} />
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, marginTop: 8 }}>
+                    <button
+                      type="button"
+                      onClick={setExactTender}
+                      disabled={grandTotal <= 0}
+                      style={{ padding: '7px 4px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#2563EB', fontSize: 11, fontWeight: 800, cursor: grandTotal > 0 ? 'pointer' : 'not-allowed' }}
+                    >
+                      Exact
+                    </button>
+                    {[20, 50, 100, 200, 500, 1000].map((denom) => (
+                      <button
+                        key={denom}
+                        type="button"
+                        onClick={() => addTender(denom)}
+                        style={{ padding: '7px 4px', borderRadius: 8, border: '1px solid #D8E4F2', background: '#FFFFFF', color: '#475569', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
+                      >
+                        +{denom}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setTendered('')}
+                      style={{ padding: '7px 4px', borderRadius: 8, border: '1px solid #FECACA', background: '#FEF2F2', color: '#DC2626', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
+                    >
+                      Clear
+                    </button>
+                  </div>
                   {cashEntered >= grandTotal && grandTotal > 0 && (
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
                       <span style={{ fontSize: 12, color: '#475569' }}>Change</span>
@@ -836,9 +1215,73 @@ export default function POSPage() {
                 </div>
               )}
 
+              {MANUAL_METHODS.has(payMethod) && (() => {
+                const label = paymentLabel(payMethod)
+                const details = storePaymentDetails(state.tenant, payMethod)
+                return (
+                  <div style={{ marginBottom: 12, padding: '12px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>Scan this to pay — {label}</div>
+                    {details.qrUrl ? (
+                      <div style={{ textAlign: 'center', marginBottom: 8 }}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={details.qrUrl}
+                          alt={`${label} QR code`}
+                          onClick={() => setQrZoom(details.qrUrl)}
+                          style={{ width: 150, height: 150, objectFit: 'contain', borderRadius: 10, background: '#fff', border: '1px solid #E2E8F0', cursor: 'zoom-in' }}
+                        />
+                        <div style={{ fontSize: 10, color: '#94A3B8', marginTop: 4 }}>Tap image to enlarge</div>
+                      </div>
+                    ) : null}
+                    {details.account ? (
+                      <div style={{ fontSize: 12, color: '#475569', marginBottom: 8 }}>
+                        <span style={{ fontWeight: 700, color: '#0F172A' }}>{label} account:</span> {details.account}
+                      </div>
+                    ) : null}
+                    {!details.qrUrl && !details.account ? (
+                      <div style={{ fontSize: 11, color: '#94A3B8', marginBottom: 8 }}>
+                        No {label} account set. Add it in Settings → Store payment accounts to show a QR here.
+                      </div>
+                    ) : null}
+                    <label style={{ fontSize: 11, color: '#475569', display: 'block', marginBottom: 5, marginTop: 4 }}>Reference (optional)</label>
+                    <input className="input" placeholder="GCash/transaction ref, last 4, etc." value={reference} onChange={(event) => setReference(event.target.value)} style={{ height: 42, fontSize: 14, borderRadius: 12 }} />
+                  </div>
+                )
+              })()}
+
+
               {payMethod === 'qr_ph' && (
                 <div style={{ marginBottom: 12, padding: '12px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2', color: '#475569', fontSize: 12, lineHeight: 1.5 }}>
                   Generate a PayMongo QR Ph code for this exact total. Once the customer pays, the system will confirm it and save the sale automatically.
+                </div>
+              )}
+
+              {cart.length > 0 && !currentShift && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    padding: '12px 14px',
+                    borderRadius: 12,
+                    background: '#FEF2F2',
+                    border: '1px solid #FECACA',
+                    color: '#B91C1C',
+                    marginBottom: 12,
+                  }}
+                >
+                  <AlertTriangle size={18} style={{ flexShrink: 0 }} />
+                  <div style={{ fontSize: 12.5, lineHeight: 1.4, flex: 1 }}>
+                    <strong style={{ fontWeight: 800 }}>Open a shift first.</strong> You can&rsquo;t complete a sale until a shift is open.
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    onClick={() => { setShiftAction('open'); setShowShiftModal(true) }}
+                    style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}
+                  >
+                    <Clock size={14} /> Open Shift
+                  </button>
                 </div>
               )}
 
@@ -864,21 +1307,24 @@ export default function POSPage() {
             </div>
 
             <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 320, overflowY: 'auto' }}>
-              {recentTransactions.length === 0 ? (
+              {recentTx.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '26px 10px', color: '#94A3B8' }}>
                   <ReceiptText size={28} style={{ marginBottom: 8, opacity: 0.35 }} />
                   <p style={{ fontSize: 12 }}>No transactions yet</p>
                 </div>
-              ) : recentTransactions.map((tx) => {
+              ) : recentTx.map((tx) => {
                 const cashier = tx.cashier?.full_name ?? 'Cashier'
                 const total = Number(tx.total_amount ?? 0)
-                const paidVia = tx.payment_method === 'cash' ? 'Cash' : 'QR Ph'
+                const paidVia = paymentLabel(tx.payment_method)
                 const count = tx.items?.length ?? 0
+                const isCompleted = tx.status === 'completed'
+                const isVoided = tx.status === 'voided'
+                const isRefunded = tx.status === 'refunded'
                 return (
-                  <button
+                  <div
                     key={tx.id}
-                    type="button"
-                    onClick={() => {
+                    onClick={(e) => {
+                      if (!isCompleted) return
                       const txItems = (tx.items ?? []).map((item) => ({
                         productId: item.product_id,
                         name: item.product?.name ?? 'Item',
@@ -889,7 +1335,6 @@ export default function POSPage() {
                         quantity: Number(item.quantity ?? 0),
                         discount: Number(item.discount ?? 0),
                       }))
-
                       setLastReceipt({
                         receiptNo: tx.receipt_number,
                         items: txItems,
@@ -897,9 +1342,10 @@ export default function POSPage() {
                         discount: 0,
                         discountLabel: null,
                         totalAmount: total,
-                        payMethod: tx.payment_method === 'qr_ph' ? 'qr_ph' : 'cash',
+                        payMethod: tx.payment_method,
                         tendered: Number(tx.amount_tendered ?? total),
                         change: Number(tx.change_amount ?? 0),
+                        reference: tx.payment_reference ?? '',
                         date: new Date(tx.created_at),
                         cashierName: cashier,
                       })
@@ -907,22 +1353,25 @@ export default function POSPage() {
                     }}
                     style={{
                       textAlign: 'left',
-                      border: '1px solid #E2E8F0',
+                      border: `1px solid ${isVoided ? '#FECACA' : isRefunded ? '#DEF7EC' : '#E2E8F0'}`,
                       borderRadius: 14,
                       padding: 14,
                       background: '#FFFFFF',
                       cursor: 'pointer',
+                      opacity: isVoided || isRefunded ? 0.6 : 1,
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
                       <div>
                         <div style={{ fontSize: 12, fontWeight: 800, color: '#0F172A' }}>{tx.receipt_number}</div>
                         <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>
-                          {new Date(tx.created_at).toLocaleString()}
+                           {formatTimestamp(tx.created_at)}
+                          {isVoided && <span style={{ marginLeft: 6, color: '#B91C1C', fontWeight: 700 }}>VOIDED</span>}
+                          {isRefunded && <span style={{ marginLeft: 6, color: '#047857', fontWeight: 700 }}>REFUNDED</span>}
                         </div>
                       </div>
                       <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: 13, fontWeight: 900, color: '#10B981' }}>{formatCurrency(total)}</div>
+                        <div style={{ fontSize: 13, fontWeight: 900, color: isVoided ? '#B91C1C' : '#10B981' }}>{formatCurrency(total)}</div>
                         <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>{paidVia}</div>
                       </div>
                     </div>
@@ -930,7 +1379,31 @@ export default function POSPage() {
                       <span>{count} item{count !== 1 ? 's' : ''}</span>
                       <span>{cashier}</span>
                     </div>
-                  </button>
+                    {isCompleted && currentShift && tx.shift_id === currentShift.id && (perms.canVoidSales || perms.canRefundSales) && (
+                      <div style={{ display: 'flex', gap: 6, marginTop: 10, justifyContent: 'flex-end' }}>
+                        {perms.canVoidSales && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => { setTargetTx(tx); setShowVoidModal(true) }}
+                            style={{ fontSize: 10, padding: '2px 8px', color: '#B91C1C' }}
+                          >
+                            <Trash2 size={12} /> Void
+                          </button>
+                        )}
+                        {perms.canRefundSales && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => { setTargetTx(tx); setShowRefundModal(true) }}
+                            style={{ fontSize: 10, padding: '2px 8px', color: '#047857' }}
+                          >
+                            <Repeat size={12} /> Refund
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 )
               })}
             </div>
@@ -975,7 +1448,10 @@ export default function POSPage() {
                 {lastReceipt.discount > 0 && (
                   <div><span>{lastReceipt.discountLabel ?? 'Discount'}</span><strong>-{formatCurrency(lastReceipt.discount)}</strong></div>
                 )}
-                <div><span>Payment</span><strong>{lastReceipt.payMethod === 'cash' ? 'Cash' : 'QR Ph'}</strong></div>
+                <div><span>Payment</span><strong>{paymentLabel(lastReceipt.payMethod)}</strong></div>
+                {lastReceipt.reference ? (
+                  <div><span>Reference</span><strong>{lastReceipt.reference}</strong></div>
+                ) : null}
                 {lastReceipt.payMethod === 'cash' && (
                   <>
                     <div><span>Tendered</span><strong>{formatCurrency(lastReceipt.tendered)}</strong></div>
@@ -1049,6 +1525,190 @@ export default function POSPage() {
               }}>
                 <Check size={14} /> Still waiting
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {qrZoom && (
+        <div className="modal-overlay pos-print-hide" onClick={() => setQrZoom(null)} style={{ cursor: 'zoom-out' }}>
+          <div onClick={(event) => event.stopPropagation()} style={{ background: '#fff', padding: 18, borderRadius: 16, maxWidth: 380, width: '100%', textAlign: 'center', boxShadow: '0 24px 60px rgba(15,23,42,0.25)' }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={qrZoom} alt="QR code" style={{ width: '100%', maxWidth: 340, height: 'auto', display: 'block', margin: '0 auto', borderRadius: 10, background: '#fff', border: '1px solid #E2E8F0' }} />
+            <button className="btn btn-ghost" style={{ marginTop: 14, width: '100%', justifyContent: 'center' }} onClick={() => setQrZoom(null)}>
+              <X size={14} /> Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showShiftModal && (
+        <div className="modal-overlay pos-print-hide" onClick={() => setShowShiftModal(false)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(event) => event.stopPropagation()}>
+            <div style={{ padding: '20px 20px 0' }}>
+              <h3 style={{ fontSize: 16, fontWeight: 800, color: '#0F172A', marginBottom: 4 }}>
+                {shiftAction === 'open' ? 'Open New Shift' : 'Close Current Shift'}
+              </h3>
+              <p style={{ fontSize: 12, color: '#64748B', marginBottom: 12 }}>
+                {shiftAction === 'open'
+                  ? 'Set the starting cash float in the drawer. This is the opening balance.'
+                  : 'Count the cash currently in the drawer. Variance will be calculated automatically.'}
+              </p>
+              <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>
+                {shiftAction === 'open' ? 'Starting Cash (PHP)' : 'Counted Cash (PHP)'}
+              </label>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                placeholder="0.00"
+                value={shiftAction === 'open' ? openingFloat : countedCash}
+                onChange={(event) => shiftAction === 'open' ? setOpeningFloat(event.target.value) : setCountedCash(event.target.value)}
+                style={{ height: 44, fontSize: 18, fontWeight: 700, borderRadius: 12, marginBottom: 12 }}
+              />
+              {currentShift && shiftAction === 'close' && (
+                <div style={{ padding: '10px 12px', borderRadius: 10, background: '#F8FBFF', border: '1px solid #D8E4F2', marginBottom: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
+                    <span style={{ color: '#475569' }}>Opening float</span>
+                    <span style={{ fontWeight: 700 }}>{formatCurrency(Number(currentShift.opening_float))}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
+                    <span style={{ color: '#475569' }}>Expected cash</span>
+                    <span style={{ fontWeight: 700 }}>{formatCurrency(Number(currentShift.opening_float) + Number(currentShift.total_sales || 0))}</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#64748B' }}>Shift: {currentShift.shift_code}</div>
+                </div>
+              )}
+              {shiftAction === 'open' && (
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>Station / Bay (optional)</label>
+                  <input
+                    className="input"
+                    placeholder="e.g. Bay 1, Register A"
+                    value={shiftStation}
+                    onChange={(event) => setShiftStation(event.target.value)}
+                    style={{ height: 42, borderRadius: 12, marginBottom: 4 }}
+                  />
+                  <div style={{ fontSize: 11, color: '#94A3B8' }}>Identifies which register this cashier is working from.</div>
+                </div>
+              )}
+              <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>Notes (optional)</label>
+              <input
+                className="input"
+                placeholder={shiftAction === 'open' ? 'e.g. Morning shift' : 'Any discrepancies...'}
+                value={shiftNote}
+                onChange={(event) => setShiftNote(event.target.value)}
+                style={{ height: 42, borderRadius: 12, marginBottom: 16 }}
+              />
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setShowShiftModal(false)}>
+                  <X size={14} /> Cancel
+                </button>
+                <button className="btn btn-primary" style={{ flex: 1 }} onClick={shiftAction === 'open' ? handleOpenShift : handleCloseShift}>
+                  <Check size={14} /> {shiftAction === 'open' ? 'Open Shift' : 'Close Shift'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCashModal && (
+        <div className="modal-overlay pos-print-hide" onClick={() => setShowCashModal(false)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(event) => event.stopPropagation()}>
+            <div style={{ padding: '20px 20px 0' }}>
+              <h3 style={{ fontSize: 16, fontWeight: 800, color: '#0F172A', marginBottom: 4 }}>
+                {cashAction === 'cash_in' ? 'Cash In' : 'Cash Out'}
+              </h3>
+              <p style={{ fontSize: 12, color: '#64748B', marginBottom: 12 }}>
+                {cashAction === 'cash_in'
+                  ? 'Add cash to the drawer (e.g. change fund refill).'
+                  : 'Remove cash from the drawer (e.g. drop to safe).'}
+              </p>
+              <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>Amount (PHP)</label>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                placeholder="0.00"
+                value={cashAmount}
+                onChange={(event) => setCashAmount(event.target.value)}
+                style={{ height: 44, fontSize: 18, fontWeight: 700, borderRadius: 12, marginBottom: 12 }}
+              />
+              <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>Note (optional)</label>
+              <input
+                className="input"
+                placeholder={cashAction === 'cash_in' ? 'Reason for adding cash' : 'Reason for removing cash'}
+                value={cashNote}
+                onChange={(event) => setCashNote(event.target.value)}
+                style={{ height: 42, borderRadius: 12, marginBottom: 16 }}
+              />
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setShowCashModal(false)}>
+                  <X size={14} /> Cancel
+                </button>
+                <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleCashMovement}>
+                  <Check size={14} /> {cashAction === 'cash_in' ? 'Add Cash' : 'Remove Cash'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showVoidModal && (
+        <div className="modal-overlay pos-print-hide" onClick={() => setShowVoidModal(false)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(event) => event.stopPropagation()}>
+            <div style={{ padding: '20px 20px 0' }}>
+              <h3 style={{ fontSize: 16, fontWeight: 800, color: '#B91C1C', marginBottom: 4 }}>Void Transaction</h3>
+              <p style={{ fontSize: 12, color: '#64748B', marginBottom: 12 }}>
+                This will cancel {targetTx?.receipt_number ?? 'this transaction'} and restore the stock. This action cannot be undone.
+              </p>
+              <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>Reason for voiding</label>
+              <input
+                className="input"
+                placeholder="e.g. Customer changed mind"
+                value={voidReason}
+                onChange={(event) => setVoidReason(event.target.value)}
+                style={{ height: 42, borderRadius: 12, marginBottom: 16 }}
+              />
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setShowVoidModal(false); setTargetTx(null); setVoidReason('') }}>
+                  <X size={14} /> Cancel
+                </button>
+                <button className="btn btn-danger" style={{ flex: 1 }} onClick={confirmVoid}>
+                  <Trash2 size={14} /> Void
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showRefundModal && (
+        <div className="modal-overlay pos-print-hide" onClick={() => setShowRefundModal(false)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(event) => event.stopPropagation()}>
+            <div style={{ padding: '20px 20px 0' }}>
+              <h3 style={{ fontSize: 16, fontWeight: 800, color: '#047857', marginBottom: 4 }}>Process Refund</h3>
+              <p style={{ fontSize: 12, color: '#64748B', marginBottom: 12 }}>
+                This will refund {targetTx?.receipt_number ?? 'this transaction'} and restore the stock to inventory.
+              </p>
+              <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>Reason for refund</label>
+              <input
+                className="input"
+                placeholder="e.g. Item defective"
+                value={refundReason}
+                onChange={(event) => setRefundReason(event.target.value)}
+                style={{ height: 42, borderRadius: 12, marginBottom: 16 }}
+              />
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setShowRefundModal(false); setTargetTx(null); setRefundReason('') }}>
+                  <X size={14} /> Cancel
+                </button>
+                <button className="btn btn-primary" style={{ flex: 1 }} onClick={confirmRefund}>
+                  <Repeat size={14} /> Refund
+                </button>
+              </div>
             </div>
           </div>
         </div>

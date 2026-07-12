@@ -1,11 +1,17 @@
 'use client'
 
-import Link from 'next/link'
 import { useMemo, useRef, useState, type ChangeEvent } from 'react'
-import { AlertTriangle, Edit2, Package, Plus, Save, Search, Trash2, Upload, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeftRight, Edit2, Package, Plus, Save, Search, Trash2, Upload, X } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { useDemoSystem } from '@/components/demo-system-provider'
+import { formatTimestamp } from '@/lib/utils'
 import type { ProductDraft } from '@/lib/demo-system'
+import type { InventoryLot } from '@/types/database'
+import { useTableState, type SortDirection } from '@/lib/use-table-state'
+import { TableToolbar, type ToolbarFilter } from '@/components/ui/table/TableToolbar'
+import { SortHeader } from '@/components/ui/table/SortHeader'
+import { Pagination } from '@/components/ui/table/Pagination'
+import { SelectAllCheckbox, RowCheckbox, BulkActionBar } from '@/components/ui/table/TableSelection'
 
 type ProductForm = {
   item_code: string
@@ -19,6 +25,7 @@ type ProductForm = {
   supplier: string
   location: string
   description: string
+  finishedGood: boolean
 }
 
 const EMPTY_FORM: ProductForm = {
@@ -33,6 +40,34 @@ const EMPTY_FORM: ProductForm = {
   supplier: '',
   location: '',
   description: '',
+  finishedGood: false,
+}
+
+type LocationStock = { locationId: string; name: string; quantity: number }
+
+function StockLocationBreakdown({ items }: { items: LocationStock[] }) {
+  if (items.length <= 1) return null
+  return (
+    <div style={{ marginTop: 5, display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-end', fontSize: 10, color: '#64748B', lineHeight: 1.3 }}>
+      {items.map((item) => (
+        <div key={item.locationId} style={{ display: 'flex', gap: 5, alignItems: 'baseline', justifyContent: 'flex-end' }}>
+          <strong style={{ color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>{item.quantity}</strong>
+          <span style={{ textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>@ {item.name}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function MultiSiteBadge() {
+  return (
+    <span
+      className="badge"
+      style={{ fontSize: 9, fontWeight: 800, background: '#EFF6FF', color: '#3B82F6' }}
+    >
+      multi-site
+    </span>
+  )
 }
 
 const IMPORT_COLUMNS = [
@@ -127,20 +162,26 @@ function normalizeImportRow(row: Record<string, unknown> | unknown[]): ProductDr
 }
 
 export default function InventoryPage() {
-  const { state, saveProduct, removeProduct, importProductRows, recordWaste, formatCurrency, notifySuccess, notifyError } = useDemoSystem()
-  const [search, setSearch] = useState('')
-  const [filterCat, setFilterCat] = useState('all')
-  const [filterStatus, setFilterStatus] = useState('all')
+  const { state, saveProduct, removeProduct, removeProducts, importProductRows, recordWaste, transferStock, formatCurrency, notifySuccess, notifyError } = useDemoSystem()
+  const isProduction = state.tenant.enable_production ?? false
   const [showModal, setShowModal] = useState(false)
   const [showImportModal, setShowImportModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<ProductForm>(EMPTY_FORM)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [bulkConfirm, setBulkConfirm] = useState(false)
   const [importRows, setImportRows] = useState<ProductDraft[]>([])
   const [wasteModal, setWasteModal] = useState<string | null>(null)
   const [wasteType, setWasteType] = useState<'waste' | 'defect' | 'reject'>('waste')
   const [wasteQty, setWasteQty] = useState('')
   const [wasteReason, setWasteReason] = useState('')
+  const [lotsModal, setLotsModal] = useState<string | null>(null)
+  const [transferModal, setTransferModal] = useState<string | null>(null)
+  const [warningsModal, setWarningsModal] = useState(false)
+  const [wasteSummaryModal, setWasteSummaryModal] = useState<WasteType | 'all' | null>(null)
+  const [transferTo, setTransferTo] = useState('')
+  const [transferQty, setTransferQty] = useState('')
+  const [transferNotes, setTransferNotes] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
   const WASTE_TYPES = ['waste', 'defect', 'reject'] as const
@@ -157,6 +198,24 @@ export default function InventoryPage() {
     }
     return map
   }, [state.stockMovements])
+
+  const stockByLocation = useMemo(() => {
+    const map = new Map<string, { locationId: string; name: string; quantity: number }[]>()
+    const nameFor = (locationId: string | null) =>
+      state.locations.find((location) => location.id === locationId)?.name ?? 'Unassigned'
+    for (const lot of state.inventoryLots) {
+      const quantity = Number(lot.quantity ?? 0)
+      if (quantity <= 0) continue
+      const key = lot.location_id ?? 'unassigned'
+      const arr = map.get(lot.product_id) ?? []
+      const existing = arr.find((entry) => entry.locationId === key)
+      if (existing) existing.quantity += quantity
+      else arr.push({ locationId: key, name: nameFor(lot.location_id), quantity })
+      map.set(lot.product_id, arr)
+    }
+    for (const arr of map.values()) arr.sort((a, b) => b.quantity - a.quantity)
+    return map
+  }, [state.inventoryLots, state.locations])
 
   const wasteTotals = useMemo(() => {
     let waste = 0
@@ -176,17 +235,112 @@ export default function InventoryPage() {
     return { waste, defect, reject, value, total: waste + defect + reject }
   }, [state.stockMovements, state.products])
 
+  const wasteItems = useMemo(() => {
+    const productFor = (movement: (typeof state.stockMovements)[number]) =>
+      movement.product ?? state.products.find((product) => product.id === movement.product_id)
+    return state.stockMovements
+      .filter((movement) => WASTE_TYPES.includes(movement.movement_type as WasteType))
+      .map((movement) => ({
+        id: movement.id,
+        type: movement.movement_type as WasteType,
+        quantity: Number(movement.quantity ?? 0),
+        notes: movement.notes ?? '',
+        created_at: movement.created_at,
+        product: productFor(movement),
+      }))
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  }, [state.stockMovements, state.products])
+
   const products = state.products
   const lowStockCount = products.filter((product) => product.is_active && product.quantity_on_hand > 0 && product.quantity_on_hand <= product.reorder_point).length
   const outOfStockCount = products.filter((product) => product.is_active && product.quantity_on_hand === 0).length
-  const categories = useMemo(() => ['all', ...state.categories.map((category) => category.name)], [state.categories])
-  const filtered = products.filter((product) => {
-    const status = product.quantity_on_hand === 0 ? 'out' : product.quantity_on_hand <= product.reorder_point ? 'low' : 'ok'
-    const matchSearch = product.name.toLowerCase().includes(search.toLowerCase()) || product.item_code.toLowerCase().includes(search.toLowerCase())
-    const matchCat = filterCat === 'all' || product.category_id === state.categories.find((category) => category.name === filterCat)?.id || product.category?.name === filterCat
-    const matchStatus = filterStatus === 'all' || filterStatus === status || (filterStatus === 'waste' && ((wasteByProduct.get(product.id)?.total) ?? 0) > 0)
-    return matchSearch && matchCat && matchStatus
+  const lowStockItems = products.filter((product) => product.is_active && product.quantity_on_hand > 0 && product.quantity_on_hand <= product.reorder_point)
+  const outOfStockItems = products.filter((product) => product.is_active && product.quantity_on_hand === 0)
+  const categoryNames = useMemo(() => ['all', ...state.categories.map((category) => category.name)], [state.categories])
+
+  const productRows = useMemo(() => {
+    return products.map((product) => {
+      const status = product.quantity_on_hand === 0 ? 'out' : product.quantity_on_hand <= product.reorder_point ? 'low' : 'ok'
+      const waste = wasteByProduct.get(product.id)?.total ?? 0
+      return {
+        id: product.id,
+        item_code: product.item_code,
+        name: product.name,
+        categoryName: product.category?.name ?? 'Uncategorized',
+        supplierName: product.supplier?.name ?? '',
+        uom: product.uom?.abbreviation ?? 'pcs',
+        onHand: product.quantity_on_hand,
+        reorder: product.reorder_point,
+        unitCost: Number(product.unit_cost ?? 0),
+        price: Number(product.selling_price ?? 0),
+        locationName: product.location?.name ?? 'Unassigned',
+        wasteTotal: waste,
+        status: waste > 0 ? 'waste' : status,
+      }
+    })
+  }, [products, wasteByProduct])
+
+  const productById = useMemo(() => {
+    const map = new Map(products.map((product) => [product.id, product]))
+    return map
+  }, [products])
+
+  const table = useTableState({
+    data: productRows,
+    initialPageSize: 10,
+    searchKeys: (row) => [String(row.name), String(row.item_code), String(row.supplierName), String(row.categoryName)],
+    filterFields: [
+      {
+        key: 'category',
+        label: 'Category',
+        options: categoryNames.map((name) => ({ value: name, label: name === 'all' ? 'All Categories' : name })),
+        getValue: (row) => String(row.categoryName),
+      },
+      {
+        key: 'status',
+        label: 'Status',
+        options: [
+          { value: 'all', label: 'All Status' },
+          { value: 'ok', label: 'In Stock' },
+          { value: 'low', label: 'Low Stock' },
+          { value: 'out', label: 'Out of Stock' },
+          { value: 'waste', label: 'Waste / Defect' },
+        ],
+        getValue: (row) => String(row.status),
+      },
+    ],
   })
+
+  const filtered = table.sortedAndFiltered
+  const filters: ToolbarFilter[] = [
+    {
+      key: 'category',
+      label: 'Category',
+      value: table.filters.category,
+      onChange: (value) => table.setFilter('category', value),
+      options: categoryNames.map((name) => ({ value: name, label: name === 'all' ? 'All Categories' : name })),
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      value: table.filters.status,
+      onChange: (value) => table.setFilter('status', value),
+      options: [
+        { value: 'all', label: 'All Status' },
+        { value: 'ok', label: 'In Stock' },
+        { value: 'low', label: 'Low Stock' },
+        { value: 'out', label: 'Out of Stock' },
+        { value: 'waste', label: 'Waste / Defect' },
+      ],
+    },
+  ]
+
+  function handleDeleteSelected() {
+    removeProducts(table.selectedIds)
+    notifySuccess(`Deleted ${table.selectedCount} item${table.selectedCount === 1 ? '' : 's'} successfully.`)
+    table.clearSelection()
+    setBulkConfirm(false)
+  }
 
   function resetForm(product?: (typeof state.products)[number]) {
     if (!product) {
@@ -206,6 +360,7 @@ export default function InventoryPage() {
       supplier: product.supplier?.name ?? state.suppliers.find((supplier) => supplier.id === product.supplier_id)?.name ?? '',
       location: product.location?.name ?? state.locations.find((location) => location.id === product.location_id)?.name ?? '',
       description: product.description ?? '',
+      finishedGood: product.is_finished_good ?? false,
     })
   }
 
@@ -234,6 +389,7 @@ export default function InventoryPage() {
       supplier: input.supplier.trim(),
       location: input.location.trim(),
       description: input.description.trim(),
+      is_finished_good: input.finishedGood,
     }
   }
 
@@ -262,8 +418,59 @@ export default function InventoryPage() {
 
   function closeWaste() {
     setWasteModal(null)
+    setWasteType('waste')
     setWasteQty('')
     setWasteReason('')
+  }
+
+  function openLots(product: (typeof state.products)[number]) {
+    setLotsModal(product.id)
+  }
+
+  function closeLots() {
+    setLotsModal(null)
+  }
+
+  function openTransfer(product: (typeof state.products)[number]) {
+    setTransferModal(product.id)
+    setTransferTo('')
+    setTransferQty('')
+    setTransferNotes('')
+  }
+
+  function closeTransfer() {
+    setTransferModal(null)
+    setTransferTo('')
+    setTransferQty('')
+    setTransferNotes('')
+  }
+
+  function handleTransfer() {
+    if (!transferModal) return
+    const product = state.products.find((entry) => entry.id === transferModal)
+    const quantity = Number(transferQty) || 0
+    if (!product || quantity <= 0) {
+      notifyError('Enter a quantity greater than 0.')
+      return
+    }
+    if (transferTo && transferTo === product.location_id) {
+      notifyError('Destination must be a different location.')
+      return
+    }
+    const sourceLocationId = product.location_id ?? product.location?.id ?? null
+    if (!sourceLocationId) {
+      notifyError('This product has no assigned location. Set one via Edit → Location first.')
+      return
+    }
+    transferStock({
+      productId: product.id,
+      fromLocationId: sourceLocationId,
+      toLocationId: transferTo || null,
+      quantity,
+      notes: transferNotes.trim() || undefined,
+    })
+    notifySuccess(`Transferred ${quantity} × ${product.name}.`)
+    closeTransfer()
   }
 
   function handleLogWaste() {
@@ -315,7 +522,13 @@ export default function InventoryPage() {
   return (
     <div>
       {(lowStockCount > 0 || outOfStockCount > 0) && (
-        <Link href="/dashboard/movements" style={{ textDecoration: 'none', display: 'block', marginBottom: 16 }}>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => setWarningsModal(true)}
+          onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setWarningsModal(true) } }}
+          style={{ textDecoration: 'none', display: 'block', marginBottom: 16, cursor: 'pointer', outline: 'none' }}
+        >
           <div className="card" style={{ padding: '14px 16px', borderRadius: 16, border: '1px solid #FECACA', background: 'linear-gradient(135deg, #FEF2F2 0%, #FFF7ED 100%)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, boxShadow: '0 12px 30px rgba(239, 68, 68, 0.10)' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
               <div style={{ width: 36, height: 36, borderRadius: 10, background: '#DC262614', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -326,19 +539,19 @@ export default function InventoryPage() {
                 <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginTop: 3 }}>
                   {lowStockCount} low-stock item{lowStockCount === 1 ? '' : 's'} and {outOfStockCount} out-of-stock item{outOfStockCount === 1 ? '' : 's'} need attention.
                 </div>
-                <div style={{ fontSize: 11, color: '#475569', marginTop: 4 }}>Click to review movements and prevent missed restocks.</div>
+                <div style={{ fontSize: 11, color: '#475569', marginTop: 4 }}>Click to view the affected items.</div>
               </div>
             </div>
             <span className="badge" style={{ background: '#DC262614', color: '#DC2626', fontSize: 10, flexShrink: 0 }}>View warnings</span>
           </div>
-        </Link>
+        </div>
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h2 style={{ fontSize: 22, fontWeight: 800, color: '#0F172A', letterSpacing: '-0.03em' }}>Inventory</h2>
           <p style={{ color: '#475569', fontSize: 13, marginTop: 4 }}>
-            {filtered.length} of {products.length} items
+            {table.totalItems} of {products.length} items
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -352,27 +565,21 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      <div className="card inventory-toolbar" style={{ padding: '12px 16px', marginBottom: 16, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-        <div style={{ position: 'relative', flex: 1, minWidth: 220 }}>
-          <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
-          <input className="input" placeholder="Search by name or item code..." value={search} onChange={(event) => setSearch(event.target.value)} style={{ paddingLeft: 36, height: 36, fontSize: 13 }} />
-        </div>
-        <select className="input" value={filterCat} onChange={(event) => setFilterCat(event.target.value)} style={{ width: 'auto', height: 36, fontSize: 13 }}>
-          <option value="all">All Categories</option>
-          {categories.slice(1).map((category) => (
-            <option key={category} value={category}>
-              {category}
-            </option>
-          ))}
-        </select>
-        <select className="input" value={filterStatus} onChange={(event) => setFilterStatus(event.target.value)} style={{ width: 'auto', height: 36, fontSize: 13 }}>
-          <option value="all">All Status</option>
-          <option value="ok">In Stock</option>
-          <option value="low">Low Stock</option>
-          <option value="out">Out of Stock</option>
-          <option value="waste">Waste / Defect</option>
-        </select>
-      </div>
+      <TableToolbar
+        search={table.search}
+        onSearch={table.setSearch}
+        searchPlaceholder="Search by name, item code, or supplier..."
+        filters={filters}
+        showReset={table.totalItems !== products.length || Boolean(table.search)}
+        onReset={table.resetFilters}
+      />
+
+      <BulkActionBar
+        count={table.selectedCount}
+        onClear={table.clearSelection}
+        onDelete={() => setBulkConfirm(true)}
+        deleteLabel={`Delete ${table.selectedCount} selected`}
+      />
 
       <div className="card" style={{ padding: 16, borderRadius: 16, marginBottom: 16, border: '1px solid #FEE2E2', background: 'linear-gradient(135deg, #FFF7F7 0%, #FFFDF5 100%)' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
@@ -387,16 +594,29 @@ export default function InventoryPage() {
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             {[
-              { label: 'Waste', value: wasteTotals.waste, color: '#EF4444' },
-              { label: 'Defect', value: wasteTotals.defect, color: '#F59E0B' },
-              { label: 'Reject', value: wasteTotals.reject, color: '#8B5CF6' },
+              { label: 'Waste', value: wasteTotals.waste, color: '#EF4444', type: 'waste' as const },
+              { label: 'Defect', value: wasteTotals.defect, color: '#F59E0B', type: 'defect' as const },
+              { label: 'Reject', value: wasteTotals.reject, color: '#8B5CF6', type: 'reject' as const },
             ].map((stat) => (
-              <div key={stat.label} style={{ padding: '8px 14px', borderRadius: 12, background: '#FFFFFF', border: '1px solid #F1D4D4', textAlign: 'center', minWidth: 78 }}>
+              <div
+                key={stat.label}
+                role="button"
+                tabIndex={0}
+                onClick={() => setWasteSummaryModal(stat.type)}
+                onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setWasteSummaryModal(stat.type) } }}
+                style={{ padding: '8px 14px', borderRadius: 12, background: '#FFFFFF', border: '1px solid #F1D4D4', textAlign: 'center', minWidth: 78, cursor: 'pointer', outline: 'none' }}
+              >
                 <div style={{ fontSize: 18, fontWeight: 900, color: stat.color, lineHeight: 1 }}>{stat.value}</div>
                 <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>{stat.label}</div>
               </div>
             ))}
-            <div style={{ padding: '8px 14px', borderRadius: 12, background: '#FFFFFF', border: '1px solid #F1D4D4', textAlign: 'center', minWidth: 96 }}>
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => setWasteSummaryModal('all')}
+              onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setWasteSummaryModal('all') } }}
+              style={{ padding: '8px 14px', borderRadius: 12, background: '#FFFFFF', border: '1px solid #F1D4D4', textAlign: 'center', minWidth: 96, cursor: 'pointer', outline: 'none' }}
+            >
               <div style={{ fontSize: 18, fontWeight: 900, color: '#0F172A', lineHeight: 1 }}>{formatCurrency(wasteTotals.value)}</div>
               <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>Est. loss</div>
             </div>
@@ -406,50 +626,73 @@ export default function InventoryPage() {
 
       <div className="card table-scroll inventory-desktop-table" style={{ overflow: 'hidden' }}>
         <table className="data-table">
-          <thead>
-            <tr>
-              <th>Item Code</th>
-              <th>Product Name</th>
-              <th>Category</th>
+          <thead><tr>
+              <th style={{ width: 36 }}>
+                <SelectAllCheckbox
+                  checked={table.isAllFilteredSelected}
+                  indeterminate={table.isSomeFilteredSelected}
+                  onToggle={table.selectAllFiltered}
+                  disabled={table.totalItems === 0}
+                />
+              </th>
+              <SortHeader label="Item Code" column="item_code" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
+              <SortHeader label="Product Name" column="name" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
+              <SortHeader label="Category" column="categoryName" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
               <th>Supplier</th>
               <th>UOM</th>
-              <th>On Hand</th>
-              <th>Reorder</th>
-              <th>Unit Cost</th>
-              <th>Selling Price</th>
+              <SortHeader label="On Hand" column="onHand" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} align="right" />
+              <SortHeader label="Reorder" column="reorder" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} align="right" />
+              <SortHeader label="Unit Cost" column="unitCost" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} align="right" />
+              <SortHeader label="Selling Price" column="price" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} align="right" />
               <th>Location</th>
-              <th>Waste</th>
-              <th>Status</th>
-              <th style={{ width: 80 }} />
-            </tr>
-          </thead>
+              <SortHeader label="Waste" column="wasteTotal" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} align="right" />
+              <SortHeader label="Status" column="status" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
+              <th style={{ width: 80, textAlign: 'right' }}>Action</th>
+            </tr></thead>
           <tbody>
-            {filtered.map((product) => {
+            {table.paginated.map((row) => {
+              const product = productById.get(String(row.id))!
+              const isSelected = table.selected.has(product.id)
               const status = product.quantity_on_hand === 0 ? 'out' : product.quantity_on_hand <= product.reorder_point ? 'low' : 'ok'
               const statusColor = status === 'out' ? '#EF4444' : status === 'low' ? '#F59E0B' : '#10B981'
               const statusLabel = status === 'out' ? 'Out of Stock' : status === 'low' ? 'Low Stock' : 'In Stock'
               return (
-                <tr key={product.id}>
+                <tr key={product.id} style={isSelected ? { background: '#EFF6FF' } : undefined}>
+                  <td>
+                    <RowCheckbox checked={isSelected} onToggle={() => table.toggleSelect(product.id)} />
+                  </td>
                   <td>
                     <code style={{ fontSize: 11, background: '#EFF6FF', padding: '2px 6px', borderRadius: 4, color: '#3B82F6' }}>{product.item_code}</code>
                   </td>
                   <td>
-                    <div style={{ fontWeight: 600, color: '#0F172A' }}>{product.name}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 600, color: '#0F172A' }}>{product.name}</span>
+                      {isProduction && product.is_finished_good && (
+                        <span className="badge badge-purple" style={{ fontSize: 9 }}>Finished Good</span>
+                      )}
+                    </div>
                     <div style={{ fontSize: 11, color: '#64748B' }}>{product.supplier?.name ?? 'No supplier'}</div>
                   </td>
                   <td><span className="badge badge-blue" style={{ fontSize: 10 }}>{product.category?.name ?? 'Uncategorized'}</span></td>
                   <td style={{ color: '#475569', fontSize: 12 }}>{product.supplier?.name ?? 'No supplier'}</td>
                   <td style={{ color: '#475569' }}>{product.uom?.abbreviation ?? 'pcs'}</td>
-                  <td>
-                    <span style={{ fontWeight: 700, color: statusColor, fontSize: 15 }}>{product.quantity_on_hand}</span>
-                    <div style={{ marginTop: 3, width: 48, height: 3, background: '#E2E8F0', borderRadius: 2 }}>
+                  <td style={{ textAlign: 'right' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 700, color: statusColor, fontSize: 15 }}>{product.quantity_on_hand}</span>
+                      {(stockByLocation.get(product.id)?.length ?? 0) > 1 && <MultiSiteBadge />}
+                    </div>
+                    <div style={{ marginTop: 3, width: 48, height: 3, marginLeft: 'auto', background: '#E2E8F0', borderRadius: 2 }}>
                       <div style={{ height: '100%', borderRadius: 2, background: statusColor, width: `${Math.min((product.quantity_on_hand / Math.max(product.reorder_point * 4, 1)) * 100, 100)}%` }} />
                     </div>
+                    <StockLocationBreakdown items={stockByLocation.get(product.id) ?? []} />
                   </td>
                   <td style={{ color: '#475569' }}>{product.reorder_point}</td>
                   <td style={{ color: '#0F172A' }}>{formatCurrency(Number(product.unit_cost ?? 0))}</td>
                   <td style={{ color: '#10B981', fontWeight: 600 }}>{formatCurrency(Number(product.selling_price ?? 0))}</td>
-                  <td style={{ color: '#475569', fontSize: 12 }}>{product.location?.name ?? 'Main Storage'}</td>
+                  <td style={{ color: '#475569', fontSize: 12 }}>
+                    {product.location?.name ?? 'Unassigned'}
+                    {(stockByLocation.get(product.id)?.length ?? 0) > 1 && <MultiSiteBadge />}
+                  </td>
                   <td>
                     {(() => {
                       const waste = wasteByProduct.get(product.id)
@@ -466,18 +709,20 @@ export default function InventoryPage() {
                   </td>
                   <td><span className="badge" style={{ background: `${statusColor}14`, color: statusColor }}>{statusLabel}</span></td>
                    <td>
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      <button className="btn btn-ghost btn-sm" onClick={() => openEdit(product)} style={{ padding: '4px 8px' }}><Edit2 size={13} /></button>
-                      <button className="btn btn-danger btn-sm" onClick={() => setDeleteConfirm(product.id)} style={{ padding: '4px 8px' }}><Trash2 size={13} /></button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => openWaste(product)} style={{ padding: '4px 8px', color: '#DC2626' }} title="Log waste / defect / reject"><AlertTriangle size={13} /></button>
-                    </div>
-                  </td>
+                     <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                       <button className="btn btn-ghost btn-sm" onClick={() => openEdit(product)} style={{ padding: '4px 8px' }}><Edit2 size={13} /></button>
+                       <button className="btn btn-ghost btn-sm" onClick={() => openLots(product)} style={{ padding: '4px 8px' }} title="View FIFO lots"><Package size={13} /></button>
+                       <button className="btn btn-danger btn-sm" onClick={() => setDeleteConfirm(product.id)} style={{ padding: '4px 8px' }}><Trash2 size={13} /></button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => openWaste(product)} style={{ padding: '4px 8px', color: '#DC2626' }} title="Log waste / defect / reject"><AlertTriangle size={13} /></button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => openTransfer(product)} style={{ padding: '4px 8px', color: '#0EA5E9' }} title="Transfer stock to another location"><ArrowLeftRight size={13} /></button>
+                     </div>
+                   </td>
                 </tr>
               )
             })}
-            {filtered.length === 0 && (
+            {table.paginated.length === 0 && (
               <tr>
-                <td colSpan={13} style={{ textAlign: 'center', padding: 48, color: '#94A3B8' }}>
+                <td colSpan={14} style={{ textAlign: 'center', padding: 48, color: '#94A3B8' }}>
                   <Package size={32} style={{ marginBottom: 8, opacity: 0.35 }} />
                   <p>No items found</p>
                 </td>
@@ -487,18 +732,41 @@ export default function InventoryPage() {
         </table>
       </div>
 
+      <Pagination
+        page={table.page}
+        totalPages={table.totalPages}
+        onPageChange={table.setPage}
+        pageSize={table.pageSize}
+        onPageSizeChange={table.setPageSize}
+        rangeStart={table.range.start}
+        rangeEnd={table.range.end}
+        totalItems={table.totalItems}
+      />
+
       <div className="inventory-mobile-list">
-        {filtered.map((product) => {
+        {table.paginated.map((row) => {
+          const product = productById.get(String(row.id))!
+          const isSelected = table.selected.has(product.id)
           const status = product.quantity_on_hand === 0 ? 'out' : product.quantity_on_hand <= product.reorder_point ? 'low' : 'ok'
           const statusColor = status === 'out' ? '#EF4444' : status === 'low' ? '#F59E0B' : '#10B981'
           const statusLabel = status === 'out' ? 'Out of Stock' : status === 'low' ? 'Low Stock' : 'In Stock'
 
           return (
-            <div key={product.id} className="card" style={{ padding: 14, borderRadius: 16 }}>
+            <div key={product.id} className="card" style={{ padding: 14, borderRadius: 16, border: isSelected ? '1px solid #3B82F6' : undefined }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 800, color: '#0F172A', lineHeight: 1.25 }}>{product.name}</div>
-                  <div style={{ marginTop: 4, fontSize: 11, color: '#64748B' }}>{product.item_code} · {product.supplier?.name ?? 'No supplier'}</div>
+                <div style={{ minWidth: 0, display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                  <div style={{ paddingTop: 2 }}>
+                    <RowCheckbox checked={isSelected} onToggle={() => table.toggleSelect(product.id)} />
+                  </div>
+                   <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 800, color: '#0F172A', lineHeight: 1.25 }}>
+                      {product.name}
+                      {isProduction && product.is_finished_good && (
+                        <span className="badge badge-purple" style={{ fontSize: 9, marginLeft: 6, verticalAlign: 'middle' }}>Finished Good</span>
+                      )}
+                    </div>
+                    <div style={{ marginTop: 4, fontSize: 11, color: '#64748B' }}>{product.item_code} · {product.supplier?.name ?? 'No supplier'}</div>
+                  </div>
                 </div>
                 <span className="badge" style={{ background: `${statusColor}14`, color: statusColor, flexShrink: 0 }}>{statusLabel}</span>
               </div>
@@ -510,11 +778,15 @@ export default function InventoryPage() {
                 </div>
                 <div style={{ padding: 12, borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
                   <div style={{ color: '#94A3B8' }}>Location</div>
-                  <div style={{ marginTop: 4, fontWeight: 700, color: '#0F172A' }}>{product.location?.name ?? 'Main Storage'}</div>
+                  <div style={{ marginTop: 4, fontWeight: 700, color: '#0F172A' }}>
+                    {product.location?.name ?? 'Unassigned'}
+                    {(stockByLocation.get(product.id)?.length ?? 0) > 1 && <MultiSiteBadge />}
+                  </div>
                 </div>
                 <div style={{ padding: 12, borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
                   <div style={{ color: '#94A3B8' }}>On hand</div>
                   <div style={{ marginTop: 4, fontWeight: 800, color: statusColor }}>{product.quantity_on_hand}</div>
+                  <StockLocationBreakdown items={stockByLocation.get(product.id) ?? []} />
                 </div>
                 <div style={{ padding: 12, borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
                   <div style={{ color: '#94A3B8' }}>Reorder</div>
@@ -551,8 +823,14 @@ export default function InventoryPage() {
                 <button className="btn btn-ghost btn-sm" onClick={() => openEdit(product)} style={{ flex: 1, justifyContent: 'center' }}>
                   <Edit2 size={13} /> Edit
                 </button>
+                <button className="btn btn-ghost btn-sm" onClick={() => openLots(product)} style={{ flex: 1, justifyContent: 'center' }}>
+                  <Package size={13} /> Lots
+                </button>
                 <button className="btn btn-ghost btn-sm" onClick={() => openWaste(product)} style={{ flex: 1, justifyContent: 'center', color: '#DC2626' }}>
                   <AlertTriangle size={13} /> Log Waste
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={() => openTransfer(product)} style={{ flex: 1, justifyContent: 'center', color: '#0EA5E9' }}>
+                  <ArrowLeftRight size={13} /> Transfer
                 </button>
                 <button className="btn btn-danger btn-sm" onClick={() => setDeleteConfirm(product.id)} style={{ flex: 1, justifyContent: 'center' }}>
                   <Trash2 size={13} /> Delete
@@ -562,7 +840,7 @@ export default function InventoryPage() {
           )
         })}
 
-        {filtered.length === 0 && (
+        {table.paginated.length === 0 && (
           <div className="card" style={{ padding: 24, textAlign: 'center', color: '#94A3B8' }}>
             <Package size={28} style={{ marginBottom: 8, opacity: 0.35 }} />
             <p>No items found</p>
@@ -585,7 +863,7 @@ export default function InventoryPage() {
               ].map(({ label, key, placeholder }) => (
                 <div key={key}>
                   <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>{label}</label>
-                  <input className="input" placeholder={placeholder} value={form[key as keyof ProductForm]} onChange={(event) => setForm((current) => ({ ...current, [key]: event.target.value }))} />
+                  <input className="input" placeholder={placeholder} value={form[key as keyof ProductForm] as string} onChange={(event) => setForm((current) => ({ ...current, [key]: event.target.value }))} />
                 </div>
               ))}
 
@@ -652,7 +930,7 @@ export default function InventoryPage() {
               ].map(({ label, key, placeholder }) => (
                 <div key={key}>
                   <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>{label}</label>
-                  <input className="input" type="number" placeholder={placeholder} value={form[key as keyof ProductForm]} onChange={(event) => setForm((current) => ({ ...current, [key]: event.target.value }))} />
+                  <input className="input" type="number" placeholder={placeholder} value={form[key as keyof ProductForm] as string} onChange={(event) => setForm((current) => ({ ...current, [key]: event.target.value }))} />
                 </div>
               ))}
 
@@ -660,11 +938,56 @@ export default function InventoryPage() {
                 <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>Description (optional)</label>
                 <textarea className="input" placeholder="Product description..." value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} style={{ height: 70, resize: 'none' }} />
               </div>
+
+              {isProduction && (
+                <div style={{ gridColumn: '1/-1', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 14px', borderRadius: 12, background: '#FAF5FF', border: '1px solid #E9D5FF' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>Finished Good</div>
+                    <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>Mark as a product you manufacture and sell. Only finished goods are sellable at the POS; raw materials are for production only.</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setForm((current) => ({ ...current, finishedGood: !current.finishedGood }))}
+                    style={{
+                      flexShrink: 0,
+                      width: 46,
+                      height: 26,
+                      borderRadius: 999,
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: 3,
+                      background: form.finishedGood ? '#8B5CF6' : '#CBD5E1',
+                      display: 'flex',
+                      justifyContent: form.finishedGood ? 'flex-end' : 'flex-start',
+                      transition: 'background 0.15s',
+                    }}
+                    aria-pressed={form.finishedGood}
+                  >
+                    <span style={{ width: 20, height: 20, borderRadius: '50%', background: '#fff' }} />
+                  </button>
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 20 }}>
               <button className="btn btn-ghost" onClick={() => setShowModal(false)}>Cancel</button>
               <button className="btn btn-primary" onClick={handleSave}><Save size={15} />{editingId ? 'Save Changes' : 'Add Item'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {bulkConfirm && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ maxWidth: 400, textAlign: 'center' }}>
+            <div style={{ width: 52, height: 52, borderRadius: '50%', background: '#FEE2E2', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+              <AlertTriangle size={24} color="#EF4444" />
+            </div>
+            <h3 style={{ fontSize: 17, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>Delete {table.selectedCount} items?</h3>
+            <p style={{ fontSize: 13, color: '#475569', marginBottom: 24 }}>This action cannot be undone. The selected items will be permanently removed from your inventory.</p>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+              <button className="btn btn-ghost" onClick={() => setBulkConfirm(false)}>Cancel</button>
+              <button className="btn btn-danger" onClick={handleDeleteSelected}>Delete Items</button>
             </div>
           </div>
         </div>
@@ -768,6 +1091,194 @@ export default function InventoryPage() {
         )
       })()}
 
+      {warningsModal && (
+        <div className="modal-overlay" onClick={(event) => event.target === event.currentTarget && setWarningsModal(false)}>
+          <div className="modal" style={{ maxWidth: 520 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>Stock Warnings</h2>
+              <button onClick={() => setWarningsModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748B' }}><X size={20} /></button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
+              <div style={{ padding: '12px 14px', borderRadius: 12, background: '#FEF2F2', border: '1px solid #FECACA', textAlign: 'center' }}>
+                <div style={{ fontSize: 22, fontWeight: 900, color: '#F59E0B', lineHeight: 1 }}>{lowStockCount}</div>
+                <div style={{ fontSize: 12, color: '#92400E', marginTop: 4 }}>Low stock</div>
+              </div>
+              <div style={{ padding: '12px 14px', borderRadius: 12, background: '#FEF2F2', border: '1px solid #FECACA', textAlign: 'center' }}>
+                <div style={{ fontSize: 22, fontWeight: 900, color: '#EF4444', lineHeight: 1 }}>{outOfStockCount}</div>
+                <div style={{ fontSize: 12, color: '#92400E', marginTop: 4 }}>Out of stock</div>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gap: 10, maxHeight: 320, overflowY: 'auto' }}>
+              {outOfStockItems.map((product) => (
+                <div key={product.id} style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #FECACA' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{product.name}</div>
+                      <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>{product.item_code}</div>
+                    </div>
+                    <span className="badge" style={{ background: '#EF444414', color: '#EF4444', fontSize: 10, flexShrink: 0 }}>Out of stock</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#64748B', marginTop: 6 }}>On hand: 0 · Reorder point: {product.reorder_point}</div>
+                </div>
+              ))}
+              {lowStockItems.map((product) => (
+                <div key={product.id} style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #FEF3C7' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{product.name}</div>
+                      <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>{product.item_code}</div>
+                    </div>
+                    <span className="badge" style={{ background: '#F59E0B14', color: '#F59E0B', fontSize: 10, flexShrink: 0 }}>Low stock</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#64748B', marginTop: 6 }}>On hand: {product.quantity_on_hand} · Reorder point: {product.reorder_point}</div>
+                </div>
+              ))}
+              {lowStockCount === 0 && outOfStockCount === 0 && (
+                <p style={{ color: '#94A3B8', fontSize: 13, textAlign: 'center' }}>No warnings right now.</p>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 18 }}>
+              <button className="btn btn-ghost" onClick={() => setWarningsModal(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {wasteSummaryModal && (() => {
+        const title = wasteSummaryModal === 'all' ? 'Waste / Defect / Reject' : wasteSummaryModal.charAt(0).toUpperCase() + wasteSummaryModal.slice(1)
+        const color = wasteSummaryModal === 'waste' ? '#EF4444' : wasteSummaryModal === 'defect' ? '#F59E0B' : wasteSummaryModal === 'reject' ? '#8B5CF6' : '#0F172A'
+        const items = wasteSummaryModal === 'all' ? wasteItems : wasteItems.filter((entry) => entry.type === wasteSummaryModal)
+        return (
+          <div className="modal-overlay" onClick={(event) => event.target === event.currentTarget && setWasteSummaryModal(null)}>
+            <div className="modal" style={{ maxWidth: 520 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <h2 style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>{title} Items</h2>
+                <button onClick={() => setWasteSummaryModal(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748B' }}><X size={20} /></button>
+              </div>
+
+              <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #F1D4D4', marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 12, color: '#475569', fontWeight: 600 }}>Total entries</span>
+                <span style={{ fontSize: 14, fontWeight: 800, color }}>{items.length} item{items.length === 1 ? '' : 's'}</span>
+              </div>
+
+              <div style={{ display: 'grid', gap: 10, maxHeight: 320, overflowY: 'auto' }}>
+                {items.length === 0 ? (
+                  <p style={{ color: '#94A3B8', fontSize: 13, textAlign: 'center' }}>No {wasteSummaryModal === 'all' ? 'waste, defect or reject' : wasteSummaryModal} items recorded.</p>
+                ) : (
+                  items.map((entry) => {
+                    const itemColor = entry.type === 'waste' ? '#EF4444' : entry.type === 'defect' ? '#F59E0B' : '#8B5CF6'
+                    return (
+                      <div key={entry.id} style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{entry.product?.name ?? 'Unknown item'}</div>
+                            <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>{entry.product?.item_code ?? ''} · {formatTimestamp(entry.created_at)}</div>
+                          </div>
+                          <span className="badge" style={{ background: `${itemColor}14`, color: itemColor, fontSize: 10, flexShrink: 0 }}>{entry.type}</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: '#64748B', marginTop: 6 }}>Qty: {entry.quantity}{entry.notes ? ` · ${entry.notes}` : ''}</div>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 18 }}>
+                <button className="btn btn-ghost" onClick={() => setWasteSummaryModal(null)}>Close</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {transferModal && (() => {
+        const target = state.products.find((entry) => entry.id === transferModal)
+        if (!target) return null
+        const sourceLocationId = target.location_id ?? target.location?.id ?? null
+        const fromLoc = state.locations.find((loc) => loc.id === sourceLocationId)
+        const hasSource = Boolean(sourceLocationId)
+        const qty = Number(transferQty) || 0
+        const availableAtSource = (target.lots ?? [])
+          .filter((lot) => lot.location_id === sourceLocationId)
+          .reduce((sum, lot) => sum + Number(lot.quantity ?? 0), 0)
+        const maxQty = availableAtSource > 0 ? availableAtSource : Number(target.quantity_on_hand ?? 0)
+        return (
+          <div className="modal-overlay" onClick={(event) => event.target === event.currentTarget && closeTransfer()}>
+            <div className="modal" style={{ maxWidth: 460 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
+                <h2 style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>Transfer Stock</h2>
+                <button onClick={closeTransfer} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748B' }}><X size={20} /></button>
+              </div>
+
+              <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2', marginBottom: 16 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{target.name}</div>
+                <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>
+                  {target.item_code} · currently at {fromLoc?.name ?? 'Unassigned'} · {maxQty} available here
+                </div>
+                {!hasSource && (
+                  <div style={{ marginTop: 8, fontSize: 11, color: '#B45309', background: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: 8, padding: '6px 8px' }}>
+                    This product has no assigned location. Set one via Edit → Location, then open Transfer again.
+                  </div>
+                )}
+              </div>
+
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>From Location</label>
+                <input className="input" value={fromLoc?.name ?? 'Unassigned'} disabled style={{ height: 40, fontSize: 14, background: '#F1F5F9' }} />
+              </div>
+
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>To Location</label>
+                <select
+                  className="input"
+                  value={transferTo}
+                  onChange={(event) => setTransferTo(event.target.value)}
+                  style={{ height: 40, fontSize: 14 }}
+                >
+                  <option value="">Select destination…</option>
+                  {state.locations.filter((loc) => loc.id !== sourceLocationId).map((loc) => (
+                    <option key={loc.id} value={loc.id}>{loc.name} ({loc.code})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>Quantity</label>
+                <input
+                  className="input"
+                  type="number"
+                  min={1}
+                  max={maxQty}
+                  value={transferQty}
+                  onChange={(event) => setTransferQty(event.target.value)}
+                  placeholder="0"
+                  style={{ height: 40, fontSize: 14 }}
+                />
+              </div>
+
+              <div style={{ marginBottom: 20 }}>
+                <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>Notes (optional)</label>
+                <textarea
+                  className="input"
+                  value={transferNotes}
+                  onChange={(event) => setTransferNotes(event.target.value)}
+                  placeholder="e.g. restock to cold storage"
+                  style={{ height: 64, resize: 'none' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <button className="btn btn-ghost" onClick={closeTransfer}>Cancel</button>
+                <button className="btn btn-primary" onClick={handleTransfer} disabled={!transferTo || qty <= 0 || !hasSource}><ArrowLeftRight size={15} /> Transfer</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
       {showImportModal && (
         <div className="modal-overlay">
           <div className="modal" style={{ maxWidth: 720 }}>
@@ -780,9 +1291,7 @@ export default function InventoryPage() {
             </p>
             <div style={{ maxHeight: 320, overflowY: 'auto', borderRadius: 8, border: '1px solid #D8E4F2' }}>
               <table className="data-table">
-                <thead>
-                  <tr><th>Code</th><th>Name</th><th>Category</th><th>Supplier</th><th>Location</th><th>UOM</th><th>Cost</th><th>Price</th><th>Qty</th><th>Reorder</th></tr>
-                </thead>
+                <thead><tr><th>Code</th><th>Name</th><th>Category</th><th>Supplier</th><th>Location</th><th>UOM</th><th>Cost</th><th>Price</th><th>Qty</th><th>Reorder</th></tr></thead>
                 <tbody>
                   {importRows.slice(0, 20).map((row, index) => (
                     <tr key={index}>
@@ -809,6 +1318,76 @@ export default function InventoryPage() {
           </div>
         </div>
       )}
+
+      {lotsModal && (() => {
+        const target = state.products.find((entry) => entry.id === lotsModal)
+        if (!target) return null
+        const lots = state.inventoryLots
+          .filter((lot) => lot.product_id === lotsModal)
+          .sort((a, b) => a.received_at.localeCompare(b.received_at) || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
+        return (
+          <div className="modal-overlay" onClick={(event) => event.target === event.currentTarget && closeLots()}>
+            <div className="modal" style={{ maxWidth: 720 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <h2 style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>FIFO Lots - {target.name}</h2>
+                <button onClick={closeLots} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748B' }}><X size={20} /></button>
+              </div>
+
+              <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2', marginBottom: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 600 }}>TOTAL ON HAND</div>
+                  <div style={{ marginTop: 4, fontWeight: 900, color: '#0F172A', fontSize: 18 }}>{target.quantity_on_hand}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 600 }}>ACTIVE LOTS</div>
+                  <div style={{ marginTop: 4, fontWeight: 900, color: '#0F172A', fontSize: 18 }}>{lots.length}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 600 }}>REORDER POINT</div>
+                  <div style={{ marginTop: 4, fontWeight: 900, color: '#F59E0B', fontSize: 18 }}>{target.reorder_point}</div>
+                </div>
+              </div>
+
+              <div style={{ maxHeight: 360, overflowY: 'auto', borderRadius: 8, border: '1px solid #D8E4F2' }}>
+                <table className="data-table">
+                  <thead><tr>
+                      <th>Lot Ref</th>
+                      <th>Received At</th>
+                      <th>Qty</th>
+                      <th>Unit Cost</th>
+                      <th>Source</th>
+                      <th>Location</th>
+                    </tr></thead>
+                  <tbody>
+                    {lots.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} style={{ textAlign: 'center', padding: 32, color: '#94A3B8' }}>
+                          No active lots
+                        </td>
+                      </tr>
+                    ) : (
+                      lots.map((lot: InventoryLot) => (
+                        <tr key={lot.id}>
+                          <td style={{ fontSize: 11, color: '#64748B' }}>{lot.id.slice(0, 8)}</td>
+                           <td style={{ fontSize: 12, color: '#0F172A' }}>{formatTimestamp(lot.received_at)}</td>
+                          <td style={{ fontWeight: 700, color: '#0F172A' }}>{lot.quantity}</td>
+                          <td style={{ color: '#0F172A' }}>{formatCurrency(Number(lot.unit_cost))}</td>
+                          <td><span className="badge badge-blue" style={{ fontSize: 10 }}>{lot.source}</span></td>
+                          <td style={{ fontSize: 12, color: '#475569' }}>{lot.location_id ?? '—'}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 20 }}>
+                <button className="btn btn-ghost" onClick={closeLots}>Close</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

@@ -16,11 +16,47 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const stored = window.sessionStorage.getItem('codentra.dashboard-stock-banner')
-    if (stored) setDismissedKey(stored)
+    if (!stored) return
+    try {
+      const parsed = JSON.parse(stored)
+      if (typeof parsed?.key === 'string' && typeof parsed?.ts === 'number') {
+        if (Date.now() - parsed.ts < 60 * 60 * 1000) {
+          setDismissedKey(parsed.key)
+        } else {
+          window.sessionStorage.removeItem('codentra.dashboard-stock-banner')
+        }
+      }
+    } catch {
+      window.sessionStorage.removeItem('codentra.dashboard-stock-banner')
+    }
   }, [])
 
+  useEffect(() => {
+    if (!dismissedKey) return
+    const stored = window.sessionStorage.getItem('codentra.dashboard-stock-banner')
+    if (!stored) {
+      setDismissedKey(null)
+      return
+    }
+    try {
+      const parsed = JSON.parse(stored)
+      if (typeof parsed?.ts === 'number') {
+        const elapsed = Date.now() - parsed.ts
+        const remaining = Math.max(0, 60 * 60 * 1000 - elapsed)
+        const timer = setTimeout(() => {
+          setDismissedKey(null)
+          window.sessionStorage.removeItem('codentra.dashboard-stock-banner')
+        }, remaining)
+        return () => clearTimeout(timer)
+      }
+    } catch {
+      // ignore
+    }
+    setDismissedKey(null)
+  }, [dismissedKey])
+
   function dismissBanner() {
-    window.sessionStorage.setItem('codentra.dashboard-stock-banner', bannerKey)
+    window.sessionStorage.setItem('codentra.dashboard-stock-banner', JSON.stringify({ key: bannerKey, ts: Date.now() }))
     setDismissedKey(bannerKey)
   }
 

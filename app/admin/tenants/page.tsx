@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import { ArrowLeft, BarChart3, Building2, ShieldCheck, Users } from 'lucide-react'
 import { createSupabaseServerClient, getSupabaseServiceClient } from '@/lib/supabase-server'
 import { hasSuperAdminMembership, isConfiguredSuperAdminEmail } from '@/lib/tenant-access'
+import { formatTimestamp } from '@/lib/utils'
 
 type TenantRow = {
   id: string
@@ -136,10 +137,9 @@ export default async function AdminTenantsPage() {
           ))}
         </div>
 
-        <div className="card table-scroll" style={{ overflow: 'hidden', marginBottom: 22 }}>
+        <div className="card table-scroll tenant-desktop-table" style={{ overflow: 'hidden', marginBottom: 22 }}>
           <table className="data-table">
-            <thead>
-              <tr>
+            <thead><tr>
                 <th>Tenant</th>
                 <th>Type</th>
                 <th>Plan</th>
@@ -148,8 +148,7 @@ export default async function AdminTenantsPage() {
                 <th>Users</th>
                 <th>Products</th>
                 <th>Billing Email</th>
-              </tr>
-            </thead>
+              </tr></thead>
             <tbody>
               {tenants.map((tenant) => {
                 const statusColor = tenant.subscription_status === 'active'
@@ -175,6 +174,45 @@ export default async function AdminTenantsPage() {
           </table>
         </div>
 
+        <div className="tenant-mobile-list">
+          {tenants.map((tenant) => {
+            const statusColor = tenant.subscription_status === 'active'
+              ? 'badge-green'
+              : tenant.subscription_status === 'trial'
+                ? 'badge-amber'
+                : 'badge-red'
+            return (
+              <div key={tenant.id} className="card" style={{ padding: 14, borderRadius: 14 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tenant.name}</div>
+                    <div style={{ fontSize: 11, color: '#64748B', marginTop: 2, textTransform: 'capitalize' }}>{tenant.business_type.replaceAll('_', ' ')}</div>
+                  </div>
+                  <span className={`badge ${statusColor}`}>{tenant.subscription_status}</span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginTop: 12 }}>
+                  <div style={{ padding: '8px 10px', borderRadius: 10, background: '#F8FBFF', border: '1px solid #E2E8F0' }}>
+                    <div style={{ fontSize: 10, color: '#64748B' }}>Plan</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', textTransform: 'capitalize' }}>{tenant.plan}</div>
+                  </div>
+                  <div style={{ padding: '8px 10px', borderRadius: 10, background: '#F8FBFF', border: '1px solid #E2E8F0' }}>
+                    <div style={{ fontSize: 10, color: '#64748B' }}>Billing</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tenant.billing_email ?? 'N/A'}</div>
+                  </div>
+                  <div style={{ padding: '8px 10px', borderRadius: 10, background: '#F8FBFF', border: '1px solid #E2E8F0' }}>
+                    <div style={{ fontSize: 10, color: '#64748B' }}>Members / Users</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{membershipCounts.get(tenant.id) ?? 0} / {userCounts.get(tenant.id) ?? 0}</div>
+                  </div>
+                  <div style={{ padding: '8px 10px', borderRadius: 10, background: '#F8FBFF', border: '1px solid #E2E8F0' }}>
+                    <div style={{ fontSize: 10, color: '#64748B' }}>Products</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{productCounts.get(tenant.id) ?? 0}</div>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
         <div className="card" style={{ padding: 18, borderRadius: 18 }}>
           <div style={{ fontSize: 12, color: '#64748B', marginBottom: 14 }}>Cross-tenant audit trail</div>
           <div style={{ display: 'grid', gap: 8, maxHeight: 420, overflowY: 'auto' }}>
@@ -192,7 +230,7 @@ export default async function AdminTenantsPage() {
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
                       <div style={{ color: '#475569' }}>{tenantName}</div>
-                      <div style={{ color: '#94A3B8', fontSize: 10 }}>{new Date(log.performed_at).toLocaleString()}</div>
+                      <div style={{ color: '#94A3B8', fontSize: 10 }}>{formatTimestamp(log.performed_at)}</div>
                     </div>
                   </div>
                 )

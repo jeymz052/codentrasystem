@@ -42,7 +42,13 @@ export async function POST(request: NextRequest) {
         performed_at: new Date().toISOString(),
       })
 
-      await serviceClient.from('users').update({ last_login: new Date().toISOString() }).eq('id', user.id)
+      // Stamp last_login on the matching user record. The app `users` row is
+      // keyed by auth user id, but matching on email (within the tenant) is
+      // robust even if the auth id changed (e.g. after a resend re-provision).
+      await serviceClient.from('users')
+        .update({ last_login: new Date().toISOString() })
+        .eq('tenant_id', tenantId)
+        .eq('email', user.email)
     }
   }
 

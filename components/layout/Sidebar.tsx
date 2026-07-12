@@ -90,45 +90,40 @@ export function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps) {
           )
         })}
         {isSuperAdminIdentity && (
-          <>
-            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', color: '#94A3B8', padding: '14px 8px 8px', textTransform: 'uppercase' }}>
-              Superadmin
-            </div>
-            <Link
-              href="/admin/tenants"
-              onClick={onNavigate}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 9,
-                padding: '9px 10px',
-                borderRadius: 8,
-                marginBottom: 1,
-                textDecoration: 'none',
-                background: path.startsWith('/admin') ? '#DBEAFE' : 'transparent',
-                color: path.startsWith('/admin') ? '#3B82F6' : '#475569',
-                fontWeight: path.startsWith('/admin') ? 600 : 400,
-                fontSize: 13,
-                transition: 'all 0.15s',
-                position: 'relative',
-              }}
-            >
-              {path.startsWith('/admin') && (
-                <span style={{
-                  position: 'absolute',
-                  left: 0,
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  width: 3,
-                  height: 18,
-                  background: '#3B82F6',
-                  borderRadius: '0 3px 3px 0',
-                }} />
-              )}
-              <Building2 size={16} strokeWidth={path.startsWith('/admin') ? 2.5 : 2} />
-              <span style={{ flex: 1 }}>Tenant Monitor</span>
-            </Link>
-          </>
+          <Link
+            href="/admin/tenants"
+            onClick={onNavigate}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 9,
+              padding: '9px 10px',
+              borderRadius: 8,
+              marginBottom: 1,
+              textDecoration: 'none',
+              background: path.startsWith('/admin') ? '#DBEAFE' : 'transparent',
+              color: path.startsWith('/admin') ? '#3B82F6' : '#475569',
+              fontWeight: path.startsWith('/admin') ? 600 : 400,
+              fontSize: 13,
+              transition: 'all 0.15s',
+              position: 'relative',
+            }}
+          >
+            {path.startsWith('/admin') && (
+              <span style={{
+                position: 'absolute',
+                left: 0,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                width: 3,
+                height: 18,
+                background: '#3B82F6',
+                borderRadius: '0 3px 3px 0',
+              }} />
+            )}
+            <Building2 size={16} strokeWidth={path.startsWith('/admin') ? 2.5 : 2} />
+            <span style={{ flex: 1 }}>Tenant Monitor</span>
+          </Link>
         )}
       </nav>
 

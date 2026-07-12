@@ -6,10 +6,11 @@ export type BusinessType = 'coffee_shop' | 'manufacturing' | 'convenience_store'
 export type UserRole = 'super_admin' | 'admin' | 'manager' | 'cashier'
 export type OrderStatus = 'draft' | 'pending_approval' | 'approved' | 'ordered' | 'partially_received' | 'received' | 'cancelled'
 export type MovementType = 'inbound' | 'outbound' | 'adjustment' | 'return' | 'production' | 'waste' | 'defect' | 'reject'
+export type CashMovementKind = 'cash_in' | 'cash_out' | 'cash_sale' | 'refund_payout' | 'denomination_adjustment'
 export type AlertType = 'low_stock' | 'out_of_stock' | 'overstock' | 'expiry_warning'
 export type AlertStatus = 'open' | 'acknowledged' | 'resolved'
 export type ShiftStatus = 'open' | 'closed' | 'voided'
-export type PaymentMethod = 'cash' | 'qr_ph' | 'gcash' | 'card' | 'bank_transfer' | 'other'
+export type PaymentMethod = 'cash' | 'qr_ph' | 'gcash' | 'maya' | 'bdo' | 'maribank' | 'card' | 'bank_transfer' | 'other'
 export type TransactionStatus = 'completed' | 'voided' | 'refunded'
 
 export interface Tenant {
@@ -30,6 +31,7 @@ export interface Tenant {
   max_users: number
   max_products: number
   max_locations: number
+  enable_production?: boolean
   is_active: boolean
   created_at: string
   updated_at: string
@@ -37,6 +39,14 @@ export interface Tenant {
   stripe_customer_id?: string | null
   stripe_subscription_id?: string | null
   stripe_price_id?: string | null
+  gcash_account?: string | null
+  gcash_qr_url?: string | null
+  maya_account?: string | null
+  maya_qr_url?: string | null
+  bdo_account?: string | null
+  bdo_qr_url?: string | null
+  maribank_account?: string | null
+  maribank_qr_url?: string | null
 }
 
 export interface TenantMembership {
@@ -136,6 +146,7 @@ export interface Product {
   barcode: string | null
   image_url: string | null
   is_active: boolean
+  is_finished_good: boolean
   expiry_date: string | null
   created_at: string
   updated_at: string
@@ -144,6 +155,21 @@ export interface Product {
   supplier?: Supplier
   location?: Location
   uom?: UnitOfMeasure
+  // FIFO lots
+  lots?: InventoryLot[]
+}
+
+export interface InventoryLot {
+  id: string
+  tenant_id: string
+  product_id: string
+  quantity: number
+  unit_cost: number
+  received_at: string
+  source: 'seed' | 'purchase_order' | 'production' | 'adjustment' | 'import' | 'transfer'
+  reference_id: string | null
+  location_id: string | null
+  created_at: string
 }
 
 export interface ProductRecipe {
@@ -153,6 +179,17 @@ export interface ProductRecipe {
   ingredient_id: string
   quantity_per_unit: number
   uom_id: string | null
+  created_at: string
+}
+
+export interface ProductionTemplate {
+  id: string
+  tenant_id: string
+  name: string
+  finished_good_id: string
+  quantity: number
+  location_id: string | null
+  notes: string | null
   created_at: string
 }
 
@@ -224,6 +261,10 @@ export interface SalesTransaction {
   voided_by: string | null
   voided_at: string | null
   void_reason: string | null
+  refunded_by: string | null
+  refunded_at: string | null
+  refund_reason: string | null
+  parent_transaction_id: string | null
   created_at: string
   cashier?: User
   items?: SalesTransactionItem[]
@@ -247,6 +288,7 @@ export interface CashShift {
   variance_amount: number | null
   notes: string | null
   close_notes: string | null
+  station: string | null
   opened_at: string
   closed_at: string | null
   created_at: string
@@ -254,6 +296,18 @@ export interface CashShift {
   opened_by_user?: User
   closed_by_user?: User | null
   location?: Location | null
+}
+
+export interface CashMovement {
+  id: string
+  tenant_id: string
+  shift_id: string
+  kind: CashMovementKind
+  amount: number
+  note: string | null
+  denominations: Record<string, number> | null
+  performed_by: string | null
+  created_at: string
 }
 
 export interface SalesTransactionItem {
@@ -301,7 +355,7 @@ export interface AuditLog {
   tenant_id: string
   user_id: string | null
   action: string
-  target_type: 'user' | 'product' | 'supplier' | 'order' | 'system'
+  target_type: 'user' | 'product' | 'supplier' | 'order' | 'sale' | 'shift' | 'system'
   target_id: string | null
   details: Record<string, unknown>
   performed_by: string | null
