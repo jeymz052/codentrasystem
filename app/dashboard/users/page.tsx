@@ -10,6 +10,7 @@ import { useTableState } from '@/lib/use-table-state'
 import { TableToolbar } from '@/components/ui/table/TableToolbar'
 import { SortHeader } from '@/components/ui/table/SortHeader'
 import { Pagination } from '@/components/ui/table/Pagination'
+import { SearchableSelect } from '@/components/ui/SearchableSelect'
 
 const EMPTY = {
   full_name: '',
@@ -187,7 +188,7 @@ export default function UsersPage() {
       />
 
       {showModal && (
-        <div className="modal-overlay" onClick={(event) => event.target === event.currentTarget && setShowModal(false)}>
+        <div className="modal-overlay">
           <div className="modal" style={{ maxWidth: 720 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 20 }}>
               <div>
@@ -228,11 +229,18 @@ export default function UsersPage() {
 
               <label className="auth-field">
                 <span>Role</span>
-                <select className="input" value={form.role} onChange={(event) => setForm((current) => ({ ...current, role: event.target.value as UserRole }))}>
-                  <option value="admin">Tenant Admin</option>
-                  <option value="manager">Manager</option>
-                  <option value="cashier">Cashier</option>
-                </select>
+                <SearchableSelect
+                  className="input"
+                  placeholder="Role"
+                  searchPlaceholder="Search roles..."
+                  value={form.role}
+                  onChange={(value) => setForm((current) => ({ ...current, role: value as UserRole }))}
+                  options={[
+                    { value: 'admin', label: 'Tenant Admin' },
+                    { value: 'manager', label: 'Manager' },
+                    { value: 'cashier', label: 'Cashier' },
+                  ]}
+                />
               </label>
             </div>
 

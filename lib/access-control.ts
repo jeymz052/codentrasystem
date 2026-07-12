@@ -18,6 +18,8 @@ export type MutationAction =
   | 'addCategory'
   | 'addUnitOfMeasure'
   | 'addLocation'
+  | 'updateLocation'
+  | 'deleteLocation'
   | 'saveProduct'
   | 'removeProduct'
   | 'importProductRows'

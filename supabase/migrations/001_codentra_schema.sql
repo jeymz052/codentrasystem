@@ -41,7 +41,7 @@ CREATE TABLE tenants (
 
   -- Subscription
   plan              subscription_plan NOT NULL DEFAULT 'starter',
-  subscription_status subscription_status NOT NULL DEFAULT 'trial',
+  subscription_status subscription_status NOT NULL DEFAULT 'active',
   trial_ends_at     TIMESTAMPTZ,
   subscription_ends_at TIMESTAMPTZ,
   max_users         INT NOT NULL DEFAULT 3,

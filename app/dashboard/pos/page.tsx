@@ -160,6 +160,7 @@ export default function POSPage() {
   const [openingFloat, setOpeningFloat] = useState('')
   const [countedCash, setCountedCash] = useState('')
   const [shiftStation, setShiftStation] = useState('')
+  const [shiftLocationId, setShiftLocationId] = useState<string>(() => state.locations[0]?.id ?? '')
   const [shiftNote, setShiftNote] = useState('')
   const [cashAmount, setCashAmount] = useState('')
   const [cashNote, setCashNote] = useState('')
@@ -221,6 +222,7 @@ export default function POSPage() {
       { label: 'Total SKUs', value: String(state.products.filter((product) => product.is_active).length), hint: 'Active products', icon: Package, color: '#3B82F6', tint: '#DBEAFE' },
       { label: "Today's Sales", value: formatCurrency(todaySales.reduce((sum, tx) => sum + Number(tx.total_amount), 0)), hint: `${todaySales.length} transactions`, icon: CreditCard, color: '#10B981', tint: '#D1FAE5' },
       { label: currentShift ? `Shift Sales (${currentShift.shift_code})` : 'Shift Sales', value: formatCurrency(shiftTotal), hint: `${shiftTxCount} transactions`, icon: Banknote, color: '#F59E0B', tint: '#FEF3C7' },
+      { label: 'Starting Cash', value: currentShift ? formatCurrency(Number(currentShift.opening_float)) : '—', hint: currentShift ? `Float for ${currentShift.shift_code}` : 'Open a shift', icon: Wallet, color: '#B45309', tint: '#FEF3C7' },
       { label: 'Pending Orders', value: String(openOrders), hint: 'Purchase orders', icon: ShoppingCart, color: '#8B5CF6', tint: '#EDE9FE' },
       { label: 'Stock Movements', value: String(state.stockMovements.length), hint: 'Audit trail', icon: ReceiptText, color: '#EF4444', tint: '#FEE2E2' },
     ]
@@ -516,7 +518,7 @@ export default function POSPage() {
       payment_provider: 'manual',
       payment_reference: reference.trim() || null,
       amount_tendered: cashEntered,
-      location_id: state.locations[0]?.id ?? null,
+      location_id: currentShift?.location_id ?? state.locations[0]?.id ?? null,
       notes: `Sold at ${state.tenant.name}`,
       items: saleItems,
     })
@@ -562,13 +564,14 @@ export default function POSPage() {
     }
     openShift({
       openingFloat: Number(openingFloat),
-      locationId: state.locations[0]?.id ?? null,
+      locationId: shiftLocationId || (state.locations[0]?.id ?? null),
       notes: shiftNote || undefined,
       station: shiftStation || undefined,
     })
     setShowShiftModal(false)
     setOpeningFloat('')
     setShiftStation('')
+    setShiftLocationId(state.locations[0]?.id ?? '')
     setShiftNote('')
     notifySuccess('Shift opened')
   }
@@ -676,6 +679,12 @@ export default function POSPage() {
             <span className={`badge ${currentShift ? 'badge-green' : 'badge-red'}`}>
               {currentShift ? `Shift ${currentShift.shift_code} Open` : 'No Active Shift'}
             </span>
+            {currentShift && (
+              <span className="badge" style={{ background: '#FEF3C7', color: '#B45309', display: 'inline-flex', alignItems: 'center' }}>
+                <Wallet size={13} style={{ marginRight: 4 }} />
+                Float {formatCurrency(Number(currentShift.opening_float))}
+              </span>
+            )}
             <span className="badge badge-blue">Scanner ready</span>
             <span className="badge badge-teal">Thermal print</span>
             <span className="badge badge-gray" title={`${cashierLabel}${currentShift?.station ? ` · ${currentShift.station}` : ''}`}>
@@ -1531,7 +1540,7 @@ export default function POSPage() {
       )}
 
       {qrZoom && (
-        <div className="modal-overlay pos-print-hide" onClick={() => setQrZoom(null)} style={{ cursor: 'zoom-out' }}>
+        <div className="modal-overlay pos-print-hide" style={{ cursor: 'zoom-out' }}>
           <div onClick={(event) => event.stopPropagation()} style={{ background: '#fff', padding: 18, borderRadius: 16, maxWidth: 380, width: '100%', textAlign: 'center', boxShadow: '0 24px 60px rgba(15,23,42,0.25)' }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={qrZoom} alt="QR code" style={{ width: '100%', maxWidth: 340, height: 'auto', display: 'block', margin: '0 auto', borderRadius: 10, background: '#fff', border: '1px solid #E2E8F0' }} />
@@ -1543,7 +1552,7 @@ export default function POSPage() {
       )}
 
       {showShiftModal && (
-        <div className="modal-overlay pos-print-hide" onClick={() => setShowShiftModal(false)}>
+        <div className="modal-overlay pos-print-hide">
           <div className="modal" style={{ maxWidth: 420 }} onClick={(event) => event.stopPropagation()}>
             <div style={{ padding: '20px 20px 0' }}>
               <h3 style={{ fontSize: 16, fontWeight: 800, color: '#0F172A', marginBottom: 4 }}>
@@ -1581,6 +1590,26 @@ export default function POSPage() {
               )}
               {shiftAction === 'open' && (
                 <div style={{ marginBottom: 12 }}>
+                  <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>Store / Location</label>
+                  <select
+                    className="input"
+                    value={shiftLocationId}
+                    onChange={(event) => setShiftLocationId(event.target.value)}
+                    style={{ height: 42, borderRadius: 12, marginBottom: 4 }}
+                  >
+                    {state.locations.length === 0 ? (
+                      <option value="">No locations configured</option>
+                    ) : (
+                      state.locations.map((location) => (
+                        <option key={location.id} value={location.id}>{location.name} ({location.code})</option>
+                      ))
+                    )}
+                  </select>
+                  <div style={{ fontSize: 11, color: '#94A3B8' }}>Sales during this shift are tagged to this location.</div>
+                </div>
+              )}
+              {shiftAction === 'open' && (
+                <div style={{ marginBottom: 12 }}>
                   <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>Station / Bay (optional)</label>
                   <input
                     className="input"
@@ -1614,7 +1643,7 @@ export default function POSPage() {
       )}
 
       {showCashModal && (
-        <div className="modal-overlay pos-print-hide" onClick={() => setShowCashModal(false)}>
+        <div className="modal-overlay pos-print-hide">
           <div className="modal" style={{ maxWidth: 420 }} onClick={(event) => event.stopPropagation()}>
             <div style={{ padding: '20px 20px 0' }}>
               <h3 style={{ fontSize: 16, fontWeight: 800, color: '#0F172A', marginBottom: 4 }}>
@@ -1657,7 +1686,7 @@ export default function POSPage() {
       )}
 
       {showVoidModal && (
-        <div className="modal-overlay pos-print-hide" onClick={() => setShowVoidModal(false)}>
+        <div className="modal-overlay pos-print-hide">
           <div className="modal" style={{ maxWidth: 420 }} onClick={(event) => event.stopPropagation()}>
             <div style={{ padding: '20px 20px 0' }}>
               <h3 style={{ fontSize: 16, fontWeight: 800, color: '#B91C1C', marginBottom: 4 }}>Void Transaction</h3>
@@ -1686,7 +1715,7 @@ export default function POSPage() {
       )}
 
       {showRefundModal && (
-        <div className="modal-overlay pos-print-hide" onClick={() => setShowRefundModal(false)}>
+        <div className="modal-overlay pos-print-hide">
           <div className="modal" style={{ maxWidth: 420 }} onClick={(event) => event.stopPropagation()}>
             <div style={{ padding: '20px 20px 0' }}>
               <h3 style={{ fontSize: 16, fontWeight: 800, color: '#047857', marginBottom: 4 }}>Process Refund</h3>

@@ -281,7 +281,7 @@ export default function SuppliersPage() {
       )}
 
       {showModal && (
-        <div className="modal-overlay" onClick={(event) => event.target === event.currentTarget && setShowModal(false)}>
+        <div className="modal-overlay">
           <div className="modal" style={{ maxWidth: 760 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 20 }}>
               <div>

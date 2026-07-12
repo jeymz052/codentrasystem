@@ -196,9 +196,9 @@ function baseTenant(businessType: BusinessType): Tenant {
     currency: 'PHP',
     timezone: 'Asia/Manila',
     plan: 'starter',
-    subscription_status: 'trial',
+    subscription_status: 'active',
     trial_ends_at: null,
-    subscription_ends_at: null,
+    subscription_ends_at: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
     max_users: limits.max_users,
     max_products: limits.max_products,
     max_locations: limits.max_locations,
@@ -1356,6 +1356,35 @@ export function createLocation(state: DemoSystemState, draft: LocationDraft): De
   return { ...state, locations: [...state.locations, location] }
 }
 
+export function updateLocation(state: DemoSystemState, locationId: string, draft: LocationDraft): DemoSystemState {
+  const code = normalizeName(draft.code).toUpperCase()
+  const name = normalizeName(draft.name)
+  if (!code || !name) return state
+
+  return {
+    ...state,
+    locations: state.locations.map((location) =>
+      location.id === locationId
+        ? {
+            ...location,
+            code,
+            name,
+            zone: draft.zone?.trim() || null,
+            is_active: true,
+            updated_at: nowIso(),
+          }
+        : location
+    ),
+  }
+}
+
+export function deleteLocation(state: DemoSystemState, locationId: string): DemoSystemState {
+  return {
+    ...state,
+    locations: state.locations.filter((location) => location.id !== locationId),
+  }
+}
+
 export function updateSupplier(state: DemoSystemState, supplierId: string, draft: SupplierDraft): DemoSystemState {
   return {
     ...state,
@@ -1529,13 +1558,24 @@ export function rollUpFinishedGoodCost(state: DemoSystemState, finishedGoodId: s
 }
 
 export function createRecipe(state: DemoSystemState, finishedGoodId: string, ingredientId: string, quantityPerUnit: number, uomId?: string | null): DemoSystemState {
-  const existing = state.productRecipes.find(
-    (r) => r.finished_good_id === finishedGoodId && r.ingredient_id === ingredientId
+  // Use a deterministic id derived from the (finished good, ingredient) pair so
+  // the client's optimistic record and the server's persisted record share the
+  // same id. Without this, the client generated a random id and the server a
+  // different random id, and the two merged as duplicates every time an
+  // ingredient was added. See deterministicUuid() for rationale.
+  const deterministicId = deterministicUuid(state.tenant.id, finishedGoodId, ingredientId)
+
+  // Drop any pre-existing recipe for the same finished good + ingredient first
+  // (regardless of id) so a duplicate line can never survive — this also heals
+  // rows that were duplicated by the old random-id behaviour.
+  const cleaned = state.productRecipes.filter(
+    (r) => !(r.finished_good_id === finishedGoodId && r.ingredient_id === ingredientId)
   )
-  if (existing) return state
+  const baseState: DemoSystemState =
+    cleaned.length !== state.productRecipes.length ? { ...state, productRecipes: cleaned } : state
 
   const recipe: ProductRecipe = {
-    id: id(),
+    id: deterministicId,
     tenant_id: state.tenant.id,
     finished_good_id: finishedGoodId,
     ingredient_id: ingredientId,
@@ -1545,9 +1585,9 @@ export function createRecipe(state: DemoSystemState, finishedGoodId: string, ing
   }
 
   let nextState: DemoSystemState = {
-    ...state,
-    productRecipes: [...state.productRecipes, recipe],
-    products: state.products.map((p) =>
+    ...baseState,
+    productRecipes: [...cleaned, recipe],
+    products: baseState.products.map((p) =>
       p.id === finishedGoodId ? { ...p, is_finished_good: true } : p
     ),
   }
@@ -1613,16 +1653,35 @@ export function deleteProductionTemplate(state: DemoSystemState, templateId: str
 
 export function produceFinishedGood(state: DemoSystemState, finishedGoodId: string, quantity: number, locationId?: string | null): DemoSystemState {
   const recipeLines = state.productRecipes.filter((r) => r.finished_good_id === finishedGoodId)
-  if (!recipeLines.length) return state
+  // Defensively dedupe by ingredient: a leftover duplicate recipe line would
+  // otherwise consume the same ingredient twice and distort the batch.
+  const seenIngredients = new Set<string>()
+  const uniqueRecipeLines = recipeLines.filter((r) => {
+    if (seenIngredients.has(r.ingredient_id)) return false
+    seenIngredients.add(r.ingredient_id)
+    return true
+  })
+  if (!uniqueRecipeLines.length) return state
 
   const finishedGood = state.products.find((p) => p.id === finishedGoodId)
   if (!finishedGood) return state
+
+  // A per-run seed derived from how many production batches this finished good
+  // already has. It is computed from the same `state` on the client and the
+  // server, so the two agree for a given run, but it differs between runs —
+  // so re-producing the same template (or producing from identical stock) never
+  // regenerates an identical movement/lot id (which caused React key collisions).
+  const runSeed = String(
+    state.stockMovements.filter(
+      (m) => m.product_id === finishedGoodId && m.movement_type === 'production' && m.quantity > 0
+    ).length
+  )
 
   const now = nowIso()
   let nextState: DemoSystemState = { ...state }
   const newMovements: StockMovement[] = []
 
-  for (const line of recipeLines) {
+  for (const [lineIndex, line] of uniqueRecipeLines.entries()) {
     const ingredient = nextState.products.find((p) => p.id === line.ingredient_id)
     if (!ingredient) continue
 
@@ -1634,7 +1693,7 @@ export function produceFinishedGood(state: DemoSystemState, finishedGoodId: stri
     const after = Number(nextState.products.find((p) => p.id === line.ingredient_id)?.quantity_on_hand ?? 0)
 
     newMovements.push({
-      id: deterministicUuid(state.tenant.id, line.ingredient_id, 'production-out', String(before), String(-consumed)),
+      id: deterministicUuid(state.tenant.id, line.ingredient_id, 'production-out', String(before), String(-consumed), runSeed, String(lineIndex)),
       tenant_id: state.tenant.id,
       product_id: line.ingredient_id,
       movement_type: 'production',
@@ -1655,7 +1714,7 @@ export function produceFinishedGood(state: DemoSystemState, finishedGoodId: stri
   if (fg && quantity > 0) {
     const beforeQty = Number(fg.quantity_on_hand ?? 0)
     nextState = addLot(nextState, {
-      id: deterministicUuid(finishedGoodId, 'production-lot', String(quantity), String(beforeQty)),
+      id: deterministicUuid(finishedGoodId, 'production-lot', String(quantity), String(beforeQty), runSeed),
       tenant_id: state.tenant.id,
       product_id: finishedGoodId,
       quantity,
@@ -1669,7 +1728,7 @@ export function produceFinishedGood(state: DemoSystemState, finishedGoodId: stri
     const afterQty = Number(nextState.products.find((p) => p.id === finishedGoodId)?.quantity_on_hand ?? 0)
 
     newMovements.push({
-      id: deterministicUuid(state.tenant.id, finishedGoodId, 'production-in', String(beforeQty), String(quantity)),
+      id: deterministicUuid(state.tenant.id, finishedGoodId, 'production-in', String(beforeQty), String(quantity), runSeed),
       tenant_id: state.tenant.id,
       product_id: finishedGoodId,
       movement_type: 'production',
@@ -2045,6 +2104,90 @@ export function recordWaste(
     ...result.state,
     stockMovements: [...result.state.stockMovements, movement],
   }
+}
+
+// A reversal is identified by a movement whose reference_type is 'waste_reversal'
+// and whose reference_id points back at the original write-off. This avoids
+// needing a new DB column while still letting the UI detect / prevent double
+// reversals and excluding reversals from the waste summaries.
+export function isWasteReversed(state: DemoSystemState, movementId: string): boolean {
+  return state.stockMovements.some(
+    (m) => m.reference_id === movementId && m.reference_type === 'waste_reversal'
+  )
+}
+
+export function reverseWaste(state: DemoSystemState, movementId: string): DemoSystemState {
+  const movement = state.stockMovements.find((m) => m.id === movementId)
+  if (!movement) return state
+  if (!['waste', 'defect', 'reject'].includes(movement.movement_type)) return state
+  if (isWasteReversed(state, movementId)) return state
+
+  const product = state.products.find((p) => p.id === movement.product_id)
+  if (!product) return state
+
+  const qty = Number(movement.quantity ?? 0)
+  if (qty <= 0) return state
+
+  const before = Number(product.quantity_on_hand ?? 0)
+  const now = nowIso()
+
+  // Put the written-off stock back as a fresh FIFO lot, then record a
+  // compensating movement so the ledger stays accurate.
+  let nextState: DemoSystemState = addLot(state, {
+    id: deterministicUuid(state.tenant.id, movement.id, 'waste-reversal-lot'),
+    tenant_id: state.tenant.id,
+    product_id: movement.product_id,
+    quantity: qty,
+    unit_cost: Number(product.unit_cost ?? 0),
+    received_at: now,
+    source: 'adjustment',
+    reference_id: movement.id,
+    location_id: movement.location_id ?? product.location_id,
+  })
+  nextState = syncProductQuantity(nextState, movement.product_id)
+  const after = Number(nextState.products.find((p) => p.id === movement.product_id)?.quantity_on_hand ?? 0)
+
+  const reversal: StockMovement = {
+    id: deterministicUuid(state.tenant.id, movement.id, 'waste-reversal'),
+    tenant_id: state.tenant.id,
+    product_id: movement.product_id,
+    movement_type: movement.movement_type,
+    quantity: qty,
+    quantity_before: before,
+    quantity_after: after,
+    reference_id: movement.id,
+    reference_type: 'waste_reversal',
+    location_id: movement.location_id ?? product.location_id,
+    performed_by: state.currentUserId || null,
+    notes: `Reversed ${movement.movement_type}${movement.notes ? `: ${movement.notes}` : ''}`,
+    created_at: now,
+    product: nextState.products.find((p) => p.id === movement.product_id),
+  }
+
+  return {
+    ...nextState,
+    stockMovements: [...nextState.stockMovements, reversal],
+  }
+}
+
+export function editWaste(
+  state: DemoSystemState,
+  movementId: string,
+  draft: { wasteType: 'waste' | 'defect' | 'reject'; quantity: number; reason?: string }
+): DemoSystemState {
+  const movement = state.stockMovements.find((m) => m.id === movementId)
+  if (!movement) return state
+  if (!['waste', 'defect', 'reject'].includes(movement.movement_type)) return state
+
+  // Reverse the original write-off (restoring stock) then re-record the
+  // corrected waste so the product's on-hand and the ledger both end correct.
+  const reversed = reverseWaste(state, movementId)
+  return recordWaste(reversed, {
+    productId: movement.product_id,
+    wasteType: draft.wasteType,
+    quantity: draft.quantity,
+    reason: draft.reason,
+  })
 }
 
 export function openShift(

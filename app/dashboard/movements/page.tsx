@@ -2,8 +2,9 @@
 
 import Link from 'next/link'
 import { useMemo, useState } from 'react'
-import { ArrowLeftRight, Filter, Package, Search, SlidersHorizontal } from 'lucide-react'
+import { ArrowLeftRight, Package, Search, SlidersHorizontal } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
+import { SearchableSelect } from '@/components/ui/SearchableSelect'
 import { formatTimestamp } from '@/lib/utils'
 
 const TYPE_LABELS: Record<string, string> = {
@@ -138,36 +139,31 @@ export default function MovementsPage() {
             />
           </div>
 
-          <div style={{ position: 'relative' }}>
-            <Filter size={14} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
-            <select
-              className="input"
-              value={typeFilter}
-              onChange={(event) => setTypeFilter(event.target.value)}
-              style={{ height: 42, paddingLeft: 38, borderRadius: 12 }}
-            >
-              <option value="all">All types</option>
-              {Object.entries(TYPE_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <select
+          <SearchableSelect
             className="input"
-            value={productFilter}
-            onChange={(event) => setProductFilter(event.target.value)}
+            placeholder="All types"
+            searchPlaceholder="Search types..."
             style={{ height: 42, borderRadius: 12 }}
-          >
-            <option value="all">All products</option>
-            {state.products.map((product) => (
-              <option key={product.id} value={product.id}>
-                {product.name}
-              </option>
-            ))}
-          </select>
+            value={typeFilter}
+            onChange={(value) => setTypeFilter(value)}
+            options={[
+              { value: 'all', label: 'All types' },
+              ...Object.entries(TYPE_LABELS).map(([value, label]) => ({ value, label })),
+            ]}
+          />
+
+          <SearchableSelect
+            className="input"
+            placeholder="All products"
+            searchPlaceholder="Search products..."
+            style={{ height: 42, borderRadius: 12 }}
+            value={productFilter}
+            onChange={(value) => setProductFilter(value)}
+            options={[
+              { value: 'all', label: 'All products' },
+              ...state.products.map((product) => ({ value: product.id, label: product.name })),
+            ]}
+          />
         </div>
       </section>
 

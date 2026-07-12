@@ -1,4 +1,5 @@
-import { Search, SlidersHorizontal, X } from 'lucide-react'
+import { Search, X } from 'lucide-react'
+import { SearchableSelect } from '@/components/ui/SearchableSelect'
 
 export type FilterOption = { value: string; label: string }
 
@@ -40,22 +41,17 @@ export function TableToolbar({
         />
       </div>
       {filters.map((filter) => (
-        <div key={filter.key} style={{ position: 'relative' }}>
-          <SlidersHorizontal size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8', pointerEvents: 'none' }} />
-          <select
-            className="input"
-            value={filter.value}
-            onChange={(event) => filter.onChange(event.target.value)}
-            style={{ width: 'auto', height: 36, fontSize: 13, paddingLeft: 34 }}
-            aria-label={filter.label}
-          >
-            {filter.options.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
+        <SearchableSelect
+          key={filter.key}
+          className="input"
+          placeholder={filter.label}
+          searchPlaceholder={`Search ${filter.label.toLowerCase()}...`}
+          ariaLabel={filter.label}
+          style={{ width: 'auto', height: 36, fontSize: 13 }}
+          value={filter.value}
+          onChange={filter.onChange}
+          options={filter.options}
+        />
       ))}
       {showReset && (
         <button className="btn btn-ghost btn-sm" onClick={onReset} style={{ height: 36 }}>

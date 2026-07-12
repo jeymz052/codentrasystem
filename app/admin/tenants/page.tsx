@@ -4,6 +4,7 @@ import { ArrowLeft, BarChart3, Building2, ShieldCheck, Users } from 'lucide-reac
 import { createSupabaseServerClient, getSupabaseServiceClient } from '@/lib/supabase-server'
 import { hasSuperAdminMembership, isConfiguredSuperAdminEmail } from '@/lib/tenant-access'
 import { formatTimestamp } from '@/lib/utils'
+import { ProvisionTenantForm } from '@/components/admin/ProvisionTenantForm'
 
 type TenantRow = {
   id: string
@@ -135,6 +136,10 @@ export default async function AdminTenantsPage() {
               <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>{card.label}</div>
             </div>
           ))}
+        </div>
+
+        <div style={{ marginBottom: 22 }}>
+          <ProvisionTenantForm />
         </div>
 
         <div className="card table-scroll tenant-desktop-table" style={{ overflow: 'hidden', marginBottom: 22 }}>

@@ -1,4 +1,5 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { SearchableSelect } from '@/components/ui/SearchableSelect'
 
 export function Pagination({
   page,
@@ -45,19 +46,16 @@ export function Pagination({
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#64748B' }}>
           Rows
-          <select
+          <SearchableSelect
             className="input"
-            value={pageSize}
-            onChange={(event) => onPageSizeChange(Number(event.target.value))}
+            placeholder="Rows"
+            searchPlaceholder="Search..."
+            ariaLabel="Rows per page"
             style={{ width: 'auto', height: 32, fontSize: 12 }}
-            aria-label="Rows per page"
-          >
-            {pageSizeOptions.map((size) => (
-              <option key={size} value={size}>
-                {size}
-              </option>
-            ))}
-          </select>
+            value={String(pageSize)}
+            onChange={(value) => onPageSizeChange(Number(value))}
+            options={pageSizeOptions.map((size) => ({ value: String(size), label: String(size) }))}
+          />
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

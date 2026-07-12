@@ -9,6 +9,7 @@ import { useTableState } from '@/lib/use-table-state'
 import { TableToolbar, type ToolbarFilter } from '@/components/ui/table/TableToolbar'
 import { SortHeader } from '@/components/ui/table/SortHeader'
 import { Pagination } from '@/components/ui/table/Pagination'
+import { SearchableSelect } from '@/components/ui/SearchableSelect'
 
 export default function ProductionPage() {
   const { state, availableTenants, activeTenantId, createRecipe, updateRecipe, deleteRecipe, produceFinishedGood, createProductionTemplate, deleteProductionTemplate, notifySuccess, notifyError, formatCurrency } = useDemoSystem()
@@ -497,7 +498,7 @@ export default function ProductionPage() {
       />
 
       {modalOpen && (
-        <div className="modal-overlay" onClick={(event) => event.target === event.currentTarget && closeModal()}>
+        <div className="modal-overlay">
           <div className="modal" style={{ maxWidth: 720 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 18 }}>
               <div style={{ minWidth: 0 }}>
@@ -516,16 +517,14 @@ export default function ProductionPage() {
             {!activeProduct ? (
               <div>
                 <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>Select a finished good</label>
-                <select
+                <SearchableSelect
                   className="input"
+                  placeholder="Select a finished good..."
+                  searchPlaceholder="Search finished goods..."
                   value={activeFinishedGoodId ?? ''}
-                  onChange={(e) => openModal(e.target.value || null)}
-                >
-                  <option value="">Select a finished good...</option>
-                  {finishedGoodOptions.map((product) => (
-                    <option key={product.id} value={product.id}>{product.name} ({product.item_code})</option>
-                  ))}
-                </select>
+                  onChange={(value) => openModal(value || null)}
+                  options={finishedGoodOptions.map((product) => ({ value: product.id, label: `${product.name} (${product.item_code})` }))}
+                />
                 <p style={{ fontSize: 11, color: '#64748B', marginTop: 6 }}>
                   Finished goods are defined in Inventory (toggle “Finished Good”). Pick one to build its recipe (BOM) or produce a batch. Raw materials are not listed here.
                 </p>
@@ -586,17 +585,15 @@ export default function ProductionPage() {
                     <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: 12 }}>
                       <h4 style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>{editingRecipe ? 'Edit Ingredient' : 'Add Ingredient'}</h4>
                       <div style={{ display: 'grid', gap: 8 }}>
-                        <select
+                        <SearchableSelect
                           className="input"
-                          value={recipeForm.ingredientId}
-                          onChange={(e) => handleIngredientChange(e.target.value)}
+                          placeholder="Select ingredient"
+                          searchPlaceholder="Search ingredients..."
                           disabled={!!editingRecipe}
-                        >
-                          <option value="">Select ingredient</option>
-                          {ingredients.filter((p) => p.id !== activeFinishedGoodId).map((product) => (
-                            <option key={product.id} value={product.id}>{product.name} ({product.item_code})</option>
-                          ))}
-                        </select>
+                          value={recipeForm.ingredientId}
+                          onChange={(value) => handleIngredientChange(value)}
+                          options={ingredients.filter((p) => p.id !== activeFinishedGoodId).map((product) => ({ value: product.id, label: `${product.name} (${product.item_code})` }))}
+                        />
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                           <div>
                             <input
@@ -613,16 +610,14 @@ export default function ProductionPage() {
                               </div>
                             )}
                           </div>
-                          <select
+                          <SearchableSelect
                             className="input"
+                            placeholder="UOM"
+                            searchPlaceholder="Search units..."
                             value={recipeForm.uomId}
-                            onChange={(e) => setRecipeForm((f) => ({ ...f, uomId: e.target.value }))}
-                          >
-                            <option value="">UOM</option>
-                            {uoms.map((uom) => (
-                              <option key={uom.id} value={uom.id}>{uom.name} ({uom.abbreviation})</option>
-                            ))}
-                          </select>
+                            onChange={(value) => setRecipeForm((f) => ({ ...f, uomId: value }))}
+                            options={uoms.map((uom) => ({ value: uom.id, label: `${uom.name} (${uom.abbreviation})` }))}
+                          />
                         </div>
                         <button className="btn btn-primary" onClick={handleSaveRecipe} style={{ width: '100%' }}>
                           {editingRecipe ? <><Save size={15} /> Update Ingredient</> : <><Plus size={15} /> Add Ingredient</>}
@@ -686,16 +681,14 @@ export default function ProductionPage() {
 
                       <div>
                         <label style={{ fontSize: 12, color: '#64748B', marginBottom: 4, display: 'block' }}>Production Location (optional)</label>
-                        <select
+                        <SearchableSelect
                           className="input"
+                          placeholder="Default location"
+                          searchPlaceholder="Search locations..."
                           value={produceLocation}
-                          onChange={(e) => setProduceLocation(e.target.value)}
-                        >
-                          <option value="">Default location</option>
-                          {state.locations.map((loc) => (
-                            <option key={loc.id} value={loc.id}>{loc.name} ({loc.code})</option>
-                          ))}
-                        </select>
+                          onChange={(value) => setProduceLocation(value)}
+                          options={state.locations.map((loc) => ({ value: loc.id, label: `${loc.name} (${loc.code})` }))}
+                        />
                       </div>
 
                       <div style={{ padding: '10px 12px', borderRadius: 10, background: '#F8FBFF', border: '1px solid #E2E8F0', fontSize: 12 }}>
@@ -791,7 +784,7 @@ export default function ProductionPage() {
         const fg = state.products.find((p) => p.id === template.finished_good_id)
         const loc = state.locations.find((l) => l.id === template.location_id)
         return (
-          <div className="modal-overlay" onClick={(event) => event.target === event.currentTarget && setConfirmProduceId(null)}>
+          <div className="modal-overlay">
             <div className="modal" style={{ maxWidth: 420, textAlign: 'center' }}>
               <div style={{ width: 52, height: 52, borderRadius: '50%', background: '#DCFCE7', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
                 <Zap size={24} color="#16A34A" />

@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
 
   const tenantId = randomUUID()
   const now = new Date().toISOString()
-  const trialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString()
+  const subscriptionEndsAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
   const limits = PLAN_LIMITS[plan]
 
   const seed = {
@@ -48,9 +48,9 @@ export async function POST(request: NextRequest) {
       currency: 'PHP',
       timezone,
       plan,
-      subscription_status: 'trial' as SubscriptionStatus,
-      trial_ends_at: trialEndsAt,
-      subscription_ends_at: null,
+      subscription_status: 'active' as SubscriptionStatus,
+      trial_ends_at: null,
+      subscription_ends_at: subscriptionEndsAt,
       max_users: limits.max_users,
       max_products: limits.max_products,
       max_locations: limits.max_locations,

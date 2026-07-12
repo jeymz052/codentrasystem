@@ -5,6 +5,7 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { ArrowRight, CheckCircle2, Eye, EyeOff, LockKeyhole, Mail } from 'lucide-react'
 import { SUBSCRIPTION_PLANS, formatPlanPrice } from '@/lib/subscription-plans'
+import { SearchableSelect } from '@/components/ui/SearchableSelect'
 
 type AuthMode = 'sign-in' | 'sign-up'
 
@@ -196,18 +197,14 @@ export function AuthForm({
 
             <label className="auth-field">
               <span>Choose your plan</span>
-              <select
+              <SearchableSelect
                 className="auth-select"
-                name="plan"
+                placeholder="Choose your plan"
+                searchPlaceholder="Search plans..."
                 value={selectedPlan}
-                onChange={(event) => setSelectedPlan(event.target.value)}
-              >
-                {SUBSCRIPTION_PLANS.map((plan) => (
-                  <option key={plan.plan} value={plan.plan}>
-                    {plan.name} - {formatPlanPrice(plan.monthly)}/mo
-                  </option>
-                ))}
-              </select>
+                onChange={(value) => setSelectedPlan(value)}
+                options={SUBSCRIPTION_PLANS.map((plan) => ({ value: plan.plan, label: `${plan.name} - ${formatPlanPrice(plan.monthly)}/mo` }))}
+              />
             </label>
 
             <div className="auth-plan-summary">

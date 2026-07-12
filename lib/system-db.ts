@@ -11,6 +11,8 @@ import {
   createUnitOfMeasure,
   createLocation,
   createSupplier,
+  deleteLocation,
+  updateLocation,
   deleteProduct,
   deleteProducts,
   deleteSupplier,
@@ -21,6 +23,8 @@ import {
   recordCashMovement,
   recordSale,
   recordWaste,
+  reverseWaste,
+  editWaste,
   remapStateTenantId,
   refundTransaction,
   resolveAlert,
@@ -59,6 +63,8 @@ type MutationPayload =
   | { action: 'addCategory'; draft: CategoryDraft }
   | { action: 'addUnitOfMeasure'; draft: UnitOfMeasureDraft }
   | { action: 'addLocation'; draft: LocationDraft }
+  | { action: 'updateLocation'; locationId: string; draft: LocationDraft }
+  | { action: 'deleteLocation'; locationId: string }
   | { action: 'saveProduct'; draft: ProductDraft; productId?: string }
   | { action: 'removeProduct'; productId: string; itemCode?: string }
   | { action: 'removeProducts'; productIds: string[]; itemCodes?: string[] }
@@ -87,6 +93,8 @@ type MutationPayload =
   | { action: 'acknowledge'; alertId: string }
   | { action: 'resolve'; alertId: string }
   | { action: 'recordWaste'; productId: string; wasteType: 'waste' | 'defect' | 'reject'; quantity: number; reason?: string }
+  | { action: 'reverseWaste'; movementId: string }
+  | { action: 'editWaste'; movementId: string; wasteType: 'waste' | 'defect' | 'reject'; quantity: number; reason?: string }
   | { action: 'transferStock'; payload: { productId: string; fromLocationId: string | null; toLocationId: string | null; quantity: number; notes?: string } }
   | { action: 'updatePurchaseOrder'; purchaseOrderId: string; draft: PurchaseOrderDraft }
   | { action: 'cancelPurchaseOrder'; purchaseOrderId: string }
@@ -441,7 +449,7 @@ function resolveInviteRedirect(origin?: string | null) {
   return base ? `${base}/set-password` : undefined
 }
 
-async function provisionTenantUserAccess(tenantId: string, draft: UserDraft, origin?: string | null) {
+export async function provisionTenantUserAccess(tenantId: string, draft: UserDraft, origin?: string | null) {
   const client = getSupabaseAdminClient()
   const email = draft.email.trim().toLowerCase()
   if (!email) {
@@ -622,6 +630,68 @@ async function resendTenantInvite(tenantId: string, draft: UserDraft, origin?: s
   return authUserId
 }
 
+// Creates a tenant on behalf of the platform owner (super admin) for a specific
+// client, with the contracted plan and its hard limits applied server-side. The
+// client never supplies or can override the plan — this is the source of truth
+// that enforces the agreed contract. Seeds default UOMs, categories and a Main
+// Storage location the same way a fresh workspace is prepared.
+const PROVISION_PLAN_LIMITS: Record<SubscriptionPlan, { max_users: number; max_products: number; max_locations: number }> = {
+  starter: { max_users: 3, max_products: 100, max_locations: 1 },
+  professional: { max_users: 10, max_products: 1000, max_locations: 5 },
+  enterprise: { max_users: 999, max_products: 9999, max_locations: 99 },
+}
+
+export async function createProvisionedTenant(params: {
+  name: string
+  business_type: BusinessType
+  plan: SubscriptionPlan
+  billing_email?: string | null
+  timezone?: string
+}): Promise<string> {
+  const client = getSupabaseAdminClient()
+  const limits = PROVISION_PLAN_LIMITS[params.plan]
+  const now = new Date().toISOString()
+  const subscriptionEndsAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
+
+  const { data, error } = await client
+    .from('tenants')
+    .insert({
+      name: params.name,
+      business_type: params.business_type,
+      currency: 'PHP',
+      timezone: params.timezone ?? 'Asia/Manila',
+      plan: params.plan,
+      subscription_status: 'active',
+      trial_ends_at: null,
+      subscription_ends_at: subscriptionEndsAt,
+      max_users: limits.max_users,
+      max_products: limits.max_products,
+      max_locations: limits.max_locations,
+      enable_production: params.business_type === 'manufacturing',
+      is_active: true,
+      billing_email: params.billing_email ?? null,
+      created_at: now,
+      updated_at: now,
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    throw new Error(`create tenant failed: ${error.message}`)
+  }
+
+  const tenantId = data.id as string
+
+  // Prepare the workspace the same way onboarding would: categories, UOMs, and
+  // a default Main Storage location.
+  await client.rpc('seed_tenant_defaults', {
+    p_tenant_id: tenantId,
+    p_business_type: params.business_type,
+  })
+
+  return tenantId
+}
+
 export async function ensureDatabaseState(tenantId?: string | null, businessType: BusinessType = 'coffee_shop') {
   const existing = await loadTenantState(tenantId)
   if (existing) return existing
@@ -655,6 +725,12 @@ export async function applyDatabaseMutation(
       break
     case 'addLocation':
       state = createLocation(state, mutation.draft)
+      break
+    case 'updateLocation':
+      state = updateLocation(state, mutation.locationId, mutation.draft)
+      break
+    case 'deleteLocation':
+      state = deleteLocation(state, mutation.locationId)
       break
     case 'saveProduct':
       state = addOrUpdateProduct(state, mutation.draft, mutation.productId)
@@ -743,6 +819,12 @@ export async function applyDatabaseMutation(
       break
     case 'recordWaste':
       state = recordWaste(state, { productId: mutation.productId, wasteType: mutation.wasteType, quantity: mutation.quantity, reason: mutation.reason })
+      break
+    case 'reverseWaste':
+      state = reverseWaste(state, mutation.movementId)
+      break
+    case 'editWaste':
+      state = editWaste(state, mutation.movementId, { wasteType: mutation.wasteType, quantity: mutation.quantity, reason: mutation.reason })
       break
     case 'transferStock':
       state = createTransfer(state, mutation.payload)

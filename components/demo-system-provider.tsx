@@ -11,6 +11,8 @@ import {
   createPurchaseOrder,
   createLocation,
   createUnitOfMeasure,
+  deleteLocation,
+  updateLocation,
   createSupplier,
   createUser,
   cancelPurchaseOrder,
@@ -27,6 +29,8 @@ import {
   recordCashMovement,
   recordSale,
   recordWaste,
+  reverseWaste,
+  editWaste,
   remapStateTenantId,
   resolveAlert,
   seedDemoSystem,
@@ -80,6 +84,8 @@ type DemoSystemContextValue = {
   addCategory: (draft: CategoryDraft) => void
   addUnitOfMeasure: (draft: UnitOfMeasureDraft) => void
   addLocation: (draft: LocationDraft) => void
+  editLocation: (locationId: string, draft: LocationDraft) => void
+  removeLocation: (locationId: string) => void
   saveProduct: (draft: ProductDraft, productId?: string) => void
   removeProduct: (productId: string) => void
   removeProducts: (productIds: string[]) => void
@@ -111,6 +117,8 @@ type DemoSystemContextValue = {
   acknowledge: (alertId: string) => void
   resolve: (alertId: string) => void
   recordWaste: (productId: string, wasteType: 'waste' | 'defect' | 'reject', quantity: number, reason?: string) => void
+  reverseWaste: (movementId: string) => void
+  editWaste: (movementId: string, draft: { wasteType: 'waste' | 'defect' | 'reject'; quantity: number; reason?: string }) => void
   transferStock: (payload: { productId: string; fromLocationId: string | null; toLocationId: string | null; quantity: number; notes?: string }) => void
   switchTenant: (tenantId: string) => Promise<void>
   signOut: () => Promise<void>
@@ -408,6 +416,14 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       (current) => createLocation(current, draft),
       { action: 'addLocation', draft }
     ),
+    editLocation: (locationId, draft) => sync(
+      (current) => updateLocation(current, locationId, draft),
+      { action: 'updateLocation', locationId, draft }
+    ),
+    removeLocation: (locationId) => sync(
+      (current) => deleteLocation(current, locationId),
+      { action: 'deleteLocation', locationId }
+    ),
     saveProduct: (draft, productId) => sync(
       (current) => addOrUpdateProduct(current, draft, productId),
       { action: 'saveProduct', draft, productId }
@@ -567,6 +583,16 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     recordWaste: (productId, wasteType, quantity, reason) => sync(
       (current) => recordWaste(current, { productId, wasteType, quantity, reason }),
       { action: 'recordWaste', productId, wasteType, quantity, reason }
+    ),
+    reverseWaste: (movementId) => sync(
+      (current) => reverseWaste(current, movementId),
+      { action: 'reverseWaste', movementId },
+      { successMessage: 'Waste entry reversed — stock restored.', errorLabel: 'Could not reverse waste' }
+    ),
+    editWaste: (movementId, draft) => sync(
+      (current) => editWaste(current, movementId, draft),
+      { action: 'editWaste', movementId, ...draft },
+      { successMessage: 'Waste entry updated.', errorLabel: 'Could not update waste' }
     ),
     transferStock: (payload) => sync(
       (current) => createTransfer(current, payload),

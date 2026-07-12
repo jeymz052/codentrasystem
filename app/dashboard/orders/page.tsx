@@ -9,6 +9,7 @@ import { useTableState } from '@/lib/use-table-state'
 import { TableToolbar } from '@/components/ui/table/TableToolbar'
 import { SortHeader } from '@/components/ui/table/SortHeader'
 import { Pagination } from '@/components/ui/table/Pagination'
+import { SearchableSelect } from '@/components/ui/SearchableSelect'
 
 type PoForm = {
   supplierId: string
@@ -353,7 +354,7 @@ export default function OrdersPage() {
       />
 
       {showCreateModal && (
-        <div className="modal-overlay" onClick={(event) => event.target === event.currentTarget && setShowCreateModal(false)}>
+        <div className="modal-overlay">
           <div className="modal" style={{ maxWidth: 760 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 20 }}>
               <div>
@@ -372,20 +373,26 @@ export default function OrdersPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
               <label className="auth-field">
                 <span>Supplier</span>
-                <select className="auth-select" value={form.supplierId} onChange={(event) => setForm((current) => ({ ...current, supplierId: event.target.value }))}>
-                  {state.suppliers.map((supplier) => (
-                    <option key={supplier.id} value={supplier.id}>{supplier.name}</option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  className="auth-select"
+                  placeholder="Supplier"
+                  searchPlaceholder="Search suppliers..."
+                  value={form.supplierId}
+                  onChange={(value) => setForm((current) => ({ ...current, supplierId: value }))}
+                  options={state.suppliers.map((supplier) => ({ value: supplier.id, label: supplier.name }))}
+                />
               </label>
 
               <label className="auth-field">
                 <span>Product</span>
-                <select className="auth-select" value={form.productId} onChange={(event) => setForm((current) => ({ ...current, productId: event.target.value }))}>
-                  {state.products.map((product) => (
-                    <option key={product.id} value={product.id}>{product.name}</option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  className="auth-select"
+                  placeholder="Product"
+                  searchPlaceholder="Search products..."
+                  value={form.productId}
+                  onChange={(value) => setForm((current) => ({ ...current, productId: value }))}
+                  options={state.products.map((product) => ({ value: product.id, label: product.name }))}
+                />
               </label>
 
               <label className="auth-field">
@@ -446,7 +453,7 @@ export default function OrdersPage() {
       )}
 
       {editId && (
-        <div className="modal-overlay" onClick={(event) => event.target === event.currentTarget && setEditId(null)}>
+        <div className="modal-overlay">
           <div className="modal" style={{ maxWidth: 760 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 20 }}>
               <div>
@@ -465,20 +472,26 @@ export default function OrdersPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
               <label className="auth-field">
                 <span>Supplier</span>
-                <select className="auth-select" value={editForm.supplierId} onChange={(event) => setEditForm((current) => ({ ...current, supplierId: event.target.value }))}>
-                  {state.suppliers.map((supplier) => (
-                    <option key={supplier.id} value={supplier.id}>{supplier.name}</option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  className="auth-select"
+                  placeholder="Supplier"
+                  searchPlaceholder="Search suppliers..."
+                  value={editForm.supplierId}
+                  onChange={(value) => setEditForm((current) => ({ ...current, supplierId: value }))}
+                  options={state.suppliers.map((supplier) => ({ value: supplier.id, label: supplier.name }))}
+                />
               </label>
 
               <label className="auth-field">
                 <span>Product</span>
-                <select className="auth-select" value={editForm.productId} onChange={(event) => setEditForm((current) => ({ ...current, productId: event.target.value }))}>
-                  {state.products.map((product) => (
-                    <option key={product.id} value={product.id}>{product.name}</option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  className="auth-select"
+                  placeholder="Product"
+                  searchPlaceholder="Search products..."
+                  value={editForm.productId}
+                  onChange={(value) => setEditForm((current) => ({ ...current, productId: value }))}
+                  options={state.products.map((product) => ({ value: product.id, label: product.name }))}
+                />
               </label>
 
               <label className="auth-field">

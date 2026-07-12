@@ -22,6 +22,7 @@ export interface Tenant {
   phone: string | null
   email: string | null
   tax_id: string | null
+  billing_email: string | null
   currency: string
   timezone: string
   plan: SubscriptionPlan
@@ -31,22 +32,21 @@ export interface Tenant {
   max_users: number
   max_products: number
   max_locations: number
-  enable_production?: boolean
+  enable_production: boolean
   is_active: boolean
+  gcash_account: string | null
+  gcash_qr_url: string | null
+  maya_account: string | null
+  maya_qr_url: string | null
+  bdo_account: string | null
+  bdo_qr_url: string | null
+  maribank_account: string | null
+  maribank_qr_url: string | null
+  stripe_customer_id: string | null
+  stripe_subscription_id: string | null
+  stripe_price_id: string | null
   created_at: string
   updated_at: string
-  billing_email?: string | null
-  stripe_customer_id?: string | null
-  stripe_subscription_id?: string | null
-  stripe_price_id?: string | null
-  gcash_account?: string | null
-  gcash_qr_url?: string | null
-  maya_account?: string | null
-  maya_qr_url?: string | null
-  bdo_account?: string | null
-  bdo_qr_url?: string | null
-  maribank_account?: string | null
-  maribank_qr_url?: string | null
 }
 
 export interface TenantMembership {

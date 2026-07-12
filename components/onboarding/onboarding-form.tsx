@@ -5,6 +5,7 @@ import { useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowRight, Building2, CalendarDays, CircleDollarSign, Factory, Layers3, ShoppingBag } from 'lucide-react'
 import { SUBSCRIPTION_PLANS } from '@/lib/subscription-plans'
+import { SearchableSelect } from '@/components/ui/SearchableSelect'
 
 type OnboardingFormState = {
   business_name: string
@@ -153,11 +154,18 @@ export function OnboardingForm({ initialPlan }: { initialPlan?: string }) {
         </label>
         <label className="auth-field">
           <span>Plan</span>
-          <select className="auth-select" value={form.plan} onChange={(event) => setForm((current) => ({ ...current, plan: event.target.value }))}>
-            <option value="starter">Starter</option>
-            <option value="professional">Professional</option>
-            <option value="enterprise">Enterprise</option>
-          </select>
+          <SearchableSelect
+            className="auth-select"
+            placeholder="Plan"
+            searchPlaceholder="Search plans..."
+            value={form.plan}
+            onChange={(value) => setForm((current) => ({ ...current, plan: value }))}
+            options={[
+              { value: 'starter', label: 'Starter' },
+              { value: 'professional', label: 'Professional' },
+              { value: 'enterprise', label: 'Enterprise' },
+            ]}
+          />
         </label>
         <label className="auth-field">
           <span>Timezone</span>

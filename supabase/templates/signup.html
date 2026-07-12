@@ -1,28 +1,27 @@
 <!--
-  Codentra — "Invite user" email template.
+  Codentra — "Signup" (confirm signup) email template.
 
   How to use (hosted Supabase):
-    1. Supabase Dashboard -> Authentication -> Emails -> Templates -> "Invite user".
-    2. Set the Subject to:    
-       (or simply: You're invited to Codentra)
+    1. Supabase Dashboard -> Authentication -> Emails -> Templates -> "Signup".
+    2. Set the Subject to:
+         Confirm your Codentra account
     3. Paste the HTML below into the message body and Save.
     4. Authentication -> URL Configuration -> Redirect URLs: add
-         https://YOUR-DOMAIN/set-password
-       and set NEXT_PUBLIC_APP_URL in your .env so the invite links back correctly.
+         https://YOUR-DOMAIN/onboarding
+       and set NEXT_PUBLIC_APP_URL in your .env so the link points back correctly.
 
   Available variables:
-    {{ .ConfirmationURL }}  - the secure link that signs the invitee in so they can set a password
-    {{ .Email }}            - the invitee's email
-    {{ .Data.full_name }}   - invitee's name (sent from the app)
-    {{ .Data.tenant_name }} - the store/tenant they were invited to
-    {{ .Data.invited_role }}- cashier / manager / admin
+    {{ .ConfirmationURL }} - the secure link that confirms the account and
+                             redirects to onboarding
+    {{ .Email }}           - the new user's email
+    {{ .Token }}           - confirmation token (not needed in the link above)
 -->
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>You're invited to Codentra</title>
+    <title>Confirm your Codentra account</title>
   </head>
   <body style="margin:0;padding:0;background-color:#eef2f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#eef2f7;padding:32px 12px;">
@@ -41,13 +40,11 @@
             <tr>
               <td style="padding:32px;">
                 <h1 style="margin:0 0 8px;font-size:20px;font-weight:800;color:#0F172A;">
-                  You&rsquo;ve been invited{{ if .Data.tenant_name }} to {{ .Data.tenant_name }}{{ end }}
+                  Welcome to Codentra
                 </h1>
                 <p style="margin:0 0 20px;font-size:14px;line-height:1.6;color:#475569;">
-                  Hi{{ if .Data.full_name }} {{ .Data.full_name }}{{ end }}, you&rsquo;ve been invited to join
-                  {{ if .Data.tenant_name }}<strong>{{ .Data.tenant_name }}</strong>{{ else }}a team{{ end }}
-                  on Codentra{{ if .Data.invited_role }} as a <strong>{{ .Data.invited_role }}</strong>{{ end }}.
-                  Set up your password to activate your account and get started.
+                  Hi there, thanks for signing up. Confirm your email address to activate your
+                  workspace and finish setting up your business.
                 </p>
 
                 <!-- CTA -->
@@ -56,13 +53,13 @@
                     <td align="center" style="border-radius:12px;background:linear-gradient(135deg,#2563EB,#3B82F6);">
                       <a href="{{ .ConfirmationURL }}"
                          style="display:inline-block;padding:14px 28px;font-size:15px;font-weight:700;color:#ffffff;text-decoration:none;border-radius:12px;">
-                        Set up my password &rarr;
+                        Confirm my account &rarr;
                       </a>
                     </td>
                   </tr>
                 </table>
 
-                <p style="margin:0 0 6px;font-size:12px;color:#64748B;">This invitation is for <strong>{{ .Email }}</strong>.</p>
+                <p style="margin:0 0 6px;font-size:12px;color:#64748B;">This confirmation is for <strong>{{ .Email }}</strong>.</p>
                 <p style="margin:0 0 20px;font-size:12px;color:#94A3B8;">
                   If the button doesn&rsquo;t work, copy and paste this link into your browser:<br />
                   <a href="{{ .ConfirmationURL }}" style="color:#2563EB;word-break:break-all;">{{ .ConfirmationURL }}</a>
@@ -70,8 +67,8 @@
 
                 <div style="border-top:1px solid #E2E8F0;padding-top:16px;">
                   <p style="margin:0;font-size:12px;line-height:1.6;color:#94A3B8;">
-                    If you weren&rsquo;t expecting this invitation, you can safely ignore this email &mdash;
-                    no account will be activated until the password is set.
+                    If you didn&rsquo;t create a Codentra account, you can safely ignore this email &mdash;
+                    no workspace will be created until you confirm.
                   </p>
                 </div>
               </td>

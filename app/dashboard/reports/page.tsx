@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { Download, DollarSign, Layers, Package, PieChart, TrendingDown, TrendingUp } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 
-const TABS = ['Stock Balance', 'Cost of Goods Sold', 'Aging Inventory', 'Sales Summary'] as const
+const TABS = ['Stock Balance', 'Cost of Goods Sold', 'Sales Summary'] as const
 
 function exportCSV(data: Record<string, string | number | null | undefined>[], filename: string) {
   if (!data.length) return
@@ -113,6 +113,7 @@ export default function ReportsPage() {
   const stockRows = useMemo(
     () =>
       state.products.map((product) => ({
+        id: product.id,
         item_code: product.item_code,
         name: product.name,
         category: state.categories.find((category) => category.id === product.category_id)?.name ?? 'Uncategorized',
@@ -132,82 +133,59 @@ export default function ReportsPage() {
           .filter((tx) => tx.status === 'completed' && toLocalDateString(new Date(tx.created_at)) >= dateFrom && toLocalDateString(new Date(tx.created_at)) <= dateTo)
           .map((tx) => tx.id)
       )
-      return state.salesTransactionItems
-        .filter((item) => inRangeTxIds.has(item.transaction_id))
-        .map((item) => {
-          const product = state.products.find((entry) => entry.id === item.product_id)
-          const revenue = item.subtotal
-          const cogs = Number(item.unit_cost ?? 0) * item.quantity
-          const margin = revenue - cogs
-          return {
+
+      // Aggregate by product so each finished good appears once with its totals
+      // summed (selling the same item across multiple sales must not create
+      // duplicate rows). The row id is the product id, which keeps React keys
+      // unique and matches how the table / top-margin list are keyed.
+      const byProduct = new Map<string, {
+        id: string
+        item_code: string
+        name: string
+        qty_sold: number
+        unit_cost: number
+        cogs: number
+        revenue: number
+        margin: number
+        margin_pct: number
+      }>()
+
+      for (const item of state.salesTransactionItems) {
+        if (!inRangeTxIds.has(item.transaction_id)) continue
+        const product = state.products.find((entry) => entry.id === item.product_id)
+        const cogs = Number(item.unit_cost ?? 0) * item.quantity
+        const revenue = item.subtotal
+        const existing = byProduct.get(item.product_id)
+        if (existing) {
+          existing.qty_sold += item.quantity
+          existing.cogs += cogs
+          existing.revenue += revenue
+          existing.margin += revenue - cogs
+        } else {
+          byProduct.set(item.product_id, {
+            id: item.product_id,
             item_code: product?.item_code ?? item.product_id.slice(0, 6),
             name: product?.name ?? 'Unknown',
             qty_sold: item.quantity,
             unit_cost: Number(item.unit_cost ?? 0),
             cogs,
             revenue,
-            margin,
-            margin_pct: revenue === 0 ? 0 : Math.round((margin / revenue) * 1000) / 10,
-          }
-        })
+            margin: revenue - cogs,
+            margin_pct: 0,
+          })
+        }
+      }
+
+      for (const row of byProduct.values()) {
+        row.margin_pct = row.revenue === 0 ? 0 : Math.round((row.margin / row.revenue) * 1000) / 10
+        const product = state.products.find((entry) => entry.id === row.id)
+        row.unit_cost = Number(product?.unit_cost ?? row.unit_cost)
+      }
+
+      return Array.from(byProduct.values())
     },
     [state.products, state.salesTransactionItems, state.salesTransactions, dateFrom, dateTo]
   )
-
-  const agingRows = useMemo(() => {
-    const rangeEnd = new Date(`${dateTo}T23:59:59`)
-    const movementsInRange = state.stockMovements.filter((m) => toLocalDateString(new Date(m.created_at)) >= dateFrom && toLocalDateString(new Date(m.created_at)) <= dateTo)
-
-    const latestByProduct = new Map<string, { movement: typeof movementsInRange[0]; date: Date }>()
-    for (const movement of movementsInRange) {
-      const d = new Date(movement.created_at)
-      const existing = latestByProduct.get(movement.product_id)
-      if (!existing || d > existing.date) {
-        latestByProduct.set(movement.product_id, { movement, date: d })
-      }
-    }
-
-    const latestEverByProduct = new Map<string, { movement: typeof state.stockMovements[0]; date: Date }>()
-    for (const movement of state.stockMovements) {
-      const d = new Date(movement.created_at)
-      const existing = latestEverByProduct.get(movement.product_id)
-      if (!existing || d > existing.date) {
-        latestEverByProduct.set(movement.product_id, { movement, date: d })
-      }
-    }
-
-    return state.products
-      .map((product) => {
-        const inRange = latestByProduct.get(product.id)
-        const ever = latestEverByProduct.get(product.id)
-        const source = inRange ?? ever
-        if (!source) {
-          const created = new Date(product.created_at)
-          const daysNoMovement = Number.isNaN(created.getTime()) ? 0 : Math.max(Math.floor((rangeEnd.getTime() - created.getTime()) / 86400000), 0)
-          return {
-            item_code: product.item_code,
-            name: product.name,
-            category: state.categories.find((category) => category.id === product.category_id)?.name ?? 'Uncategorized',
-            qty: product.quantity_on_hand,
-            uom: product.uom?.abbreviation ?? 'pcs',
-            last_movement: toLocalDateString(created),
-            days_no_movement: daysNoMovement,
-          }
-        }
-        const lastMovementDate = source.date
-        const daysNoMovement = Math.max(Math.floor((rangeEnd.getTime() - lastMovementDate.getTime()) / 86400000), 0)
-        return {
-          item_code: product.item_code,
-          name: product.name,
-          category: state.categories.find((category) => category.id === product.category_id)?.name ?? 'Uncategorized',
-          qty: product.quantity_on_hand,
-          uom: product.uom?.abbreviation ?? 'pcs',
-          last_movement: toLocalDateString(lastMovementDate),
-          days_no_movement: daysNoMovement,
-        }
-      })
-      .sort((a, b) => b.days_no_movement - a.days_no_movement)
-  }, [dateFrom, dateTo, state.categories, state.products, state.stockMovements])
 
   const salesRows = useMemo<SalesPoint[]>(() => {
     const completed = state.salesTransactions.filter(
@@ -270,24 +248,25 @@ export default function ReportsPage() {
   const totalSales = salesRows.reduce((sum, row) => sum + row.sales, 0)
   const aov = totalTxn === 0 ? 0 : totalSales / totalTxn
 
-  const statusColor = (status: string) => (status === 'out' ? '#EF4444' : status === 'low' ? '#F59E0B' : '#10B981')
-  const agingColor = (days: number) => (days > 20 ? '#EF4444' : days > 10 ? '#F59E0B' : '#10B981')
-
   const categoryValue = useMemo(() => {
-    const colorOf = (name: string) => state.categories.find((entry) => entry.name === name)?.color ?? '#94A3B8'
+    const PALETTE = ['#3B82F6', '#10B981', '#F59E0B', '#8B5CF6', '#EF4444', '#06B6D4', '#EC4899', '#84CC16', '#F97316', '#6366F1']
     const byCat: Record<string, number> = {}
     for (const product of state.products) {
       const name = product.category?.name ?? 'Uncategorized'
       byCat[name] = (byCat[name] ?? 0) + Number(product.unit_cost ?? 0) * Number(product.quantity_on_hand ?? 0)
     }
     const all = Object.entries(byCat)
-      .map(([name, value]) => ({ name, value, color: colorOf(name) }))
+      .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value)
     const total = all.reduce((sum, entry) => sum + entry.value, 0) || 1
     const top = all.slice(0, 5)
     const rest = all.slice(5)
-    const segments = [...top]
-    if (rest.length > 0) segments.push({ name: 'Other', value: rest.reduce((sum, entry) => sum + entry.value, 0), color: '#94A3B8' })
+    const raw = [...top]
+    if (rest.length > 0) raw.push({ name: 'Other', value: rest.reduce((sum, entry) => sum + entry.value, 0) })
+    const segments = raw.map((segment, index) => ({
+      ...segment,
+      color: segment.name === 'Other' ? '#94A3B8' : PALETTE[index % PALETTE.length],
+    }))
     let acc = 0
     const built = segments.map((segment) => {
       const start = (acc / total) * 360
@@ -305,21 +284,7 @@ export default function ReportsPage() {
   const topMarginProducts = useMemo(() => cogsRows.slice().sort((a, b) => b.margin - a.margin).slice(0, 6), [cogsRows])
   const topMarginMax = Math.max(...topMarginProducts.map((row) => row.margin), 1)
 
-  const riskCounts = useMemo(() => {
-    const counts = { Low: 0, Medium: 0, High: 0 }
-    for (const row of agingRows) {
-      if (row.days_no_movement > 20) counts.High += 1
-      else if (row.days_no_movement > 10) counts.Medium += 1
-      else counts.Low += 1
-    }
-    return counts
-  }, [agingRows])
-  const riskTotal = riskCounts.Low + riskCounts.Medium + riskCounts.High || 1
-  const riskSegments = [
-    { label: 'Low', value: riskCounts.Low, color: '#10B981' },
-    { label: 'Medium', value: riskCounts.Medium, color: '#F59E0B' },
-    { label: 'High', value: riskCounts.High, color: '#EF4444' },
-  ]
+  const statusColor = (status: string) => (status === 'out' ? '#EF4444' : status === 'low' ? '#F59E0B' : '#10B981')
 
   const kpiCards = [
     { label: 'Inventory Value', value: formatCurrency(totalValue), icon: <Package size={18} />, color: '#3B82F6', sub: `${stockRows.length} SKUs tracked` },
@@ -370,7 +335,6 @@ export default function ReportsPage() {
             onClick={() => {
               if (tab === 'Stock Balance') exportCSV(stockRows, 'stock_balance')
               else if (tab === 'Cost of Goods Sold') exportCSV(cogsRows, 'cogs_report')
-              else if (tab === 'Aging Inventory') exportCSV(agingRows, 'aging_inventory')
               else exportCSV(salesRows, range === 'weekly' ? 'sales_summary_weekly' : 'sales_summary_daily')
             }}
           >
@@ -423,7 +387,7 @@ export default function ReportsPage() {
               </div>
               <div style={{ display: 'grid', gap: 12 }}>
                 {topStockProducts.map((row, index) => (
-                  <div key={row.item_code}>
+                  <div key={row.id}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                         <span style={{ width: 20, height: 20, borderRadius: 6, background: 'linear-gradient(135deg, #2563EB, #3B82F6)', color: '#fff', fontSize: 10, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{index + 1}</span>
@@ -447,7 +411,7 @@ export default function ReportsPage() {
                 </tr></thead>
               <tbody>
                 {stockRows.map((row) => (
-                  <tr key={row.item_code}>
+                  <tr key={row.id}>
                     <td><code style={{ fontSize: 11, background: '#EFF6FF', padding: '2px 6px', borderRadius: 4, color: '#3B82F6' }}>{row.item_code}</code></td>
                     <td style={{ fontWeight: 600, color: '#0F172A' }}>{row.name}</td>
                     <td><span className="badge badge-blue" style={{ fontSize: 10 }}>{row.category}</span></td>
@@ -509,7 +473,7 @@ export default function ReportsPage() {
               </div>
               <div style={{ display: 'grid', gap: 12 }}>
                 {topMarginProducts.map((row) => (
-                  <div key={`${row.item_code}-${row.qty_sold}`}>
+                  <div key={row.id}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
                       <span style={{ fontSize: 12, fontWeight: 600, color: '#0F172A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</span>
                       <span style={{ fontSize: 12, fontWeight: 800, color: '#2563EB', flexShrink: 0, marginLeft: 8 }}>{formatCurrency(row.margin)}</span>
@@ -530,7 +494,7 @@ export default function ReportsPage() {
                 </tr></thead>
               <tbody>
                 {cogsRows.map((row) => (
-                  <tr key={`${row.item_code}-${row.qty_sold}`}>
+                  <tr key={row.id}>
                     <td><code style={{ fontSize: 11, background: '#EFF6FF', padding: '2px 6px', borderRadius: 4, color: '#3B82F6' }}>{row.item_code}</code></td>
                     <td style={{ fontWeight: 600, color: '#0F172A' }}>{row.name}</td>
                     <td style={{ fontWeight: 700 }}>{row.qty_sold}</td>
@@ -555,68 +519,6 @@ export default function ReportsPage() {
                   <td style={{ fontWeight: 800, color: '#2563EB' }}>{formatCurrency(totalMargin)}</td>
                   <td />
                 </tr></tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {tab === 'Aging Inventory' && (
-        <div style={{ display: 'grid', gap: 16 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
-            <div className="card" style={{ padding: 18, borderRadius: 18 }}>
-              <div style={{ fontSize: 12, color: '#64748B', marginBottom: 14 }}>Risk distribution</div>
-              <div style={{ display: 'flex', height: 22, borderRadius: 999, overflow: 'hidden', background: '#E2E8F0' }}>
-                {riskSegments.map((segment) => (
-                  <div key={segment.label} style={{ width: `${(segment.value / riskTotal) * 100}%`, background: segment.color }} title={`${segment.label}: ${segment.value}`} />
-                ))}
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginTop: 16 }}>
-                {riskSegments.map((segment) => (
-                  <div key={segment.label} style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 22, fontWeight: 900, color: segment.color, lineHeight: 1 }}>{segment.value}</div>
-                    <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>{segment.label}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="card" style={{ padding: 18, borderRadius: 18 }}>
-              <div style={{ fontSize: 12, color: '#64748B', marginBottom: 14 }}>Slow movers (days without movement)</div>
-              <div style={{ display: 'grid', gap: 12 }}>
-                {agingRows.slice(0, 6).map((row) => (
-                  <div key={row.item_code}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: '#0F172A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</span>
-                      <span style={{ fontSize: 12, fontWeight: 800, color: agingColor(row.days_no_movement), flexShrink: 0, marginLeft: 8 }}>{row.days_no_movement}d</span>
-                    </div>
-                    <div style={{ height: 8, background: '#E2E8F0', borderRadius: 999, overflow: 'hidden' }}>
-                      <div style={{ width: `${Math.min((row.days_no_movement / 30) * 100, 100)}%`, height: '100%', background: agingColor(row.days_no_movement), borderRadius: 999 }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="card table-scroll" style={{ overflow: 'hidden' }}>
-            <table className="data-table">
-              <thead><tr>
-                  <th>Item Code</th><th>Name</th><th>Category</th><th>Qty</th><th>UOM</th><th>Last Movement</th><th>Days No Movement</th><th>Risk</th>
-                </tr></thead>
-              <tbody>
-                {agingRows.map((row) => (
-                  <tr key={row.item_code}>
-                    <td><code style={{ fontSize: 11, background: '#EFF6FF', padding: '2px 6px', borderRadius: 4, color: '#3B82F6' }}>{row.item_code}</code></td>
-                    <td style={{ fontWeight: 600, color: '#0F172A' }}>{row.name}</td>
-                    <td><span className="badge badge-blue" style={{ fontSize: 10 }}>{row.category}</span></td>
-                    <td style={{ fontWeight: 700 }}>{row.qty}</td>
-                    <td style={{ color: '#475569' }}>{row.uom}</td>
-                    <td style={{ color: '#475569', fontSize: 12 }}>{row.last_movement}</td>
-                    <td><span style={{ fontWeight: 800, color: agingColor(row.days_no_movement), fontSize: 15 }}>{row.days_no_movement}d</span></td>
-                    <td><span className="badge" style={{ background: `${agingColor(row.days_no_movement)}14`, color: agingColor(row.days_no_movement) }}>{row.days_no_movement > 20 ? 'High Risk' : row.days_no_movement > 10 ? 'Medium' : 'Low'}</span></td>
-                  </tr>
-                ))}
-              </tbody>
             </table>
           </div>
         </div>

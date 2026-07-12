@@ -1,9 +1,10 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bell, Building2, ChevronDown, CheckCircle2, AlertTriangle, Menu } from 'lucide-react'
+import { Bell, Building2, CheckCircle2, AlertTriangle, Menu } from 'lucide-react'
 import { usePathname } from 'next/navigation'
 import { useDemoSystem } from '@/components/demo-system-provider'
+import { SearchableSelect } from '@/components/ui/SearchableSelect'
 
 const TITLES: Record<string, string> = {
   '/dashboard': 'Dashboard',
@@ -94,19 +95,15 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
           background: '#fff', padding: '6px 10px',
         }}>
           <span style={{ fontSize: 11, color: '#64748B', whiteSpace: 'nowrap' }}>Tenant</span>
-          <select
+          <SearchableSelect
             className="topbar-tenant-select"
+            placeholder="Select tenant"
+            searchPlaceholder="Search tenants..."
+            style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 12, color: '#0F172A' }}
             value={activeTenantId || state.tenant.id}
-            onChange={(event) => void switchTenant(event.target.value)}
-            style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 12, color: '#0F172A', maxWidth: 160 }}
-          >
-            {availableTenants.map((tenant) => (
-              <option key={tenant.id} value={tenant.id}>
-                {tenant.name}
-              </option>
-            ))}
-          </select>
-          <ChevronDown size={12} color="#94A3B8" />
+            onChange={(value) => void switchTenant(value)}
+            options={availableTenants.map((tenant) => ({ value: tenant.id, label: tenant.name }))}
+          />
         </label>
 
         <div ref={menuRef} style={{ position: 'relative' }}>

@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useState, type ChangeEvent } from 'react'
-import { Building2, Coins, Factory, Landmark, Layers3, MapPin, Plus, RotateCcw, Save, Settings as SettingsIcon, Sparkles, Tag, Users, Wallet, Warehouse } from 'lucide-react'
+import { Building2, Coins, Factory, Landmark, Layers3, MapPin, Pencil, Plus, RotateCcw, Save, Settings as SettingsIcon, Sparkles, Tag, Trash2, Users, Wallet, Warehouse, X } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
+import { SearchableSelect } from '@/components/ui/SearchableSelect'
 import type { BusinessType, SubscriptionPlan, SubscriptionStatus } from '@/types/database'
 
 function humanize(value: string) {
@@ -17,12 +18,14 @@ const PAYMENT_ACCOUNT_FIELDS = [
 ] as const
 
 export default function SettingsPage() {
-  const { state, updateTenant, resetDemo, addCategory, addUnitOfMeasure, addLocation, notifySuccess, notifyError } = useDemoSystem()
+  const { state, updateTenant, resetDemo, addCategory, addUnitOfMeasure, addLocation, editLocation, removeLocation, notifySuccess, notifyError, isSuperAdminIdentity } = useDemoSystem()
+  const canEditPlan = isSuperAdminIdentity
   const [billingLoading, setBillingLoading] = useState(false)
   const [catalogTab, setCatalogTab] = useState<'categories' | 'uom' | 'locations'>('categories')
   const [categoryForm, setCategoryForm] = useState({ name: '', color: '#3B82F6', description: '' })
   const [uomForm, setUomForm] = useState({ name: '', abbreviation: '' })
   const [locationForm, setLocationForm] = useState({ code: '', name: '', zone: '' })
+  const [editingLocationId, setEditingLocationId] = useState<string | null>(null)
   const [paymentForm, setPaymentForm] = useState({
     gcash_account: state.tenant.gcash_account ?? '',
     gcash_qr_url: state.tenant.gcash_qr_url ?? '',
@@ -73,13 +76,17 @@ export default function SettingsPage() {
     updateTenant({
       name: form.name,
       business_type: form.business_type as BusinessType,
-      plan: form.plan as SubscriptionPlan,
-      subscription_status: form.subscription_status as SubscriptionStatus,
       currency: form.currency,
       timezone: form.timezone,
-      max_users: Number(form.max_users) || 1,
-      max_products: Number(form.max_products) || 1,
-      max_locations: Number(form.max_locations) || 1,
+      ...(canEditPlan
+        ? {
+            plan: form.plan as SubscriptionPlan,
+            subscription_status: form.subscription_status as SubscriptionStatus,
+            max_users: Number(form.max_users) || 1,
+            max_products: Number(form.max_products) || 1,
+            max_locations: Number(form.max_locations) || 1,
+          }
+        : {}),
     })
     notifySuccess('Settings saved successfully.')
   }
@@ -110,15 +117,43 @@ export default function SettingsPage() {
     setUomForm({ name: '', abbreviation: '' })
   }
 
-  function handleAddLocation() {
+  function handleSaveLocation() {
     if (!locationForm.code.trim() || !locationForm.name.trim()) return
-    addLocation({
+    const draft = {
       code: locationForm.code,
       name: locationForm.name,
       zone: locationForm.zone,
-    })
-    notifySuccess('Location added successfully.')
+    }
+    if (editingLocationId) {
+      editLocation(editingLocationId, draft)
+      notifySuccess('Location updated successfully.')
+    } else {
+      addLocation(draft)
+      notifySuccess('Location added successfully.')
+    }
     setLocationForm({ code: '', name: '', zone: '' })
+    setEditingLocationId(null)
+  }
+
+  function handleEditLocation(locationId: string) {
+    const location = state.locations.find((entry) => entry.id === locationId)
+    if (!location) return
+    setLocationForm({ code: location.code, name: location.name, zone: location.zone ?? '' })
+    setEditingLocationId(locationId)
+    const locationsPanel = document.querySelector('[data-locations-builder]')
+    locationsPanel?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+
+  function handleCancelEditLocation() {
+    setLocationForm({ code: '', name: '', zone: '' })
+    setEditingLocationId(null)
+  }
+
+  function handleDeleteLocation(locationId: string, locationName: string) {
+    if (!window.confirm(`Delete "${locationName}"? Stock tied to it will be unassigned. This cannot be undone.`)) return
+    removeLocation(locationId)
+    if (editingLocationId === locationId) handleCancelEditLocation()
+    notifySuccess('Location deleted successfully.')
   }
 
   function handleSavePayments() {
@@ -318,32 +353,65 @@ export default function SettingsPage() {
             </label>
             <label className="auth-field">
               <span>Business type</span>
-              <select className="input" value={form.business_type} onChange={(event) => setForm((current) => ({ ...current, business_type: event.target.value as BusinessType }))}>
-                <option value="coffee_shop">Coffee shop</option>
-                <option value="convenience_store">Convenience store</option>
-                <option value="manufacturing">Manufacturing</option>
-                <option value="restaurant">Restaurant</option>
-                <option value="retail">Retail</option>
-                <option value="pharmacy">Pharmacy</option>
-                <option value="general">General</option>
-              </select>
+              <SearchableSelect
+                className="input"
+                placeholder="Business type"
+                searchPlaceholder="Search types..."
+                value={form.business_type}
+                onChange={(value) => setForm((current) => ({ ...current, business_type: value as BusinessType }))}
+                options={[
+                  { value: 'coffee_shop', label: 'Coffee shop' },
+                  { value: 'convenience_store', label: 'Convenience store' },
+                  { value: 'manufacturing', label: 'Manufacturing' },
+                  { value: 'restaurant', label: 'Restaurant' },
+                  { value: 'retail', label: 'Retail' },
+                  { value: 'pharmacy', label: 'Pharmacy' },
+                  { value: 'general', label: 'General' },
+                ]}
+              />
             </label>
             <label className="auth-field">
               <span>Plan</span>
-              <select className="input" value={form.plan} onChange={(event) => setForm((current) => ({ ...current, plan: event.target.value as SubscriptionPlan }))}>
-                <option value="starter">Starter</option>
-                <option value="professional">Professional</option>
-                <option value="enterprise">Enterprise</option>
-              </select>
+              {canEditPlan ? (
+                <SearchableSelect
+                  className="input"
+                  placeholder="Plan"
+                  searchPlaceholder="Search plans..."
+                  value={form.plan}
+                  onChange={(value) => setForm((current) => ({ ...current, plan: value as SubscriptionPlan }))}
+                  options={[
+                    { value: 'starter', label: 'Starter' },
+                    { value: 'professional', label: 'Professional' },
+                    { value: 'enterprise', label: 'Enterprise' },
+                  ]}
+                />
+              ) : (
+                <div className="input" style={{ background: '#F1F5F9', color: '#64748B', display: 'flex', alignItems: 'center' }}>
+                  {form.plan.charAt(0).toUpperCase() + form.plan.slice(1)} (set by your provider)
+                </div>
+              )}
             </label>
             <label className="auth-field">
               <span>Status</span>
-              <select className="input" value={form.subscription_status} onChange={(event) => setForm((current) => ({ ...current, subscription_status: event.target.value as SubscriptionStatus }))}>
-                <option value="trial">Trial</option>
-                <option value="active">Active</option>
-                <option value="inactive">Inactive</option>
-                <option value="suspended">Suspended</option>
-              </select>
+              {canEditPlan ? (
+                <SearchableSelect
+                  className="input"
+                  placeholder="Status"
+                  searchPlaceholder="Search statuses..."
+                  value={form.subscription_status}
+                  onChange={(value) => setForm((current) => ({ ...current, subscription_status: value as SubscriptionStatus }))}
+                  options={[
+                    { value: 'trial', label: 'Trial' },
+                    { value: 'active', label: 'Active' },
+                    { value: 'inactive', label: 'Inactive' },
+                    { value: 'suspended', label: 'Suspended' },
+                  ]}
+                />
+              ) : (
+                <div className="input" style={{ background: '#F1F5F9', color: '#64748B', display: 'flex', alignItems: 'center' }}>
+                  {form.subscription_status.charAt(0).toUpperCase() + form.subscription_status.slice(1)}
+                </div>
+              )}
             </label>
             <label className="auth-field">
               <span>Currency</span>
@@ -359,21 +427,23 @@ export default function SettingsPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A' }}>Plan limits</div>
-                <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>Adjust only if you need to override a subscription test case.</div>
+                <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>
+                  {canEditPlan ? 'Adjust only if you need to override a subscription test case.' : 'These limits are set by your provider and cannot be changed.'}
+                </div>
               </div>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
               <label className="auth-field">
                 <span>Max users</span>
-                <input className="input" type="number" value={form.max_users} onChange={(event) => setForm((current) => ({ ...current, max_users: event.target.value }))} />
+                <input className="input" type="number" value={form.max_users} readOnly={!canEditPlan} disabled={!canEditPlan} onChange={(event) => setForm((current) => ({ ...current, max_users: event.target.value }))} />
               </label>
               <label className="auth-field">
                 <span>Max products</span>
-                <input className="input" type="number" value={form.max_products} onChange={(event) => setForm((current) => ({ ...current, max_products: event.target.value }))} />
+                <input className="input" type="number" value={form.max_products} readOnly={!canEditPlan} disabled={!canEditPlan} onChange={(event) => setForm((current) => ({ ...current, max_products: event.target.value }))} />
               </label>
               <label className="auth-field">
                 <span>Max locations</span>
-                <input className="input" type="number" value={form.max_locations} onChange={(event) => setForm((current) => ({ ...current, max_locations: event.target.value }))} />
+                <input className="input" type="number" value={form.max_locations} readOnly={!canEditPlan} disabled={!canEditPlan} onChange={(event) => setForm((current) => ({ ...current, max_locations: event.target.value }))} />
               </label>
             </div>
           </div>
@@ -631,7 +701,7 @@ export default function SettingsPage() {
             )}
 
             {catalogTab === 'locations' && (
-              <div style={{ display: 'grid', gap: 12 }}>
+              <div data-locations-builder style={{ display: 'grid', gap: 12 }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 10 }}>
                   <label className="auth-field">
                     <span>Code</span>
@@ -664,11 +734,18 @@ export default function SettingsPage() {
                       {locationForm.code || 'Code'}{locationForm.zone ? ` • ${locationForm.zone}` : ''}
                     </div>
                   </div>
-                  <div style={{ fontSize: 11, fontWeight: 800, color: '#0F766E', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Store map</div>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: editingLocationId ? '#F59E0B' : '#0F766E', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{editingLocationId ? 'Editing' : 'Store map'}</div>
                 </div>
-                <button className="btn btn-primary" onClick={handleAddLocation}>
-                  <Plus size={15} /> Add Location
-                </button>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button className="btn btn-primary" onClick={handleSaveLocation}>
+                    {editingLocationId ? <><Save size={15} /> Save Changes</> : <><Plus size={15} /> Add Location</>}
+                  </button>
+                  {editingLocationId && (
+                    <button className="btn btn-ghost" onClick={handleCancelEditLocation}>
+                      <X size={15} /> Cancel
+                    </button>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -740,7 +817,7 @@ export default function SettingsPage() {
                     No locations yet. Add your first shelf, storage, or warehouse.
                   </div>
                 ) : state.locations.map((location) => (
-                  <div key={location.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '14px 14px', borderRadius: 16, background: 'linear-gradient(180deg, #FFFFFF 0%, #FBFDFF 100%)', border: '1px solid #D8E4F2' }}>
+                  <div key={location.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '14px 14px', borderRadius: 16, background: editingLocationId === location.id ? 'linear-gradient(180deg, #FFF7ED 0%, #FFFBF5 100%)' : 'linear-gradient(180deg, #FFFFFF 0%, #FBFDFF 100%)', border: editingLocationId === location.id ? '1px solid #FED7AA' : '1px solid #D8E4F2' }}>
                     <div style={{ width: 38, height: 38, borderRadius: 12, background: '#EAF7F5', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0F766E', flexShrink: 0 }}>
                       <Warehouse size={18} />
                     </div>
@@ -750,6 +827,22 @@ export default function SettingsPage() {
                         <span style={{ fontSize: 11, fontWeight: 800, color: '#0F766E', background: '#EAF7F5', padding: '4px 8px', borderRadius: 999 }}>{location.code}</span>
                       </div>
                       <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>{location.zone || 'No zone assigned'}</div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        onClick={() => handleEditLocation(location.id)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: '#0F172A', background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: 10, padding: '6px 10px', cursor: 'pointer' }}
+                      >
+                        <Pencil size={13} /> Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteLocation(location.id, location.name)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: '#DC2626', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '6px 10px', cursor: 'pointer' }}
+                      >
+                        <Trash2 size={13} /> Delete
+                      </button>
                     </div>
                   </div>
                 ))
