@@ -5,8 +5,11 @@ import './globals.css'
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' })
 
 export const metadata: Metadata = {
-  title: 'Codentra - Systems with Integrity',
+  title: 'Codentra - Simplicity that Scales',
   description: 'Flexible inventory management and POS system for any business type.',
+  icons: {
+    icon: '/images/Clogo.png',
+  },
 }
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {

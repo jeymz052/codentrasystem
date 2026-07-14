@@ -1,8 +1,9 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { Building2, Clock3, Pencil, Plus, Save, Search, Truck, Trash2, Users, X } from 'lucide-react'
+import { Building2, Clock3, Eye, Pencil, Plus, Save, Search, Truck, Trash2, Users, X } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
+import { getRolePermissions } from '@/lib/access-control'
 import { useTableState } from '@/lib/use-table-state'
 import { TableToolbar } from '@/components/ui/table/TableToolbar'
 import { SortHeader } from '@/components/ui/table/SortHeader'
@@ -22,11 +23,15 @@ const EMPTY = {
 type SupplierForm = typeof EMPTY
 
 export default function SuppliersPage() {
-  const { state, addSupplier, editSupplier, removeSupplier, removeSuppliers } = useDemoSystem()
+  const { state, availableTenants, activeTenantId, addSupplier, editSupplier, removeSupplier, removeSuppliers, requestDeletion } = useDemoSystem()
+  const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
+  const role = activeTenant?.role ?? 'admin'
+  const perms = getRolePermissions(role)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<SupplierForm>(EMPTY)
   const [showModal, setShowModal] = useState(false)
   const [bulkConfirm, setBulkConfirm] = useState(false)
+  const [viewId, setViewId] = useState<string | null>(null)
 
   const table = useTableState({
     data: state.suppliers,
@@ -40,6 +45,12 @@ export default function SuppliersPage() {
   })
 
   function handleDeleteSelected() {
+    if (!perms.canDeleteRecords) {
+      requestDeletion('removeSuppliers', 'supplier', table.selectedIds[0] ?? '', { supplier_ids: table.selectedIds })
+      setBulkConfirm(false)
+      table.clearSelection()
+      return
+    }
     removeSuppliers(table.selectedIds)
     setBulkConfirm(false)
     table.clearSelection()
@@ -228,10 +239,17 @@ export default function SuppliersPage() {
                     <td>{supplier.email ?? '-'}</td>
                     <td>
                       <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                        <button className="btn btn-ghost btn-sm" style={{ padding: '4px 8px' }} onClick={() => setViewId(supplier.id)} title="View supplier"><Eye size={13} /></button>
                         <button className="btn btn-ghost btn-sm" style={{ padding: '4px 8px' }} onClick={() => startEdit(supplier.id)} title="Edit supplier">
                           <Pencil size={13} />
                         </button>
-                        <button className="btn btn-danger btn-sm" style={{ padding: '4px 8px' }} onClick={() => removeSupplier(supplier.id)} title="Delete supplier">
+                        <button className="btn btn-danger btn-sm" style={{ padding: '4px 8px' }} onClick={() => {
+                          if (!perms.canDeleteRecords) {
+                            requestDeletion('removeSupplier', 'supplier', supplier.id, { name: supplier.name })
+                            return
+                          }
+                          removeSupplier(supplier.id)
+                        }} title="Delete supplier">
                           <Trash2 size={13} />
                         </button>
                       </div>
@@ -280,6 +298,80 @@ export default function SuppliersPage() {
         </div>
       )}
 
+      {viewId && (() => {
+        const supplier = state.suppliers.find((entry) => entry.id === viewId)
+        if (!supplier) return null
+        const products = state.products.filter((product) => product.supplier_id === supplier.id)
+        return (
+          <div className="modal-overlay">
+            <div className="modal" style={{ maxWidth: 560 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 18 }}>
+                <div>
+                  <div className="auth-badge" style={{ marginBottom: 10 }}>
+                    <Eye size={14} />
+                    Supplier details
+                  </div>
+                  <h3 style={{ fontSize: 20, fontWeight: 800, color: '#0F172A', letterSpacing: '-0.04em' }}>{supplier.name}</h3>
+                  <p style={{ color: '#64748B', fontSize: 13, marginTop: 4 }}>Read-only view of this supplier.</p>
+                </div>
+                <button onClick={() => setViewId(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748B' }}>
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 16 }}>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Contact Person</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 4 }}>{supplier.contact_name ?? '-'}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Lead Time</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 4 }}>{supplier.lead_days} days</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Phone</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 4 }}>{supplier.phone ?? '-'}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Email</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 4 }}>{supplier.email ?? '-'}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2', gridColumn: '1 / -1' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Address</div>
+                  <div style={{ fontWeight: 600, color: '#475569', marginTop: 4 }}>{supplier.address ?? 'No address'}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2', gridColumn: '1 / -1' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Notes</div>
+                  <div style={{ fontWeight: 500, color: '#475569', marginTop: 4 }}>{supplier.notes ?? 'No notes'}</div>
+                </div>
+              </div>
+
+              <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>Products supplied ({products.length})</div>
+              <div style={{ maxHeight: 200, overflowY: 'auto', borderRadius: 8, border: '1px solid #D8E4F2' }}>
+                <table className="data-table">
+                  <thead><tr><th>Code</th><th>Product</th><th>UoM</th></tr></thead>
+                  <tbody>
+                    {products.length === 0 ? (
+                      <tr><td colSpan={3} style={{ textAlign: 'center', padding: 24, color: '#94A3B8' }}>No products linked to this supplier</td></tr>
+                    ) : products.map((product) => (
+                      <tr key={product.id}>
+                        <td style={{ fontSize: 11, color: '#64748B' }}>{product.item_code}</td>
+                        <td style={{ color: '#0F172A' }}>{product.name}</td>
+                        <td style={{ color: '#475569' }}>{product.uom?.abbreviation ?? 'pcs'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 20 }}>
+                <button className="btn btn-ghost" onClick={() => setViewId(null)}>Close</button>
+                <button className="btn btn-primary" onClick={() => { setViewId(null); startEdit(supplier.id) }}>Edit Supplier</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
       {showModal && (
         <div className="modal-overlay">
           <div className="modal" style={{ maxWidth: 760 }}>

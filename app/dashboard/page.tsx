@@ -44,7 +44,7 @@ export default function DashboardPage() {
     { label: 'Pending Orders', value: String(stats.pending_orders), sub: 'Purchase orders', icon: <ShoppingCart size={18} />, color: '#8B5CF6' },
     { label: "Today's Sales", value: formatCurrency(stats.sales_today), sub: `${stats.transactions_today} transactions`, icon: <CreditCard size={18} />, color: '#2563EB' },
     { label: 'Stock Movements', value: String(state.stockMovements.length), sub: 'Audit trail', icon: <ArrowUpDown size={18} />, color: '#3B82F6' },
-    { label: 'Active Users', value: String(visibleUsers.filter((user) => user.is_active).length), sub: `${formatRoleLabel('admin')}, Manager, Cashier`, icon: <Users size={18} />, color: '#8B5CF6' },
+    { label: 'Active Users', value: String(visibleUsers.filter((user) => user.is_active).length), sub: `${formatRoleLabel('admin')}, Manager, Supervisor, Staff`, icon: <Users size={18} />, color: '#8B5CF6' },
   ]
 
   const lowStock = state.products

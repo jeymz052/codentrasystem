@@ -232,6 +232,26 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
   object-fit: contain;
 }
 
+.auth-brand-tagline {
+  margin: 10px 0 0;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #64748B;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.pos-receipt-tagline {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #64748B;
+  text-align: center;
+  margin-top: 2px;
+  text-transform: uppercase;
+}
+
 .auth-signin-copy {
   display: flex;
   flex-direction: column;

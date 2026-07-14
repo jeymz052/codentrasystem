@@ -65,7 +65,7 @@ export function OnboardingForm({ initialPlan }: { initialPlan?: string }) {
       <div className="auth-brand-block">
         <div className="auth-brand">
           <Image
-            src="/images/codentralogo-removebg-preview.png"
+            src="/images/codentra-removebg-preview.png"
             alt="Codentra logo"
             width={520}
             height={184}
@@ -73,6 +73,7 @@ export function OnboardingForm({ initialPlan }: { initialPlan?: string }) {
             className="auth-brand-logo"
           />
         </div>
+        <p className="auth-brand-tagline">Simplicity that Scales</p>
         <div className="auth-signin-copy">
           <div className="auth-badge">
             <Layers3 size={14} />

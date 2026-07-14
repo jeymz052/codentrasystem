@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { Ban, CalendarDays, CheckCircle2, Clock3, DollarSign, Edit2, Package, Plus, ShoppingCart, Truck, X } from 'lucide-react'
+import { Ban, CalendarDays, CalendarCheck, CheckCircle2, Clock3, DollarSign, Edit2, Eye, Package, Plus, ShoppingCart, Truck, X } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import type { PurchaseOrderDraft } from '@/lib/demo-system'
 import type { PurchaseOrder } from '@/types/database'
@@ -17,6 +17,7 @@ type PoForm = {
   quantity: string
   unitCost: string
   expectedDate: string
+  deliveryDate: string
   notes: string
 }
 
@@ -28,6 +29,7 @@ const EMPTY_FORM: PoForm = {
   quantity: '10',
   unitCost: '',
   expectedDate: TODAY,
+  deliveryDate: '',
   notes: '',
 }
 
@@ -46,6 +48,7 @@ export default function OrdersPage() {
     productId: state.products[0]?.id ?? '',
   }))
   const [cancelId, setCancelId] = useState<string | null>(null)
+  const [viewId, setViewId] = useState<string | null>(null)
 
   const ordersWithTotals = useMemo(
     () =>
@@ -92,6 +95,18 @@ export default function OrdersPage() {
   const selectedSupplier = useMemo(() => state.suppliers.find((supplier) => supplier.id === form.supplierId), [form.supplierId, state.suppliers])
   const selectedEditProduct = useMemo(() => state.products.find((product) => product.id === editForm.productId), [editForm.productId, state.products])
 
+  // Only suggest products that belong to the selected supplier.
+  const productsForSupplier = useMemo(() => {
+    const map = new Map<string, typeof state.products>()
+    for (const supplier of state.suppliers) {
+      map.set(supplier.id, state.products.filter((product) => product.supplier_id === supplier.id))
+    }
+    return map
+  }, [state.suppliers, state.products])
+
+  const filteredProducts = productsForSupplier.get(form.supplierId) ?? []
+  const filteredEditProducts = productsForSupplier.get(editForm.supplierId) ?? []
+
   const summary = useMemo(() => {
     const totalOrders = state.purchaseOrders.length
     const draftOrders = state.purchaseOrders.filter((order) => order.status === 'draft').length
@@ -118,7 +133,24 @@ export default function OrdersPage() {
       quantity: '10',
       unitCost: '',
       expectedDate: TODAY,
+      deliveryDate: '',
       notes: '',
+    })
+  }
+
+  function handleSupplierChange(value: string) {
+    setForm((current) => {
+      const supplierProducts = productsForSupplier.get(value) ?? []
+      const stillValid = supplierProducts.some((product) => product.id === current.productId)
+      return { ...current, supplierId: value, productId: stillValid ? current.productId : '' }
+    })
+  }
+
+  function handleEditSupplierChange(value: string) {
+    setEditForm((current) => {
+      const supplierProducts = productsForSupplier.get(value) ?? []
+      const stillValid = supplierProducts.some((product) => product.id === current.productId)
+      return { ...current, supplierId: value, productId: stillValid ? current.productId : '' }
     })
   }
 
@@ -133,6 +165,7 @@ export default function OrdersPage() {
     const draft: PurchaseOrderDraft = {
       supplier_id: form.supplierId,
       expected_date: form.expectedDate,
+      delivery_date: form.deliveryDate,
       notes: form.notes,
       items: [
         {
@@ -160,6 +193,7 @@ export default function OrdersPage() {
       quantity: String(first?.quantity_ordered ?? 10),
       unitCost: String(first?.unit_cost ?? 0),
       expectedDate: order.expected_date ?? TODAY,
+      deliveryDate: order.delivery_date ?? '',
       notes: order.notes ?? '',
     })
   }
@@ -169,6 +203,7 @@ export default function OrdersPage() {
     const draft: PurchaseOrderDraft = {
       supplier_id: editForm.supplierId,
       expected_date: editForm.expectedDate,
+      delivery_date: editForm.deliveryDate,
       notes: editForm.notes,
       items: [
         {
@@ -284,8 +319,11 @@ export default function OrdersPage() {
                 <SortHeader label="PO Number" column="po_number" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
                 <th>Supplier</th>
                 <SortHeader label="Status" column="status" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
+                <th>Material Description</th>
+                <th>UoM</th>
+                <th style={{ textAlign: 'right' }}>Qty</th>
                 <SortHeader label="Expected" column="expected_date" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
-                <th>Items</th>
+                <SortHeader label="Delivery" column="delivery_date" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
                 <SortHeader label="Total" column="total" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
                 <th style={{ width: 140, textAlign: 'left' }}>Action</th>
               </tr></thead>
@@ -295,6 +333,9 @@ export default function OrdersPage() {
                 const items = state.purchaseOrderItems.filter((item) => item.po_id === order.id)
                 const total = items.reduce((sum, item) => sum + Number(item.unit_cost ?? 0) * item.quantity_ordered, 0)
                 const statusColor = order.status === 'received' ? '#10B981' : order.status === 'ordered' ? '#3B82F6' : order.status === 'approved' ? '#8B5CF6' : order.status === 'cancelled' ? '#DC2626' : '#F59E0B'
+                const firstItem = items[0]
+                const material = firstItem?.product ?? state.products.find((product) => product.id === firstItem?.product_id)
+                const uom = material?.uom?.abbreviation ?? 'pcs'
 
                 return (
                   <tr key={order.id}>
@@ -308,11 +349,24 @@ export default function OrdersPage() {
                         {order.status.replaceAll('_', ' ')}
                       </span>
                     </td>
+                    <td>
+                      {material ? (
+                        <div style={{ minWidth: 160 }}>
+                          <div style={{ fontWeight: 600, color: '#0F172A' }}>{material.name}</div>
+                          <div style={{ fontSize: 11, color: '#64748B' }}>{material.description ?? material.item_code}</div>
+                        </div>
+                      ) : (
+                        <span style={{ color: '#94A3B8' }}>—</span>
+                      )}
+                    </td>
+                    <td style={{ color: '#475569' }}>{uom}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 600, color: '#0F172A' }}>{firstItem ? firstItem.quantity_ordered : 0}</td>
                     <td style={{ color: '#475569' }}>{order.expected_date ?? '-'}</td>
-                    <td style={{ color: '#475569' }}>{items.length}</td>
+                    <td style={{ color: '#475569' }}>{order.delivery_date ?? '-'}</td>
                     <td style={{ fontWeight: 700, color: '#0F172A' }}>{formatCurrency(total)}</td>
                     <td>
                       <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-start', flexWrap: 'nowrap' }}>
+                        <button className="btn btn-ghost btn-sm" onClick={() => setViewId(order.id)} style={{ padding: '4px 8px' }} title="View purchase order"><Eye size={14} /></button>
                         {order.status === 'received' ? (
                           <span className="badge badge-green">Received</span>
                         ) : order.status === 'cancelled' ? (
@@ -331,7 +385,7 @@ export default function OrdersPage() {
               })}
               {table.paginated.length === 0 && (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: 48, color: '#94A3B8' }}>
+                  <td colSpan={9} style={{ textAlign: 'center', padding: 48, color: '#94A3B8' }}>
                     <Package size={32} style={{ marginBottom: 8, opacity: 0.35 }} />
                     <p>No purchase orders found</p>
                   </td>
@@ -378,7 +432,7 @@ export default function OrdersPage() {
                   placeholder="Supplier"
                   searchPlaceholder="Search suppliers..."
                   value={form.supplierId}
-                  onChange={(value) => setForm((current) => ({ ...current, supplierId: value }))}
+                  onChange={handleSupplierChange}
                   options={state.suppliers.map((supplier) => ({ value: supplier.id, label: supplier.name }))}
                 />
               </label>
@@ -387,11 +441,11 @@ export default function OrdersPage() {
                 <span>Product</span>
                 <SearchableSelect
                   className="auth-select"
-                  placeholder="Product"
+                  placeholder={form.supplierId ? 'Product' : 'Select a supplier first'}
                   searchPlaceholder="Search products..."
                   value={form.productId}
                   onChange={(value) => setForm((current) => ({ ...current, productId: value }))}
-                  options={state.products.map((product) => ({ value: product.id, label: product.name }))}
+                  options={filteredProducts.map((product) => ({ value: product.id, label: product.name }))}
                 />
               </label>
 
@@ -414,6 +468,14 @@ export default function OrdersPage() {
                 <div className="auth-input-wrap">
                   <CalendarDays size={14} />
                   <input className="input" type="date" value={form.expectedDate} onChange={(event) => setForm((current) => ({ ...current, expectedDate: event.target.value }))} />
+                </div>
+              </label>
+
+              <label className="auth-field">
+                <span>Delivery date</span>
+                <div className="auth-input-wrap">
+                  <CalendarCheck size={14} />
+                  <input className="input" type="date" value={form.deliveryDate} onChange={(event) => setForm((current) => ({ ...current, deliveryDate: event.target.value }))} />
                 </div>
               </label>
 
@@ -477,7 +539,7 @@ export default function OrdersPage() {
                   placeholder="Supplier"
                   searchPlaceholder="Search suppliers..."
                   value={editForm.supplierId}
-                  onChange={(value) => setEditForm((current) => ({ ...current, supplierId: value }))}
+                  onChange={handleEditSupplierChange}
                   options={state.suppliers.map((supplier) => ({ value: supplier.id, label: supplier.name }))}
                 />
               </label>
@@ -486,11 +548,11 @@ export default function OrdersPage() {
                 <span>Product</span>
                 <SearchableSelect
                   className="auth-select"
-                  placeholder="Product"
+                  placeholder={editForm.supplierId ? 'Product' : 'Select a supplier first'}
                   searchPlaceholder="Search products..."
                   value={editForm.productId}
                   onChange={(value) => setEditForm((current) => ({ ...current, productId: value }))}
-                  options={state.products.map((product) => ({ value: product.id, label: product.name }))}
+                  options={filteredEditProducts.map((product) => ({ value: product.id, label: product.name }))}
                 />
               </label>
 
@@ -513,6 +575,14 @@ export default function OrdersPage() {
                 <div className="auth-input-wrap">
                   <CalendarDays size={14} />
                   <input className="input" type="date" value={editForm.expectedDate} onChange={(event) => setEditForm((current) => ({ ...current, expectedDate: event.target.value }))} />
+                </div>
+              </label>
+
+              <label className="auth-field">
+                <span>Delivery date</span>
+                <div className="auth-input-wrap">
+                  <CalendarCheck size={14} />
+                  <input className="input" type="date" value={editForm.deliveryDate} onChange={(event) => setEditForm((current) => ({ ...current, deliveryDate: event.target.value }))} />
                 </div>
               </label>
 
@@ -553,6 +623,98 @@ export default function OrdersPage() {
           </div>
         </div>
       )}
+
+      {viewId && (() => {
+        const order = state.purchaseOrders.find((entry) => entry.id === viewId)
+        if (!order) return null
+        const supplier = state.suppliers.find((entry) => entry.id === order.supplier_id)
+        const items = state.purchaseOrderItems.filter((item) => item.po_id === order.id)
+        const statusColor = order.status === 'received' ? '#10B981' : order.status === 'ordered' ? '#3B82F6' : order.status === 'approved' ? '#8B5CF6' : order.status === 'cancelled' ? '#DC2626' : '#F59E0B'
+        const total = items.reduce((sum, item) => sum + Number(item.unit_cost ?? 0) * item.quantity_ordered, 0)
+        return (
+          <div className="modal-overlay">
+            <div className="modal" style={{ maxWidth: 720 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 18 }}>
+                <div>
+                  <div className="auth-badge" style={{ marginBottom: 10 }}>
+                    <Eye size={14} />
+                    Purchase order details
+                  </div>
+                  <h3 style={{ fontSize: 20, fontWeight: 800, color: '#0F172A', letterSpacing: '-0.04em' }}>{order.po_number}</h3>
+                  <p style={{ color: '#64748B', fontSize: 13, marginTop: 4 }}>Read-only view of this purchase order.</p>
+                </div>
+                <button onClick={() => setViewId(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748B' }}>
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 18 }}>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Supplier</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 4 }}>{supplier?.name ?? '-'}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Status</div>
+                  <div style={{ marginTop: 4 }}><span className="badge" style={{ background: `${statusColor}14`, color: statusColor, textTransform: 'capitalize' }}>{order.status.replaceAll('_', ' ')}</span></div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Expected Date</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 4 }}>{order.expected_date ?? '-'}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Delivery Date</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 4 }}>{order.delivery_date ?? '-'}</div>
+                </div>
+              </div>
+
+              <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2', marginBottom: 16 }}>
+                <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Notes</div>
+                <div style={{ fontWeight: 500, color: '#475569', marginTop: 4 }}>{order.notes ?? 'No notes'}</div>
+              </div>
+
+              <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>Items ({items.length})</div>
+              <div style={{ maxHeight: 280, overflowY: 'auto', borderRadius: 8, border: '1px solid #D8E4F2' }}>
+                <table className="data-table">
+                  <thead><tr>
+                      <th>Material</th>
+                      <th>Description</th>
+                      <th>UoM</th>
+                      <th style={{ textAlign: 'right' }}>Qty</th>
+                      <th style={{ textAlign: 'right' }}>Unit Cost</th>
+                      <th style={{ textAlign: 'right' }}>Line Total</th>
+                    </tr></thead>
+                  <tbody>
+                    {items.length === 0 ? (
+                      <tr><td colSpan={6} style={{ textAlign: 'center', padding: 28, color: '#94A3B8' }}>No items</td></tr>
+                    ) : items.map((item) => {
+                      const product = item.product ?? state.products.find((entry) => entry.id === item.product_id)
+                      return (
+                        <tr key={item.id}>
+                          <td style={{ fontWeight: 600, color: '#0F172A' }}>{product?.name ?? 'Unknown'}</td>
+                          <td style={{ fontSize: 12, color: '#64748B' }}>{product?.description ?? product?.item_code ?? '-'}</td>
+                          <td style={{ color: '#475569' }}>{product?.uom?.abbreviation ?? 'pcs'}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 600 }}>{item.quantity_ordered}</td>
+                          <td style={{ textAlign: 'right', color: '#475569' }}>{formatCurrency(Number(item.unit_cost ?? 0))}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 700, color: '#0F172A' }}>{formatCurrency(Number(item.unit_cost ?? 0) * item.quantity_ordered)}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, paddingTop: 14, borderTop: '1px solid #E2E8F0' }}>
+                <span style={{ fontSize: 13, color: '#64748B', fontWeight: 600 }}>Total</span>
+                <span style={{ fontSize: 18, fontWeight: 900, color: '#0F172A' }}>{formatCurrency(total)}</span>
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 18 }}>
+                <button className="btn btn-primary" onClick={() => setViewId(null)}>Close</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

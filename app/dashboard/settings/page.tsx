@@ -3,6 +3,7 @@
 import { useEffect, useState, type ChangeEvent } from 'react'
 import { Building2, Coins, Factory, Landmark, Layers3, MapPin, Pencil, Plus, RotateCcw, Save, Settings as SettingsIcon, Sparkles, Tag, Trash2, Users, Wallet, Warehouse, X } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
+import { getRolePermissions } from '@/lib/access-control'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
 import type { BusinessType, SubscriptionPlan, SubscriptionStatus } from '@/types/database'
 
@@ -18,7 +19,10 @@ const PAYMENT_ACCOUNT_FIELDS = [
 ] as const
 
 export default function SettingsPage() {
-  const { state, updateTenant, resetDemo, addCategory, addUnitOfMeasure, addLocation, editLocation, removeLocation, notifySuccess, notifyError, isSuperAdminIdentity } = useDemoSystem()
+  const { state, availableTenants, activeTenantId, updateTenant, resetDemo, addCategory, addUnitOfMeasure, addLocation, editLocation, removeLocation, requestDeletion, notifySuccess, notifyError, isSuperAdminIdentity } = useDemoSystem()
+  const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
+  const role = activeTenant?.role ?? 'admin'
+  const perms = getRolePermissions(role)
   const canEditPlan = isSuperAdminIdentity
   const [billingLoading, setBillingLoading] = useState(false)
   const [catalogTab, setCatalogTab] = useState<'categories' | 'uom' | 'locations'>('categories')
@@ -36,6 +40,10 @@ export default function SettingsPage() {
     maribank_account: state.tenant.maribank_account ?? '',
     maribank_qr_url: state.tenant.maribank_qr_url ?? '',
   })
+  const [posStoreLocations, setPosStoreLocations] = useState<string[]>(() => state.tenant.pos_store_locations ?? [])
+  const [newStoreLocation, setNewStoreLocation] = useState('')
+  const [posStations, setPosStations] = useState<string[]>(() => state.tenant.pos_stations ?? [])
+  const [newStation, setNewStation] = useState('')
   const [form, setForm] = useState({
     name: state.tenant.name,
     business_type: state.tenant.business_type,
@@ -70,6 +78,10 @@ export default function SettingsPage() {
       maribank_account: state.tenant.maribank_account ?? '',
       maribank_qr_url: state.tenant.maribank_qr_url ?? '',
     })
+    setPosStoreLocations(state.tenant.pos_store_locations ?? [])
+    setNewStoreLocation('')
+    setPosStations(state.tenant.pos_stations ?? [])
+    setNewStation('')
   }, [state.tenant])
 
   function handleSave() {
@@ -78,6 +90,9 @@ export default function SettingsPage() {
       business_type: form.business_type as BusinessType,
       currency: form.currency,
       timezone: form.timezone,
+      pos_location_id: posStoreLocations[0] ?? null,
+      pos_store_locations: posStoreLocations,
+      pos_stations: posStations,
       ...(canEditPlan
         ? {
             plan: form.plan as SubscriptionPlan,
@@ -151,6 +166,12 @@ export default function SettingsPage() {
 
   function handleDeleteLocation(locationId: string, locationName: string) {
     if (!window.confirm(`Delete "${locationName}"? Stock tied to it will be unassigned. This cannot be undone.`)) return
+    if (!perms.canDeleteRecords) {
+      requestDeletion('deleteLocation', 'location', locationId, { name: locationName })
+      notifySuccess('Deletion request sent to manager for approval.')
+      if (editingLocationId === locationId) handleCancelEditLocation()
+      return
+    }
     removeLocation(locationId)
     if (editingLocationId === locationId) handleCancelEditLocation()
     notifySuccess('Location deleted successfully.')
@@ -494,7 +515,7 @@ export default function SettingsPage() {
         </div>
         <h3 style={{ fontSize: 18, fontWeight: 900, color: '#0F172A', letterSpacing: '-0.04em' }}>Direct payment accounts</h3>
         <p style={{ fontSize: 13, color: '#64748B', marginTop: 4, lineHeight: 1.6 }}>
-          Add your store&apos;s own GCash, Maya, BDO, and Maribank details so the POS can show a &quot;Scan this to pay&quot; QR at checkout. These are manual tenders recorded by the cashier — no third-party gateway is involved.
+          Add your store&apos;s own GCash, Maya, BDO, and Maribank details so the POS can show a &quot;Scan this to pay&quot; QR at checkout. These are manual tenders recorded by the sales staff — no third-party gateway is involved.
         </p>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14, marginTop: 16 }}>
@@ -554,6 +575,156 @@ export default function SettingsPage() {
           <button className="btn btn-primary" onClick={handleSavePayments}>
             <Save size={15} /> Save payment accounts
           </button>
+        </div>
+      </section>
+
+      <section className="card" style={{ padding: 20, borderRadius: 20 }}>
+        <div className="auth-badge" style={{ marginBottom: 10 }}>
+          <MapPin size={14} /> Point of Sale configuration
+        </div>
+        <h3 style={{ fontSize: 18, fontWeight: 900, color: '#0F172A', letterSpacing: '-0.04em' }}>POS location and stations</h3>
+        <p style={{ fontSize: 13, color: '#64748B', marginTop: 4, lineHeight: 1.6 }}>
+          Define the dedicated store location used by the POS (separate from inventory warehouses) and the available sales staff stations or bays.
+        </p>
+
+        <div style={{ display: 'grid', gap: 14, marginTop: 16 }}>
+          <label className="auth-field">
+            <span>Store locations (POS sales)</span>
+            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+              <input
+                className="input"
+                value={newStoreLocation}
+                onChange={(event) => setNewStoreLocation(event.target.value)}
+                placeholder="e.g. Main Store, Branch A"
+                style={{ flex: 1, height: 42, borderRadius: 12 }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    const value = newStoreLocation.trim()
+                    if (value && !posStoreLocations.includes(value)) {
+                      setPosStoreLocations((current) => [...current, value])
+                      setNewStoreLocation('')
+                    }
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  const value = newStoreLocation.trim()
+                  if (value && !posStoreLocations.includes(value)) {
+                    setPosStoreLocations((current) => [...current, value])
+                    setNewStoreLocation('')
+                  }
+                }}
+                style={{ height: 42, borderRadius: 12 }}
+              >
+                Add
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 4 }}>These appear as a dropdown when opening a shift. Kept separate from inventory locations.</div>
+          </label>
+
+          {posStoreLocations.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {posStoreLocations.map((storeLocation) => (
+                <span
+                  key={storeLocation}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '6px 10px',
+                    borderRadius: 999,
+                    background: '#ECFDF5',
+                    color: '#047857',
+                    border: '1px solid #A7F3D0',
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  {storeLocation}
+                  <button
+                    type="button"
+                    onClick={() => setPosStoreLocations((current) => current.filter((item) => item !== storeLocation))}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#047857', padding: 0, display: 'inline-flex', lineHeight: 1 }}
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <label className="auth-field">
+            <span>Stations / Bays</span>
+            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+              <input
+                className="input"
+                value={newStation}
+                onChange={(event) => setNewStation(event.target.value)}
+                placeholder="e.g. Bay 1, Register A"
+                style={{ flex: 1, height: 42, borderRadius: 12 }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    const value = newStation.trim()
+                    if (value && !posStations.includes(value)) {
+                      setPosStations((current) => [...current, value])
+                      setNewStation('')
+                    }
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  const value = newStation.trim()
+                  if (value && !posStations.includes(value)) {
+                    setPosStations((current) => [...current, value])
+                    setNewStation('')
+                  }
+                }}
+                style={{ height: 42, borderRadius: 12 }}
+              >
+                Add
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 4 }}>These appear as a dropdown when opening a shift.</div>
+          </label>
+
+          {posStations.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {posStations.map((station) => (
+                <span
+                  key={station}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '6px 10px',
+                    borderRadius: 999,
+                    background: '#EFF6FF',
+                    color: '#2563EB',
+                    border: '1px solid #BFDBFE',
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  {station}
+                  <button
+                    type="button"
+                    onClick={() => setPosStations((current) => current.filter((item) => item !== station))}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563EB', padding: 0, display: 'inline-flex', lineHeight: 1 }}
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </section>
 
@@ -824,7 +995,11 @@ export default function SettingsPage() {
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                         <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A' }}>{location.name}</div>
-                        <span style={{ fontSize: 11, fontWeight: 800, color: '#0F766E', background: '#EAF7F5', padding: '4px 8px', borderRadius: 999 }}>{location.code}</span>
+                        {location.is_waste_location ? (
+                          <span style={{ fontSize: 11, fontWeight: 800, color: '#B91C1C', background: '#FEF2F2', border: '1px solid #FECACA', padding: '4px 8px', borderRadius: 999 }}>Quarantine</span>
+                        ) : (
+                          <span style={{ fontSize: 11, fontWeight: 800, color: '#0F766E', background: '#EAF7F5', padding: '4px 8px', borderRadius: 999 }}>{location.code}</span>
+                        )}
                       </div>
                       <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>{location.zone || 'No zone assigned'}</div>
                     </div>

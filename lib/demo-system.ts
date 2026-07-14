@@ -10,6 +10,7 @@ import type {
   CashShift,
   Category,
   DashboardStats,
+  DeletionRequest,
   Location,
   MovementType,
   OrderStatus,
@@ -84,6 +85,7 @@ export type UserDraft = {
 export type PurchaseOrderDraft = {
   supplier_id: string
   expected_date: string
+  delivery_date: string
   notes: string
   items: Array<{
     product_id: string
@@ -98,6 +100,12 @@ export type SaleDraftItem = {
   unit_price: number
   unit_cost: number | null
   discount: number
+}
+
+export type SplitPayment = {
+  payment_method: PaymentMethod
+  amount: number
+  reference?: string | null
 }
 
 export type DemoSystemState = {
@@ -121,6 +129,7 @@ export type DemoSystemState = {
   productRecipes: ProductRecipe[]
   productionTemplates: ProductionTemplate[]
   inventoryLots: InventoryLot[]
+  deletionRequests: DeletionRequest[]
 }
 
 const PLAN_LIMITS: Record<SubscriptionPlan, Pick<Tenant, 'max_users' | 'max_products' | 'max_locations'>> = {
@@ -216,9 +225,12 @@ function baseTenant(businessType: BusinessType): Tenant {
     maya_qr_url: null,
     bdo_account: null,
     bdo_qr_url: null,
-    maribank_account: null,
-    maribank_qr_url: null,
-  }
+      maribank_account: null,
+      maribank_qr_url: null,
+      pos_location_id: null,
+      pos_store_locations: [],
+      pos_stations: [],
+    }
 }
 
 function emptyState(businessType: BusinessType): DemoSystemState {
@@ -243,6 +255,7 @@ function emptyState(businessType: BusinessType): DemoSystemState {
     productRecipes: [],
     productionTemplates: [],
     inventoryLots: [],
+    deletionRequests: [],
   }
 }
 
@@ -282,11 +295,14 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
   ]
 
   const locations: Location[] = [
-    { id: id(), tenant_id: tenant.id, code: 'MAIN', name: 'Main Storage', zone: 'Backroom', is_active: true, created_at: addMinutes(baseTime, 18) },
-    { id: id(), tenant_id: tenant.id, code: 'COLD', name: 'Cold Storage', zone: 'Chiller', is_active: true, created_at: addMinutes(baseTime, 19) },
-    { id: id(), tenant_id: tenant.id, code: 'BULK', name: 'Bulk Storage', zone: 'Warehouse', is_active: true, created_at: addMinutes(baseTime, 20) },
-    { id: id(), tenant_id: tenant.id, code: 'SHELF-A', name: 'Shelf A', zone: 'Front rack', is_active: true, created_at: addMinutes(baseTime, 21) },
-    { id: id(), tenant_id: tenant.id, code: 'SHELF-B', name: 'Shelf B', zone: 'Front rack', is_active: true, created_at: addMinutes(baseTime, 22) },
+    { id: id(), tenant_id: tenant.id, code: 'MAIN', name: 'Main Storage', zone: 'Backroom', is_active: true, is_waste_location: false, created_at: addMinutes(baseTime, 18) },
+    { id: id(), tenant_id: tenant.id, code: 'COLD', name: 'Cold Storage', zone: 'Chiller', is_active: true, is_waste_location: false, created_at: addMinutes(baseTime, 19) },
+    { id: id(), tenant_id: tenant.id, code: 'BULK', name: 'Bulk Storage', zone: 'Warehouse', is_active: true, is_waste_location: false, created_at: addMinutes(baseTime, 20) },
+    { id: id(), tenant_id: tenant.id, code: 'SHELF-A', name: 'Shelf A', zone: 'Front rack', is_active: true, is_waste_location: false, created_at: addMinutes(baseTime, 21) },
+    { id: id(), tenant_id: tenant.id, code: 'SHELF-B', name: 'Shelf B', zone: 'Front rack', is_active: true, is_waste_location: false, created_at: addMinutes(baseTime, 22) },
+    { id: deterministicUuid(tenant.id, 'waste-location'), tenant_id: tenant.id, code: 'WASTE', name: 'Waste', zone: 'Quarantine', is_active: true, is_waste_location: true, created_at: addMinutes(baseTime, 23) },
+    { id: deterministicUuid(tenant.id, 'defect-location'), tenant_id: tenant.id, code: 'DEFECT', name: 'Defect', zone: 'Quarantine', is_active: true, is_waste_location: true, created_at: addMinutes(baseTime, 24) },
+    { id: deterministicUuid(tenant.id, 'reject-location'), tenant_id: tenant.id, code: 'REJECT', name: 'Reject', zone: 'Quarantine', is_active: true, is_waste_location: true, created_at: addMinutes(baseTime, 25) },
   ]
 
   const [coffeeCat, dairyCat, ingredientCat, flavorCat, teaCat, bakeryCat] = categories
@@ -639,17 +655,65 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
     created_at: addMinutes(baseTime, 91),
     updated_at: addMinutes(baseTime, 91),
   }
-  const cashierUser: User = {
+  const salesUser: User = {
     id: id(),
     tenant_id: tenant.id,
-    role: 'cashier',
-    full_name: 'Cashier One',
-    email: 'cashier@codentra.example',
+    role: 'sales_staff',
+    full_name: 'Sales Staff One',
+    email: 'salesstaff@codentra.example',
     avatar_url: null,
     is_active: true,
     last_login: null,
     created_at: addMinutes(baseTime, 92),
     updated_at: addMinutes(baseTime, 92),
+  }
+  const supervisorUser: User = {
+    id: id(),
+    tenant_id: tenant.id,
+    role: 'supervisor',
+    full_name: 'Shift Supervisor',
+    email: 'supervisor@codentra.example',
+    avatar_url: null,
+    is_active: true,
+    last_login: null,
+    created_at: addMinutes(baseTime, 93),
+    updated_at: addMinutes(baseTime, 93),
+  }
+  const inventoryUser: User = {
+    id: id(),
+    tenant_id: tenant.id,
+    role: 'inventory_staff',
+    full_name: 'Inventory Clerk',
+    email: 'inventory@codentra.example',
+    avatar_url: null,
+    is_active: true,
+    last_login: null,
+    created_at: addMinutes(baseTime, 94),
+    updated_at: addMinutes(baseTime, 94),
+  }
+  const productionUser: User = {
+    id: id(),
+    tenant_id: tenant.id,
+    role: 'production_staff',
+    full_name: 'Production Controller',
+    email: 'production@codentra.example',
+    avatar_url: null,
+    is_active: true,
+    last_login: null,
+    created_at: addMinutes(baseTime, 96),
+    updated_at: addMinutes(baseTime, 96),
+  }
+  const purchasingUser: User = {
+    id: id(),
+    tenant_id: tenant.id,
+    role: 'purchasing_staff',
+    full_name: 'Purchasing Officer',
+    email: 'purchasing@codentra.example',
+    avatar_url: null,
+    is_active: true,
+    last_login: null,
+    created_at: addMinutes(baseTime, 97),
+    updated_at: addMinutes(baseTime, 97),
   }
 
   const seedAuditLogs: AuditLog[] = [
@@ -678,13 +742,57 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
     {
       id: id(),
       tenant_id: tenant.id,
-      user_id: cashierUser.id,
+      user_id: salesUser.id,
       action: 'user.created',
       target_type: 'user',
-      target_id: cashierUser.id,
-      details: { role: cashierUser.role, email: cashierUser.email },
+      target_id: salesUser.id,
+      details: { role: salesUser.role, email: salesUser.email },
       performed_by: adminUser.id,
-      performed_at: addMinutes(cashierUser.created_at, 1),
+      performed_at: addMinutes(salesUser.created_at, 1),
+    },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      user_id: supervisorUser.id,
+      action: 'user.created',
+      target_type: 'user',
+      target_id: supervisorUser.id,
+      details: { role: supervisorUser.role, email: supervisorUser.email },
+      performed_by: adminUser.id,
+      performed_at: addMinutes(supervisorUser.created_at, 1),
+    },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      user_id: inventoryUser.id,
+      action: 'user.created',
+      target_type: 'user',
+      target_id: inventoryUser.id,
+      details: { role: inventoryUser.role, email: inventoryUser.email },
+      performed_by: adminUser.id,
+      performed_at: addMinutes(inventoryUser.created_at, 1),
+    },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      user_id: productionUser.id,
+      action: 'user.created',
+      target_type: 'user',
+      target_id: productionUser.id,
+      details: { role: productionUser.role, email: productionUser.email },
+      performed_by: adminUser.id,
+      performed_at: addMinutes(productionUser.created_at, 1),
+    },
+    {
+      id: id(),
+      tenant_id: tenant.id,
+      user_id: purchasingUser.id,
+      action: 'user.created',
+      target_type: 'user',
+      target_id: purchasingUser.id,
+      details: { role: purchasingUser.role, email: purchasingUser.email },
+      performed_by: adminUser.id,
+      performed_at: addMinutes(purchasingUser.created_at, 1),
     },
   ]
 
@@ -696,7 +804,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
     locations,
     suppliers,
     products,
-    users: [adminUser, managerUser, cashierUser],
+    users: [adminUser, managerUser, salesUser, supervisorUser, inventoryUser, productionUser, purchasingUser],
     cashShifts: [],
     cashMovements: [],
     purchaseOrders: [],
@@ -726,6 +834,7 @@ export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSyst
       location_id: product.location_id,
       created_at: product.created_at ?? baseTime,
     })),
+    deletionRequests: [],
   })
 }
 
@@ -827,33 +936,47 @@ function deriveAlertMeta(product: Product): { alert_type: AlertType; status: Ale
 }
 
 function syncAlerts(state: DemoSystemState): DemoSystemState {
-  const nextAlerts = state.alerts.filter((alert) => {
-    if (alert.status !== 'open') return true
-    const product = state.products.find((item) => item.id === alert.product_id)
-    return Boolean(product && deriveAlertMeta(product))
-  }).map((alert) => {
+  const seenOpenProductIds = new Set<string>()
+  const nextAlerts: DemoSystemState['alerts'] = []
+
+  for (const alert of state.alerts) {
+    // Non-open alerts (acknowledged / resolved) are history — always keep them.
+    if (alert.status !== 'open') {
+      nextAlerts.push(alert)
+      continue
+    }
     const product = state.products.find((item) => item.id === alert.product_id)
     const meta = product ? deriveAlertMeta(product) : null
-    if (!meta || alert.status !== 'open') return alert
-    return {
+    // Drop open alerts whose product no longer needs one (restocked / removed).
+    if (!meta) continue
+    // Collapse duplicate open alerts for the same product into a single row.
+    if (alert.product_id && seenOpenProductIds.has(alert.product_id)) continue
+    if (alert.product_id) seenOpenProductIds.add(alert.product_id)
+    nextAlerts.push({
       ...alert,
       alert_type: meta.alert_type,
       status: meta.status,
       threshold: meta.threshold,
       current_qty: meta.current_qty,
       message: meta.message,
-    }
-  })
+    })
+  }
 
   for (const product of state.products) {
     const meta = deriveAlertMeta(product)
     if (!meta) continue
+    if (seenOpenProductIds.has(product.id)) continue
 
-    const existingOpen = nextAlerts.find((alert) => alert.product_id === product.id && alert.status === 'open')
-    if (existingOpen) continue
+    // Deterministic id so the client's optimistic alert and the server's
+    // persisted alert for the same product collapse into one during merge —
+    // a random id() here produced two ids for the same alert (duplicate).
+    const alertId = deterministicUuid(state.tenant.id, 'alert', product.id)
+    // Don't recreate an alert whose row already exists (e.g. acknowledged).
+    if (nextAlerts.some((alert) => alert.id === alertId)) continue
 
+    seenOpenProductIds.add(product.id)
     nextAlerts.push({
-      id: id(),
+      id: alertId,
       tenant_id: state.tenant.id,
       product_id: product.id,
       alert_type: meta.alert_type,
@@ -917,14 +1040,19 @@ function syncProductQuantity(state: DemoSystemState, productId: string): DemoSys
 }
 
 // Consume `quantity` from the oldest lots first (FIFO). Returns the next state
-// plus the total cost of the consumed units.
+// plus the total cost of the consumed units. When `excludeLocationId` is set,
+// lots at that location are skipped — used to keep stock quarantined in a
+// Waste / Defect / Reject location from being sold.
 function consumeFifo(
   state: DemoSystemState,
   productId: string,
   quantity: number,
-  locationId?: string | null
+  locationId?: string | null,
+  excludeLocationId?: string | null | string[]
 ): { state: DemoSystemState; consumedQuantity: number; consumedCost: number } {
   let lots = lotsForProduct(state, productId, locationId)
+  const excluded = excludeLocationId ? (Array.isArray(excludeLocationId) ? excludeLocationId : [excludeLocationId]) : []
+  if (excluded.length > 0) lots = lots.filter((lot) => lot.location_id !== null && !excluded.includes(lot.location_id))
 
   // A product can have on-hand stock without any FIFO lot row (stock created
   // directly, or lots never seeded). Treat the on-hand quantity as a single
@@ -968,17 +1096,58 @@ function consumeFifo(
     }
   }
 
-  // When consuming from a specific location, only remove lots of that product
-  // at that location; lots elsewhere are preserved.
+  // Only rebuild the lots we actually pulled from (the FIFO pool we consumed),
+  // leaving other lots of the same product (e.g. stock quarantined in a waste
+  // location) untouched.
+  const consumedIds = new Set(lots.map((lot) => lot.id))
   const nextLots = [
     ...state.inventoryLots.filter(
-      (lot) => !(lot.product_id === productId && (locationId == null || lot.location_id === locationId))
+      (lot) => !(lot.product_id === productId && consumedIds.has(lot.id))
     ),
     ...kept,
   ]
   let nextState: DemoSystemState = { ...state, inventoryLots: nextLots }
   nextState = syncProductQuantity(nextState, productId)
   return { state: nextState, consumedQuantity: take, consumedCost: cost }
+}
+
+// Returns the id of the designated Waste / Defect / Reject storage location,
+// creating it on the fly if a tenant does not have one yet (so it is always
+// "set in place"). Stock held there cannot be issued or sold.
+function wasteLocationIds(state: DemoSystemState): string[] {
+  return state.locations.filter((location) => location.is_waste_location).map((location) => location.id)
+}
+
+function wasteLocationId(state: DemoSystemState, wasteType?: 'waste' | 'defect' | 'reject'): string | null {
+  if (wasteType) {
+    const found = state.locations.find((location) => location.is_waste_location && location.code === wasteType.toUpperCase())
+    if (found) return found.id
+  }
+  return wasteLocationIds(state)[0] ?? null
+}
+
+const WASTE_LOCATION_SEED = [
+  { code: 'WASTE', name: 'Waste', key: 'waste-location' },
+  { code: 'DEFECT', name: 'Defect', key: 'defect-location' },
+  { code: 'REJECT', name: 'Reject', key: 'reject-location' },
+] as const
+
+export function ensureWasteLocation(state: DemoSystemState): DemoSystemState {
+  const existing = new Set(state.locations.filter((location) => location.is_waste_location).map((location) => location.code))
+  const missing = WASTE_LOCATION_SEED.filter((seed) => !existing.has(seed.code))
+  if (missing.length === 0) return state
+
+  const additions: Location[] = missing.map((seed) => ({
+    id: deterministicUuid(state.tenant.id, seed.key),
+    tenant_id: state.tenant.id,
+    code: seed.code,
+    name: seed.name,
+    zone: 'Quarantine',
+    is_active: true,
+    is_waste_location: true,
+    created_at: nowIso(),
+  }))
+  return { ...state, locations: [...state.locations, ...additions] }
 }
 
 function setCurrentUser(state: DemoSystemState) {
@@ -1069,6 +1238,7 @@ export function addOrUpdateProduct(state: DemoSystemState, draft: ProductDraft, 
     name: normalizeName(draft.location),
     zone: null,
     is_active: true,
+    is_waste_location: false,
     created_at: nowIso(),
   } : null
 
@@ -1350,6 +1520,7 @@ export function createLocation(state: DemoSystemState, draft: LocationDraft): De
     name,
     zone: draft.zone?.trim() || null,
     is_active: true,
+    is_waste_location: false,
     created_at: nowIso(),
   }
 
@@ -1490,6 +1661,34 @@ export function toggleUserActive(state: DemoSystemState, userId: string): DemoSy
   return next
 }
 
+export function toggleProductActive(state: DemoSystemState, productId: string): DemoSystemState {
+  const product = state.products.find((entry) => entry.id === productId)
+  if (!product) return state
+
+  const next: DemoSystemState = {
+    ...state,
+    products: state.products.map((p) =>
+      p.id === productId ? { ...p, is_active: !p.is_active, updated_at: nowIso() } : p
+    ),
+  }
+
+  next.auditLogs = [
+    ...next.auditLogs,
+    {
+      id: id(),
+      tenant_id: state.tenant.id,
+      user_id: state.currentUserId,
+      action: product.is_active ? 'product.deactivated' : 'product.activated',
+      target_type: 'product',
+      target_id: productId,
+      details: { item_code: product.item_code, name: product.name },
+      performed_by: state.currentUserId,
+      performed_at: nowIso(),
+    },
+  ]
+  return next
+}
+
 export function updateUser(state: DemoSystemState, userId: string, draft: { full_name: string; email: string; role: UserRole }): DemoSystemState {
   const user = state.users.find((entry) => entry.id === userId)
   if (!user) return state
@@ -1512,6 +1711,123 @@ export function updateUser(state: DemoSystemState, userId: string, draft: { full
     },
   ]
   return updated
+}
+
+export function requestDeletion(
+  state: DemoSystemState,
+  requestedAction: string,
+  targetType: string,
+  targetId: string,
+  details: Record<string, unknown>,
+): DemoSystemState {
+  const request: DeletionRequest = {
+    id: id(),
+    tenant_id: state.tenant.id,
+    requested_by: state.currentUserId,
+    action: requestedAction as DeletionRequest['action'],
+    target_type: targetType as DeletionRequest['target_type'],
+    target_id: targetId,
+    details,
+    status: 'pending',
+    reviewed_by: null,
+    reviewed_at: null,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  }
+  return {
+    ...state,
+    deletionRequests: [request, ...state.deletionRequests],
+    auditLogs: [
+      ...state.auditLogs,
+      {
+        id: id(),
+        tenant_id: state.tenant.id,
+        user_id: state.currentUserId,
+        action: 'deletion.requested',
+        target_type: targetType as AuditLog['target_type'],
+        target_id: targetId,
+        details: { ...details, requested_action: requestedAction },
+        performed_by: state.currentUserId,
+        performed_at: nowIso(),
+      },
+    ],
+  }
+}
+
+export function approveDeletion(state: DemoSystemState, requestId: string): DemoSystemState {
+  const request = state.deletionRequests.find((row) => row.id === requestId)
+  if (!request || request.status !== 'pending') return state
+
+  let next = {
+    ...state,
+    deletionRequests: state.deletionRequests.map((row) =>
+      row.id === requestId ? { ...row, status: 'approved' as const, reviewed_by: state.currentUserId, reviewed_at: nowIso(), updated_at: nowIso() } : row
+    ),
+  }
+
+  switch (request.action) {
+    case 'removeProduct': {
+      const product = next.products.find((p) => p.id === request.target_id)
+      next = deleteProduct(next, request.target_id, product?.item_code)
+      break
+    }
+    case 'removeSupplier':
+      next = deleteSupplier(next, request.target_id)
+      break
+    case 'deleteRecipe':
+      next = deleteRecipe(next, request.target_id)
+      break
+    case 'deleteProductionTemplate':
+      next = deleteProductionTemplate(next, request.target_id)
+      break
+    case 'deleteLocation':
+      next = deleteLocation(next, request.target_id)
+      break
+    default:
+      break
+  }
+
+  next.auditLogs = [
+    ...next.auditLogs,
+    {
+      id: id(),
+      tenant_id: state.tenant.id,
+      user_id: state.currentUserId,
+      action: 'deletion.approved',
+      target_type: request.target_type as AuditLog['target_type'],
+      target_id: request.target_id,
+      details: { request_id: requestId, original_action: request.action },
+      performed_by: state.currentUserId,
+      performed_at: nowIso(),
+    },
+  ]
+  return next
+}
+
+export function rejectDeletion(state: DemoSystemState, requestId: string): DemoSystemState {
+  const request = state.deletionRequests.find((row) => row.id === requestId)
+  if (!request || request.status !== 'pending') return state
+
+  return {
+    ...state,
+    deletionRequests: state.deletionRequests.map((row) =>
+      row.id === requestId ? { ...row, status: 'rejected' as const, reviewed_by: state.currentUserId, reviewed_at: nowIso(), updated_at: nowIso() } : row
+    ),
+    auditLogs: [
+      ...state.auditLogs,
+      {
+        id: id(),
+        tenant_id: state.tenant.id,
+        user_id: state.currentUserId,
+        action: 'deletion.rejected',
+        target_type: request.target_type as AuditLog['target_type'],
+        target_id: request.target_id,
+        details: { request_id: requestId, original_action: request.action },
+        performed_by: state.currentUserId,
+        performed_at: nowIso(),
+      },
+    ],
+  }
 }
 
 // Records that a pending invitee was sent a fresh invitation. Matched by email
@@ -1765,6 +2081,7 @@ export function createPurchaseOrder(state: DemoSystemState, draft: PurchaseOrder
     approved_by: null,
     approved_at: null,
     expected_date: draft.expected_date || null,
+    delivery_date: draft.delivery_date || null,
     received_date: null,
     notes: draft.notes.trim() || null,
     created_at: createdAt,
@@ -1809,6 +2126,7 @@ export function updatePurchaseOrder(
     ...order,
     supplier_id: payload.draft.supplier_id,
     expected_date: payload.draft.expected_date || null,
+    delivery_date: payload.draft.delivery_date || null,
     notes: payload.draft.notes.trim() || null,
     updated_at: now,
     supplier: supplier ?? undefined,
@@ -1856,6 +2174,10 @@ export function cancelPurchaseOrder(state: DemoSystemState, purchaseOrderId: str
 export function receivePurchaseOrder(state: DemoSystemState, purchaseOrderId: string): DemoSystemState {
   const order = state.purchaseOrders.find((row) => row.id === purchaseOrderId)
   if (!order) return state
+  // Idempotency guard: a received (or cancelled) PO must never add stock again.
+  // Without this, re-applying the mutation would push duplicate lots and inflate
+  // the on-hand quantity.
+  if (order.status === 'received' || order.status === 'cancelled') return state
 
   const orderItems = state.purchaseOrderItems.filter((row) => row.po_id === purchaseOrderId)
   const now = nowIso()
@@ -1869,6 +2191,26 @@ export function receivePurchaseOrder(state: DemoSystemState, purchaseOrderId: st
     if (received <= 0) return
     const before = Number(product.quantity_on_hand ?? 0)
     const cost = Number(item.unit_cost ?? product.unit_cost ?? 0)
+
+    // The on-hand quantity the user sees is authoritative. If the product's FIFO
+    // lots don't add up to it (stock entered without a lot, or lot persistence
+    // drifted), top up a baseline lot first. Otherwise syncProductQuantity below
+    // would reset the quantity to the (smaller) lot sum + received, making the
+    // quantity appear to "come back" to a wrong value after receiving the PO.
+    const existingLotQty = lotQuantity(nextState, product.id)
+    if (existingLotQty < before) {
+      nextState = addLot(nextState, {
+        id: deterministicUuid(order.id, product.id, String(index), 'base'),
+        tenant_id: state.tenant.id,
+        product_id: product.id,
+        quantity: before - existingLotQty,
+        unit_cost: Number(product.unit_cost ?? cost),
+        received_at: product.created_at ?? now,
+        source: 'adjustment',
+        reference_id: null,
+        location_id: product.location_id,
+      })
+    }
 
     // Deterministic ids so the optimistic client record and the server-persisted
     // record share the same id. This keeps reconciliation (merge) from dropping
@@ -1946,6 +2288,7 @@ export function recordSale(
     itemIds?: string[]
     movementIds?: string[]
     auditLogId?: string
+    split_payments?: SplitPayment[]
   }
 ): { state: DemoSystemState; receiptNumber: string; transactionId: string; itemIds: string[]; movementIds: string[]; auditLogId: string } {
   const now = nowIso()
@@ -1953,6 +2296,7 @@ export function recordSale(
   const transactionId = payload.transactionId ?? id()
   const itemIdIter = payload.itemIds ? payload.itemIds.values() : null
   const movementIdIter = payload.movementIds ? payload.movementIds.values() : null
+  const splitPayments = payload.split_payments ?? []
 
   let nextState: DemoSystemState = { ...state }
   const items: SalesTransactionItem[] = []
@@ -1964,7 +2308,8 @@ export function recordSale(
     const before = Number(product.quantity_on_hand ?? 0)
     const requested = Math.max(0, Number(item.quantity ?? 0))
 
-    const result = consumeFifo(nextState, product.id, requested)
+    // Never sell stock quarantined in a Waste / Defect / Reject location.
+    const result = consumeFifo(nextState, product.id, requested, null, wasteLocationIds(nextState))
     nextState = result.state
     const sold = result.consumedQuantity
     if (sold <= 0) continue
@@ -2004,9 +2349,16 @@ export function recordSale(
 
   const subtotal = items.reduce((sum, row) => sum + Number(row.subtotal ?? 0), 0)
   const totalAmount = subtotal
-  const changeAmount = Math.max(0, Number(payload.amount_tendered ?? 0) - totalAmount)
+  const usingSplits = splitPayments.length > 0
+  const cashSplitTotal = splitPayments.filter((split) => split.payment_method === 'cash').reduce((sum, split) => sum + split.amount, 0)
+  const splitTotal = splitPayments.reduce((sum, split) => sum + split.amount, 0)
+  const nonCashSplitTotal = splitTotal - cashSplitTotal
+  const amountTendered = usingSplits ? splitTotal : Number(payload.amount_tendered ?? 0)
+  const changeAmount = usingSplits
+    ? Math.max(0, cashSplitTotal - Math.max(0, totalAmount - nonCashSplitTotal))
+    : Math.max(0, Number(payload.amount_tendered ?? 0) - totalAmount)
   const openShiftId = state.cashShifts.find((row) => row.status === 'open')?.id ?? null
-  const transaction: SalesTransaction = {
+  const parentTransaction: SalesTransaction = {
     id: transactionId,
     tenant_id: state.tenant.id,
     receipt_number: receiptNumber,
@@ -2014,15 +2366,16 @@ export function recordSale(
     shift_id: openShiftId,
     location_id: payload.location_id,
     status: 'completed',
-    payment_method: payload.payment_method,
+    payment_method: splitPayments.length > 0 ? splitPayments[0].payment_method : payload.payment_method,
     payment_provider: payload.payment_provider ?? null,
-    payment_reference: payload.payment_reference ?? null,
+    payment_reference: payload.payment_reference ?? splitPayments[0]?.reference ?? null,
     subtotal,
     discount_amount: items.reduce((sum, row) => sum + Number(row.discount ?? 0), 0),
     tax_amount: 0,
     total_amount: totalAmount,
-    amount_tendered: Number(payload.amount_tendered ?? 0),
+    amount_tendered: amountTendered,
     change_amount: changeAmount,
+    split_payments: usingSplits ? splitPayments : undefined,
     notes: payload.notes?.trim() || null,
     voided_by: null,
     voided_at: null,
@@ -2036,34 +2389,38 @@ export function recordSale(
     items,
   }
 
+  const allTransactions = [parentTransaction]
+  const auditLogEntries = allTransactions.map((tx, index) => ({
+    id: index === 0 ? (payload.auditLogId ?? id()) : id(),
+    tenant_id: state.tenant.id,
+    user_id: state.currentUserId || null,
+    action: index === 0 ? 'sale.completed' : 'sale.split.completed',
+    target_type: 'sale' as const,
+    target_id: tx.id,
+    details: {
+      receipt_number: tx.receipt_number,
+      total_amount: tx.total_amount,
+      payment_method: tx.payment_method,
+      items: index === 0 ? items.length : 0,
+      shift_id: openShiftId,
+      parent_transaction_id: index === 0 ? null : transactionId,
+    },
+    performed_by: state.currentUserId || null,
+    performed_at: now,
+  }))
+
   const finalState = syncAlerts({
     ...nextState,
-    salesTransactions: [...nextState.salesTransactions, transaction],
+    salesTransactions: [...nextState.salesTransactions, ...allTransactions],
     salesTransactionItems: [...nextState.salesTransactionItems, ...items],
     stockMovements: [...nextState.stockMovements, ...movements],
     auditLogs: [
       ...nextState.auditLogs,
-      {
-        id: payload.auditLogId ?? id(),
-        tenant_id: state.tenant.id,
-        user_id: state.currentUserId || null,
-        action: 'sale.completed',
-        target_type: 'sale',
-        target_id: transactionId,
-        details: {
-          receipt_number: receiptNumber,
-          total_amount: totalAmount,
-          payment_method: payload.payment_method,
-          items: items.length,
-          shift_id: openShiftId,
-        },
-        performed_by: state.currentUserId || null,
-        performed_at: now,
-      },
+      ...auditLogEntries,
     ],
   })
 
-  return { state: finalState, receiptNumber, transactionId, itemIds: items.map((i) => i.id), movementIds: movements.map((m) => m.id), auditLogId: payload.auditLogId ?? finalState.auditLogs[finalState.auditLogs.length - 1]?.id ?? id() }
+  return { state: finalState, receiptNumber, transactionId, itemIds: items.map((i) => i.id), movementIds: movements.map((m) => m.id), auditLogId: payload.auditLogId ?? auditLogEntries[0]?.id ?? id() }
 }
 
 export type WasteType = 'waste' | 'defect' | 'reject'
@@ -2075,34 +2432,58 @@ export function recordWaste(
   const product = state.products.find((row) => row.id === payload.productId)
   if (!product) return state
 
+  let working = ensureWasteLocation(state)
+  const wasteLocId = wasteLocationId(working, payload.wasteType)
+  if (!wasteLocId) return state
+
   const before = Number(product.quantity_on_hand ?? 0)
   const requested = Math.max(0, Number(payload.quantity ?? 0))
-  const result = consumeFifo(state, payload.productId, requested)
-  if (result.consumedQuantity <= 0) return state
+  // Pull the written-off stock out of the product's lots (FIFO) regardless of
+  // which location holds it, then drop it into the dedicated waste location so
+  // it is quarantined rather than removed. On-hand stays the same.
+  const consume = consumeFifo(working, payload.productId, requested)
+  if (consume.consumedQuantity <= 0) return state
 
-  const after = Number(result.state.products.find((row) => row.id === payload.productId)?.quantity_on_hand ?? 0)
+  const moved = consume.consumedQuantity
+  const cost = moved > 0 ? consume.consumedCost / moved : 0
   const now = nowIso()
 
+  const wasteMovementId = deterministicUuid(state.tenant.id, product.id, payload.wasteType, String(before), String(moved))
+
+  let nextState: DemoSystemState = addLot(consume.state, {
+    id: deterministicUuid(wasteMovementId, 'lot'),
+    tenant_id: working.tenant.id,
+    product_id: product.id,
+    quantity: moved,
+    unit_cost: cost,
+    received_at: now,
+    source: 'transfer',
+    reference_id: null,
+    location_id: wasteLocId,
+  })
+  nextState = syncProductQuantity(nextState, product.id)
+  const after = Number(nextState.products.find((row) => row.id === payload.productId)?.quantity_on_hand ?? 0)
+
   const movement: StockMovement = {
-    id: deterministicUuid(state.tenant.id, product.id, payload.wasteType, String(before), String(result.consumedQuantity)),
+    id: wasteMovementId,
     tenant_id: state.tenant.id,
     product_id: product.id,
     movement_type: payload.wasteType,
-    quantity: result.consumedQuantity,
+    quantity: moved,
     quantity_before: before,
     quantity_after: after,
-    reference_id: null,
+    reference_id: wasteLocId,
     reference_type: 'waste',
     location_id: product.location_id,
     performed_by: state.currentUserId || null,
     notes: payload.reason?.trim() || `${payload.wasteType} write-off`,
     created_at: now,
-    product: result.state.products.find((row) => row.id === product.id),
+    product: nextState.products.find((row) => row.id === product.id),
   }
 
   return {
-    ...result.state,
-    stockMovements: [...result.state.stockMovements, movement],
+    ...nextState,
+    stockMovements: [...nextState.stockMovements, movement],
   }
 }
 
@@ -2130,19 +2511,30 @@ export function reverseWaste(state: DemoSystemState, movementId: string): DemoSy
 
   const before = Number(product.quantity_on_hand ?? 0)
   const now = nowIso()
+  const wasteLocId = movement.reference_id ?? wasteLocationId(state, movement.movement_type as 'waste' | 'defect' | 'reject')
+  const originalLocId = movement.location_id ?? product.location_id
 
-  // Put the written-off stock back as a fresh FIFO lot, then record a
-  // compensating movement so the ledger stays accurate.
-  let nextState: DemoSystemState = addLot(state, {
+  // Withdraw the quarantined quantity from the waste location (if it was
+  // relocated there) and return it to its original, sellable location so the
+  // ledger stays accurate.
+  let nextState: DemoSystemState = state
+  let restoredQty = qty
+  if (wasteLocId) {
+    const consumed = consumeFifo(state, movement.product_id, qty, wasteLocId)
+    nextState = consumed.state
+    if (consumed.consumedQuantity > 0) restoredQty = consumed.consumedQuantity
+  }
+
+  nextState = addLot(nextState, {
     id: deterministicUuid(state.tenant.id, movement.id, 'waste-reversal-lot'),
     tenant_id: state.tenant.id,
     product_id: movement.product_id,
-    quantity: qty,
+    quantity: restoredQty,
     unit_cost: Number(product.unit_cost ?? 0),
     received_at: now,
     source: 'adjustment',
     reference_id: movement.id,
-    location_id: movement.location_id ?? product.location_id,
+    location_id: originalLocId,
   })
   nextState = syncProductQuantity(nextState, movement.product_id)
   const after = Number(nextState.products.find((p) => p.id === movement.product_id)?.quantity_on_hand ?? 0)
@@ -2188,6 +2580,36 @@ export function editWaste(
     quantity: draft.quantity,
     reason: draft.reason,
   })
+}
+
+// Reconcile a product's written-off stock for each type independently. Every
+// existing non-reversed write-off of a type is reversed (restoring its stock),
+// then the requested quantity (if > 0) is re-recorded. This lets each of
+// waste / defect / reject be set to its own value — including 0 — without the
+// types interfering with one another.
+export function setWasteTypes(
+  state: DemoSystemState,
+  productId: string,
+  draft: { waste: number; defect: number; reject: number }
+): DemoSystemState {
+  let next = state
+  const targets: Array<[WasteType, number]> = [
+    ['waste', Math.max(0, Number(draft.waste) || 0)],
+    ['defect', Math.max(0, Number(draft.defect) || 0)],
+    ['reject', Math.max(0, Number(draft.reject) || 0)],
+  ]
+  for (const [wasteType, target] of targets) {
+    const entries = state.stockMovements.filter(
+      (movement) => movement.product_id === productId && movement.movement_type === wasteType && !isWasteReversed(state, movement.id)
+    )
+    for (const entry of entries) {
+      next = reverseWaste(next, entry.id)
+    }
+    if (target > 0) {
+      next = recordWaste(next, { productId, wasteType, quantity: target })
+    }
+  }
+  return next
 }
 
 export function openShift(
@@ -2531,6 +2953,11 @@ export function createTransfer(
   const fromLocationId = payload.fromLocationId ?? product.location_id ?? null
   const toLocationId = payload.toLocationId ?? null
   const requested = Math.max(0, Number(payload.quantity ?? 0))
+  // Stock in a Waste / Defect / Reject location cannot be issued out, and that
+  // location is managed automatically by waste logging (never a manual target).
+  const wasteIds = wasteLocationIds(state)
+  if (fromLocationId && wasteIds.includes(fromLocationId)) return state
+  if (toLocationId && wasteIds.includes(toLocationId)) return state
   if (requested <= 0 || !toLocationId || toLocationId === fromLocationId) return state
 
   const consume = consumeFifo(state, product.id, requested, fromLocationId)

@@ -1,9 +1,10 @@
 'use client'
 
 import { useMemo, useRef, useState, type ChangeEvent } from 'react'
-import { AlertTriangle, ArrowLeftRight, Edit2, Package, Plus, RotateCcw, Save, Search, Trash2, Upload, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeftRight, Edit2, Eye, Package, Plus, Power, RotateCcw, Save, Search, Trash2, Upload, X } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { useDemoSystem } from '@/components/demo-system-provider'
+import { getRolePermissions } from '@/lib/access-control'
 import { formatTimestamp } from '@/lib/utils'
 import type { ProductDraft } from '@/lib/demo-system'
 import type { InventoryLot } from '@/types/database'
@@ -46,16 +47,19 @@ const EMPTY_FORM: ProductForm = {
 
 type LocationStock = { locationId: string; name: string; quantity: number }
 
-function StockLocationBreakdown({ items }: { items: LocationStock[] }) {
+function StockLocationBreakdown({ items, wasteIds }: { items: LocationStock[]; wasteIds?: Set<string> }) {
   if (items.length <= 1) return null
   return (
     <div style={{ marginTop: 5, display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-end', fontSize: 10, color: '#64748B', lineHeight: 1.3 }}>
-      {items.map((item) => (
-        <div key={item.locationId} style={{ display: 'flex', gap: 5, alignItems: 'baseline', justifyContent: 'flex-end' }}>
-          <strong style={{ color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>{item.quantity}</strong>
-          <span style={{ textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>@ {item.name}</span>
-        </div>
-      ))}
+      {items.map((item) => {
+        const isWaste = wasteIds?.has(item.locationId)
+        return (
+          <div key={item.locationId} style={{ display: 'flex', gap: 5, alignItems: 'baseline', justifyContent: 'flex-end' }}>
+            <strong style={{ color: isWaste ? '#EF4444' : '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>{item.quantity}</strong>
+            <span style={{ textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: isWaste ? '#EF4444' : undefined }}>@ {item.name}</span>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -163,8 +167,13 @@ function normalizeImportRow(row: Record<string, unknown> | unknown[]): ProductDr
 }
 
 export default function InventoryPage() {
-  const { state, saveProduct, removeProduct, removeProducts, importProductRows, recordWaste, reverseWaste, editWaste, transferStock, formatCurrency, notifySuccess, notifyError } = useDemoSystem()
+  const { state, availableTenants, activeTenantId, saveProduct, removeProduct, removeProducts, importProductRows, setWasteTypes, transferStock, toggleProduct, requestDeletion, formatCurrency, notifySuccess, notifyError } = useDemoSystem()
+  const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
+  const role = activeTenant?.role ?? 'admin'
+  const perms = getRolePermissions(role)
   const isProduction = state.tenant.enable_production ?? false
+  const wasteLocationIds = state.locations.filter((location) => location.is_waste_location).map((location) => location.id)
+  const wasteLocationIdSet = new Set(wasteLocationIds)
   const [showModal, setShowModal] = useState(false)
   const [showImportModal, setShowImportModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -173,36 +182,42 @@ export default function InventoryPage() {
   const [bulkConfirm, setBulkConfirm] = useState(false)
   const [importRows, setImportRows] = useState<ProductDraft[]>([])
   const [wasteModal, setWasteModal] = useState<string | null>(null)
-  const [wasteType, setWasteType] = useState<'waste' | 'defect' | 'reject'>('waste')
-  const [wasteQty, setWasteQty] = useState('')
-  const [wasteReason, setWasteReason] = useState('')
+  const [wasteDraft, setWasteDraft] = useState<{ waste: string; defect: string; reject: string }>({ waste: '', defect: '', reject: '' })
   const [lotsModal, setLotsModal] = useState<string | null>(null)
   const [transferModal, setTransferModal] = useState<string | null>(null)
   const [warningsFilter, setWarningsFilter] = useState<null | 'low' | 'out'>(null)
   const [wasteSummaryModal, setWasteSummaryModal] = useState<WasteType | 'all' | null>(null)
-  const [editWasteId, setEditWasteId] = useState<string | null>(null)
-  const [editWasteType, setEditWasteType] = useState<'waste' | 'defect' | 'reject'>('waste')
-  const [editWasteQty, setEditWasteQty] = useState('')
-  const [editWasteReason, setEditWasteReason] = useState('')
   const [transferTo, setTransferTo] = useState('')
+  const [transferFrom, setTransferFrom] = useState('')
   const [transferQty, setTransferQty] = useState('')
   const [transferNotes, setTransferNotes] = useState('')
+  const [viewId, setViewId] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const WASTE_TYPES = ['waste', 'defect', 'reject'] as const
   type WasteType = (typeof WASTE_TYPES)[number]
   const wasteByProduct = useMemo(() => {
     const map = new Map<string, { waste: number; defect: number; reject: number; total: number }>()
-    for (const movement of state.stockMovements) {
-      if (WASTE_TYPES.includes(movement.movement_type as WasteType)) {
-        const entry = map.get(movement.product_id) ?? { waste: 0, defect: 0, reject: 0, total: 0 }
-        entry[movement.movement_type as WasteType] += Number(movement.quantity ?? 0)
-        entry.total += Number(movement.quantity ?? 0)
-        map.set(movement.product_id, entry)
-      }
+    const quarantineIds = new Set(
+      state.locations.filter((location) => location.is_waste_location).map((location) => location.id)
+    )
+    for (const lot of state.inventoryLots) {
+      if (!lot.location_id || !quarantineIds.has(lot.location_id)) continue
+      const location = state.locations.find((entry) => entry.id === lot.location_id)
+      const type =
+        location?.code === 'WASTE' ? 'waste'
+          : location?.code === 'DEFECT' ? 'defect'
+            : location?.code === 'REJECT' ? 'reject'
+              : null
+      if (!type) continue
+      const entry = map.get(lot.product_id) ?? { waste: 0, defect: 0, reject: 0, total: 0 }
+      const quantity = Number(lot.quantity ?? 0)
+      entry[type] += quantity
+      entry.total += quantity
+      map.set(lot.product_id, entry)
     }
     return map
-  }, [state.stockMovements])
+  }, [state.inventoryLots, state.locations])
 
   const stockByLocation = useMemo(() => {
     const map = new Map<string, { locationId: string; name: string; quantity: number }[]>()
@@ -222,23 +237,30 @@ export default function InventoryPage() {
     return map
   }, [state.inventoryLots, state.locations])
 
-  const wasteTotals = useMemo(() => {
-    let waste = 0
-    let defect = 0
-    let reject = 0
-    let value = 0
-    for (const movement of state.stockMovements) {
-      if (WASTE_TYPES.includes(movement.movement_type as WasteType)) {
-        const quantity = Number(movement.quantity ?? 0)
-        const cost = Number(movement.product?.unit_cost ?? state.products.find((product) => product.id === movement.product_id)?.unit_cost ?? 0)
-        value += quantity * cost
-        if (movement.movement_type === 'waste') waste += quantity
-        else if (movement.movement_type === 'defect') defect += quantity
-        else reject += quantity
-      }
+  const quarantineLocations = state.locations.filter((location) => location.is_waste_location)
+  const quarantineStock = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const lot of state.inventoryLots) {
+      if (!lot.location_id || !quarantineLocations.some((location) => location.id === lot.location_id)) continue
+      map.set(lot.location_id, (map.get(lot.location_id) ?? 0) + Number(lot.quantity ?? 0))
     }
-    return { waste, defect, reject, value, total: waste + defect + reject }
-  }, [state.stockMovements, state.products])
+    return map
+  }, [state.inventoryLots, quarantineLocations])
+
+  const quarantineValue = useMemo(() => {
+    let value = 0
+    for (const lot of state.inventoryLots) {
+      if (!lot.location_id || !quarantineLocations.some((location) => location.id === lot.location_id)) continue
+      const product = state.products.find((entry) => entry.id === lot.product_id)
+      value += Number(lot.quantity ?? 0) * Number(product?.unit_cost ?? 0)
+    }
+    return value
+  }, [state.inventoryLots, state.products, quarantineLocations])
+
+  const stockForType = (type: 'waste' | 'defect' | 'reject') => {
+    const location = quarantineLocations.find((entry) => entry.code === type.toUpperCase())
+    return location ? (quarantineStock.get(location.id) ?? 0) : 0
+  }
 
   const wasteItems = useMemo(() => {
     const productFor = (movement: (typeof state.stockMovements)[number]) =>
@@ -342,6 +364,16 @@ export default function InventoryPage() {
   ]
 
   function handleDeleteSelected() {
+    if (!perms.canDeleteRecords) {
+      const itemCodes = state.products
+        .filter((entry) => table.selectedIds.includes(entry.id))
+        .map((entry) => entry.item_code)
+      requestDeletion('removeProducts', 'product', table.selectedIds[0] ?? '', { product_ids: table.selectedIds, item_codes: itemCodes })
+      notifySuccess('Deletion request sent to manager for approval.')
+      table.clearSelection()
+      setBulkConfirm(false)
+      return
+    }
     removeProducts(table.selectedIds)
     notifySuccess(`Deleted ${table.selectedCount} item${table.selectedCount === 1 ? '' : 's'} successfully.`)
     table.clearSelection()
@@ -410,23 +442,52 @@ export default function InventoryPage() {
   }
 
   function handleDelete(id: string) {
+    if (!perms.canDeleteRecords) {
+      const product = state.products.find((entry) => entry.id === id)
+      requestDeletion('removeProduct', 'product', id, { item_code: product?.item_code, name: product?.name })
+      notifySuccess('Deletion request sent to manager for approval.')
+      setDeleteConfirm(null)
+      return
+    }
     removeProduct(id)
     notifySuccess('Item deleted successfully.')
     setDeleteConfirm(null)
   }
 
+  function quarantineQty(productId: string, type: 'waste' | 'defect' | 'reject') {
+    const location = quarantineLocations.find((entry) => entry.code === type.toUpperCase())
+    if (!location) return 0
+    return state.inventoryLots
+      .filter((lot) => lot.product_id === productId && lot.location_id === location.id)
+      .reduce((sum, lot) => sum + Number(lot.quantity ?? 0), 0)
+  }
+
   function openWaste(product: (typeof state.products)[number]) {
     setWasteModal(product.id)
-    setWasteType('waste')
-    setWasteQty('')
-    setWasteReason('')
+    setWasteDraft({
+      waste: String(quarantineQty(product.id, 'waste')),
+      defect: String(quarantineQty(product.id, 'defect')),
+      reject: String(quarantineQty(product.id, 'reject')),
+    })
   }
 
   function closeWaste() {
     setWasteModal(null)
-    setWasteType('waste')
-    setWasteQty('')
-    setWasteReason('')
+    setWasteDraft({ waste: '', defect: '', reject: '' })
+  }
+
+  function handleSaveWaste() {
+    if (!wasteModal) return
+    const product = state.products.find((entry) => entry.id === wasteModal)
+    if (!product) return
+    const draft = {
+      waste: Math.max(0, Number(wasteDraft.waste) || 0),
+      defect: Math.max(0, Number(wasteDraft.defect) || 0),
+      reject: Math.max(0, Number(wasteDraft.reject) || 0),
+    }
+    setWasteTypes(product.id, draft)
+    notifySuccess(`Updated waste / defect / reject for ${product.name}.`)
+    closeWaste()
   }
 
   function openLots(product: (typeof state.products)[number]) {
@@ -439,6 +500,7 @@ export default function InventoryPage() {
 
   function openTransfer(product: (typeof state.products)[number]) {
     setTransferModal(product.id)
+    setTransferFrom(product.location_id ?? product.location?.id ?? '')
     setTransferTo('')
     setTransferQty('')
     setTransferNotes('')
@@ -459,13 +521,17 @@ export default function InventoryPage() {
       notifyError('Enter a quantity greater than 0.')
       return
     }
-    if (transferTo && transferTo === product.location_id) {
+    const sourceLocationId = transferFrom || (product.location_id ?? product.location?.id ?? null)
+    if (!sourceLocationId) {
+      notifyError('Select a source location.')
+      return
+    }
+    if (transferTo && transferTo === sourceLocationId) {
       notifyError('Destination must be a different location.')
       return
     }
-    const sourceLocationId = product.location_id ?? product.location?.id ?? null
-    if (!sourceLocationId) {
-      notifyError('This product has no assigned location. Set one via Edit → Location first.')
+    if (transferTo && wasteLocationIds.includes(transferTo)) {
+      notifyError('Stock cannot be transferred into a Waste / Defect / Reject location.')
       return
     }
     transferStock({
@@ -477,20 +543,6 @@ export default function InventoryPage() {
     })
     notifySuccess(`Transferred ${quantity} × ${product.name}.`)
     closeTransfer()
-  }
-
-  function handleLogWaste() {
-    if (!wasteModal) return
-    const product = state.products.find((entry) => entry.id === wasteModal)
-    const quantity = Number(wasteQty) || 0
-    if (!product || quantity <= 0) return
-    if (quantity > product.quantity_on_hand) {
-      notifyError(`Cannot log more than the ${product.quantity_on_hand} units on hand.`)
-      return
-    }
-    recordWaste(product.id, wasteType, quantity, wasteReason)
-    notifySuccess(`${quantity} unit${quantity === 1 ? '' : 's'} marked as ${wasteType}.`)
-    closeWaste()
   }
 
   async function handleFileUpload(e: ChangeEvent<HTMLInputElement>) {
@@ -623,15 +675,15 @@ export default function InventoryPage() {
               <AlertTriangle size={16} color="#DC2626" />
             </div>
             <div>
-              <div style={{ fontSize: 12, fontWeight: 800, color: '#B91C1C', letterSpacing: '0.04em', textTransform: 'uppercase' }}>Waste / Defect / Reject</div>
-              <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>Monitor non-sellable stock written off from inventory.</div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#B91C1C', letterSpacing: '0.04em', textTransform: 'uppercase' }}>Quarantine Storage</div>
+              <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>Written-off stock held here, separate from sellable goods — cannot be issued or sold at POS.</div>
             </div>
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             {[
-              { label: 'Waste', value: wasteTotals.waste, color: '#EF4444', type: 'waste' as const },
-              { label: 'Defect', value: wasteTotals.defect, color: '#F59E0B', type: 'defect' as const },
-              { label: 'Reject', value: wasteTotals.reject, color: '#8B5CF6', type: 'reject' as const },
+              { label: 'Waste', color: '#EF4444', type: 'waste' as const },
+              { label: 'Defect', color: '#F59E0B', type: 'defect' as const },
+              { label: 'Reject', color: '#8B5CF6', type: 'reject' as const },
             ].map((stat) => (
               <div
                 key={stat.label}
@@ -641,7 +693,7 @@ export default function InventoryPage() {
                 onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setWasteSummaryModal(stat.type) } }}
                 style={{ padding: '8px 14px', borderRadius: 12, background: '#FFFFFF', border: '1px solid #F1D4D4', textAlign: 'center', minWidth: 78, cursor: 'pointer', outline: 'none' }}
               >
-                <div style={{ fontSize: 18, fontWeight: 900, color: stat.color, lineHeight: 1 }}>{stat.value}</div>
+                <div style={{ fontSize: 18, fontWeight: 900, color: stat.color, lineHeight: 1 }}>{stockForType(stat.type)}</div>
                 <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>{stat.label}</div>
               </div>
             ))}
@@ -652,7 +704,7 @@ export default function InventoryPage() {
               onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setWasteSummaryModal('all') } }}
               style={{ padding: '8px 14px', borderRadius: 12, background: '#FFFFFF', border: '1px solid #F1D4D4', textAlign: 'center', minWidth: 96, cursor: 'pointer', outline: 'none' }}
             >
-              <div style={{ fontSize: 18, fontWeight: 900, color: '#0F172A', lineHeight: 1 }}>{formatCurrency(wasteTotals.value)}</div>
+              <div style={{ fontSize: 18, fontWeight: 900, color: '#0F172A', lineHeight: 1 }}>{formatCurrency(quarantineValue)}</div>
               <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>Est. loss</div>
             </div>
           </div>
@@ -682,7 +734,7 @@ export default function InventoryPage() {
               <SortHeader label="Location" column="locationName" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
               <SortHeader label="Waste" column="wasteTotal" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} align="right" />
               <SortHeader label="Status" column="status" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
-              <th style={{ width: 80, textAlign: 'right' }}>Action</th>
+              <th style={{ width: 120, textAlign: 'center' }}>Action</th>
             </tr></thead>
           <tbody>
             {table.paginated.map((row) => {
@@ -692,7 +744,7 @@ export default function InventoryPage() {
               const statusColor = status === 'out' ? '#EF4444' : status === 'low' ? '#F59E0B' : '#10B981'
               const statusLabel = status === 'out' ? 'Out of Stock' : status === 'low' ? 'Low Stock' : 'In Stock'
               return (
-                <tr key={product.id} style={isSelected ? { background: '#EFF6FF' } : undefined}>
+                <tr key={product.id} style={isSelected ? { background: '#EFF6FF' } : (!product.is_active ? { opacity: 0.55, background: '#F8FAFC' } : undefined)}>
                   <td>
                     <RowCheckbox checked={isSelected} onToggle={() => table.toggleSelect(product.id)} />
                   </td>
@@ -719,7 +771,7 @@ export default function InventoryPage() {
                     <div style={{ marginTop: 3, width: 48, height: 3, marginLeft: 'auto', background: '#E2E8F0', borderRadius: 2 }}>
                       <div style={{ height: '100%', borderRadius: 2, background: statusColor, width: `${Math.min((product.quantity_on_hand / Math.max(product.reorder_point * 4, 1)) * 100, 100)}%` }} />
                     </div>
-                    <StockLocationBreakdown items={stockByLocation.get(product.id) ?? []} />
+                    <StockLocationBreakdown items={stockByLocation.get(product.id) ?? []} wasteIds={wasteLocationIdSet} />
                   </td>
                   <td style={{ color: '#475569' }}>{product.reorder_point}</td>
                   <td style={{ color: '#0F172A' }}>{formatCurrency(Number(product.unit_cost ?? 0))}</td>
@@ -742,17 +794,19 @@ export default function InventoryPage() {
                       )
                     })()}
                   </td>
-                  <td><span className="badge" style={{ background: `${statusColor}14`, color: statusColor }}>{statusLabel}</span></td>
-                   <td>
-                     <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-                       <button className="btn btn-ghost btn-sm" onClick={() => openEdit(product)} style={{ padding: '4px 8px' }}><Edit2 size={13} /></button>
-                       <button className="btn btn-ghost btn-sm" onClick={() => openLots(product)} style={{ padding: '4px 8px' }} title="View FIFO lots"><Package size={13} /></button>
-                       <button className="btn btn-danger btn-sm" onClick={() => setDeleteConfirm(product.id)} style={{ padding: '4px 8px' }}><Trash2 size={13} /></button>
-                        <button className="btn btn-ghost btn-sm" onClick={() => openWaste(product)} style={{ padding: '4px 8px', color: '#DC2626' }} title="Log waste / defect / reject"><AlertTriangle size={13} /></button>
-                        <button className="btn btn-ghost btn-sm" onClick={() => openTransfer(product)} style={{ padding: '4px 8px', color: '#0EA5E9' }} title="Transfer stock to another location"><ArrowLeftRight size={13} /></button>
-                     </div>
-                   </td>
-                </tr>
+                  <td><span className="badge" style={{ background: `${statusColor}14`, color: statusColor }}>{statusLabel}{!product.is_active ? ' · Inactive' : ''}</span></td>
+                  <td>
+                    <div style={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap', width: 116, margin: '0 auto', rowGap: 4 }}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setViewId(product.id)} style={{ padding: '4px 6px' }} title="View item details"><Eye size={13} /></button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => openEdit(product)} style={{ padding: '4px 6px' }}><Edit2 size={13} /></button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => openLots(product)} style={{ padding: '4px 6px' }} title="View FIFO lots"><Package size={13} /></button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => openWaste(product)} style={{ padding: '4px 6px', color: '#DC2626' }} title="Log waste / defect / reject"><AlertTriangle size={13} /></button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => openTransfer(product)} style={{ padding: '4px 6px', color: '#0EA5E9' }} title="Transfer stock to another location"><ArrowLeftRight size={13} /></button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => toggleProduct(product.id)} style={{ padding: '4px 6px', color: product.is_active ? '#94A3B8' : '#10B981' }} title={product.is_active ? 'Deactivate item' : 'Activate item'}><Power size={13} /></button>
+                      <button className="btn btn-danger btn-sm" onClick={() => setDeleteConfirm(product.id)} style={{ padding: '4px 6px' }}><Trash2 size={13} /></button>
+                    </div>
+                  </td>
+                 </tr>
               )
             })}
             {table.paginated.length === 0 && (
@@ -821,7 +875,7 @@ export default function InventoryPage() {
                 <div style={{ padding: 12, borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
                   <div style={{ color: '#94A3B8' }}>On hand</div>
                   <div style={{ marginTop: 4, fontWeight: 800, color: statusColor }}>{product.quantity_on_hand}</div>
-                  <StockLocationBreakdown items={stockByLocation.get(product.id) ?? []} />
+                  <StockLocationBreakdown items={stockByLocation.get(product.id) ?? []} wasteIds={wasteLocationIdSet} />
                 </div>
                 <div style={{ padding: 12, borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
                   <div style={{ color: '#94A3B8' }}>Reorder</div>
@@ -855,6 +909,9 @@ export default function InventoryPage() {
               </div>
 
               <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => setViewId(product.id)} style={{ flex: 1, justifyContent: 'center' }}>
+                  <Eye size={13} /> View
+                </button>
                 <button className="btn btn-ghost btn-sm" onClick={() => openEdit(product)} style={{ flex: 1, justifyContent: 'center' }}>
                   <Edit2 size={13} /> Edit
                 </button>
@@ -866,6 +923,9 @@ export default function InventoryPage() {
                 </button>
                 <button className="btn btn-ghost btn-sm" onClick={() => openTransfer(product)} style={{ flex: 1, justifyContent: 'center', color: '#0EA5E9' }}>
                   <ArrowLeftRight size={13} /> Transfer
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={() => toggleProduct(product.id)} style={{ flex: 1, justifyContent: 'center', color: product.is_active ? '#94A3B8' : '#10B981' }}>
+                  <Power size={13} /> {product.is_active ? 'Deactivate' : 'Activate'}
                 </button>
                 <button className="btn btn-danger btn-sm" onClick={() => setDeleteConfirm(product.id)} style={{ flex: 1, justifyContent: 'center' }}>
                   <Trash2 size={13} /> Delete
@@ -1056,79 +1116,48 @@ export default function InventoryPage() {
       {wasteModal && (() => {
         const target = state.products.find((entry) => entry.id === wasteModal)
         if (!target) return null
-        const remaining = (wasteByProduct.get(target.id)?.total) ?? 0
         return (
           <div className="modal-overlay">
-            <div className="modal" style={{ maxWidth: 440 }}>
+            <div className="modal" style={{ maxWidth: 460 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
-                <h2 style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>Log Waste / Defect / Reject</h2>
+                <h2 style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>Waste / Defect / Reject</h2>
                 <button onClick={closeWaste} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748B' }}><X size={20} /></button>
               </div>
 
               <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2', marginBottom: 16 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{target.name}</div>
-                <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>
-                  {target.item_code} · {target.quantity_on_hand} on hand{remaining > 0 ? ` · ${remaining} already written off` : ''}
+                <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>{target.item_code} · {target.quantity_on_hand} on hand</div>
+                <div style={{ marginTop: 8, fontSize: 11, color: '#7C3AED', background: '#F5F3FF', border: '1px solid #E9D5FF', borderRadius: 8, padding: '6px 8px' }}>
+                  Each type is tracked separately and kept in quarantine — separate from sellable stock and not issuable or sellable at POS. Set a value to 0 to clear it.
                 </div>
               </div>
 
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>Type</label>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-                  {([
-                    { value: 'waste', label: 'Waste', color: '#EF4444' },
-                    { value: 'defect', label: 'Defect', color: '#F59E0B' },
-                    { value: 'reject', label: 'Reject', color: '#8B5CF6' },
-                  ] as const).map((opt) => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      onClick={() => setWasteType(opt.value)}
-                      style={{
-                        padding: '10px 4px',
-                        borderRadius: 10,
-                        border: `1px solid ${wasteType === opt.value ? opt.color : '#D8E4F2'}`,
-                        background: wasteType === opt.value ? `${opt.color}14` : '#FFFFFF',
-                        color: wasteType === opt.value ? opt.color : '#475569',
-                        cursor: 'pointer',
-                        fontSize: 12,
-                        fontWeight: 700,
-                      }}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>Quantity</label>
-                <input
-                  className="input"
-                  type="number"
-                  min={1}
-                  max={target.quantity_on_hand}
-                  value={wasteQty}
-                  onChange={(event) => setWasteQty(event.target.value)}
-                  placeholder="0"
-                  style={{ height: 40, fontSize: 14 }}
-                />
-              </div>
-
-              <div style={{ marginBottom: 20 }}>
-                <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>Reason (optional)</label>
-                <textarea
-                  className="input"
-                  value={wasteReason}
-                  onChange={(event) => setWasteReason(event.target.value)}
-                  placeholder="e.g. expired, damaged in transit..."
-                  style={{ height: 64, resize: 'none' }}
-                />
+              <div style={{ display: 'grid', gap: 12, marginBottom: 18 }}>
+                {([
+                  { key: 'waste', label: 'Waste', color: '#EF4444' },
+                  { key: 'defect', label: 'Defect', color: '#F59E0B' },
+                  { key: 'reject', label: 'Reject', color: '#8B5CF6' },
+                ] as const).map((opt) => (
+                  <div key={opt.key} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: 3, background: opt.color, flexShrink: 0 }} />
+                    <label style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', width: 64, flexShrink: 0 }}>{opt.label}</label>
+                    <input
+                      className="input"
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={wasteDraft[opt.key]}
+                      onChange={(event) => setWasteDraft((prev) => ({ ...prev, [opt.key]: event.target.value }))}
+                      placeholder="0"
+                      style={{ height: 40, fontSize: 14, flex: 1 }}
+                    />
+                  </div>
+                ))}
               </div>
 
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
                 <button className="btn btn-ghost" onClick={closeWaste}>Cancel</button>
-                <button className="btn btn-primary" onClick={handleLogWaste}><AlertTriangle size={15} /> Log {wasteType}</button>
+                <button className="btn btn-primary" onClick={handleSaveWaste}><Save size={15} /> Save</button>
               </div>
             </div>
           </div>
@@ -1221,12 +1250,6 @@ export default function InventoryPage() {
                           </div>
                         </div>
                         <div style={{ fontSize: 11, color: '#64748B', marginTop: 6 }}>Qty: {entry.quantity}{entry.notes ? ` · ${entry.notes}` : ''}</div>
-                        {!entry.isReversed && (
-                          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                            <button className="btn btn-ghost btn-sm" onClick={() => { setEditWasteId(entry.id); setEditWasteType(entry.type); setEditWasteQty(String(entry.quantity)); setEditWasteReason(entry.notes ?? ''); setWasteSummaryModal(null) }}><Save size={13} /> Edit</button>
-                            <button className="btn btn-ghost btn-sm" onClick={() => reverseWaste(entry.id)} style={{ color: '#059669' }}><RotateCcw size={13} /> Reverse</button>
-                          </div>
-                        )}
                       </div>
                     )
                   })
@@ -1241,65 +1264,17 @@ export default function InventoryPage() {
         )
       })()}
 
-      {editWasteId && (() => {
-        const entry = wasteItems.find((item) => item.id === editWasteId)
-        if (!entry) return null
-        const WASTE_EDIT_TYPES = ['waste', 'defect', 'reject'] as const
-        return (
-          <div className="modal-overlay">
-            <div className="modal" style={{ maxWidth: 460 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
-                <h2 style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>Edit {entry.type}</h2>
-                <button onClick={() => setEditWasteId(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748B' }}><X size={20} /></button>
-              </div>
-
-              <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2', marginBottom: 16 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{entry.product?.name ?? 'Unknown item'}</div>
-                <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>{entry.product?.item_code ?? ''}</div>
-              </div>
-
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>Type</label>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-                  {WASTE_EDIT_TYPES.map((opt) => {
-                    const optColor = opt === 'waste' ? '#EF4444' : opt === 'defect' ? '#F59E0B' : '#8B5CF6'
-                    return (
-                      <button key={opt} type="button" onClick={() => setEditWasteType(opt)} style={{ padding: '8px 6px', borderRadius: 10, border: `1px solid ${editWasteType === opt ? optColor : '#D8E4F2'}`, background: editWasteType === opt ? `${optColor}14` : '#FFFFFF', color: editWasteType === opt ? optColor : '#475569', fontSize: 12, fontWeight: 700, cursor: 'pointer', textTransform: 'capitalize' }}>{opt}</button>
-                    )
-                  })}
-                </div>
-              </div>
-
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>Quantity</label>
-                <input className="input" type="number" min="0" step="any" value={editWasteQty} onChange={(e) => setEditWasteQty(e.target.value)} style={{ height: 40, fontSize: 14 }} />
-              </div>
-
-              <div style={{ marginBottom: 18 }}>
-                <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>Reason (optional)</label>
-                <input className="input" value={editWasteReason} onChange={(e) => setEditWasteReason(e.target.value)} placeholder="e.g. Spoiled" style={{ height: 40, fontSize: 14 }} />
-              </div>
-
-              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-                <button className="btn btn-ghost" onClick={() => setEditWasteId(null)}>Cancel</button>
-                <button className="btn btn-primary" onClick={() => { const q = Number(editWasteQty); if (!Number.isNaN(q) && q > 0) { editWaste(editWasteId, { wasteType: editWasteType, quantity: q, reason: editWasteReason }); setEditWasteId(null) } else { notifyError('Enter a quantity greater than 0.') } }}><Save size={15} /> Save Changes</button>
-              </div>
-            </div>
-          </div>
-        )
-      })()}
-
       {transferModal && (() => {
         const target = state.products.find((entry) => entry.id === transferModal)
         if (!target) return null
-        const sourceLocationId = target.location_id ?? target.location?.id ?? null
+         const sourceLocationId = transferFrom || (target.location_id ?? target.location?.id ?? null)
         const fromLoc = state.locations.find((loc) => loc.id === sourceLocationId)
-        const hasSource = Boolean(sourceLocationId)
         const qty = Number(transferQty) || 0
         const availableAtSource = (target.lots ?? [])
           .filter((lot) => lot.location_id === sourceLocationId)
           .reduce((sum, lot) => sum + Number(lot.quantity ?? 0), 0)
         const maxQty = availableAtSource > 0 ? availableAtSource : Number(target.quantity_on_hand ?? 0)
+        const transferableLocations = state.locations.filter((loc) => !wasteLocationIds.includes(loc.id))
         return (
           <div className="modal-overlay">
             <div className="modal" style={{ maxWidth: 460 }}>
@@ -1311,18 +1286,30 @@ export default function InventoryPage() {
               <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2', marginBottom: 16 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{target.name}</div>
                 <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>
-                  {target.item_code} · currently at {fromLoc?.name ?? 'Unassigned'} · {maxQty} available here
+                  {target.item_code} · {maxQty} available at {fromLoc?.name ?? 'Unassigned'}
                 </div>
-                {!hasSource && (
+                {transferableLocations.length <= 1 && (
                   <div style={{ marginTop: 8, fontSize: 11, color: '#B45309', background: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: 8, padding: '6px 8px' }}>
-                    This product has no assigned location. Set one via Edit → Location, then open Transfer again.
+                    Add another storage location in Settings to transfer stock between sites.
                   </div>
                 )}
               </div>
 
               <div style={{ marginBottom: 14 }}>
                 <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>From Location</label>
-                <input className="input" value={fromLoc?.name ?? 'Unassigned'} disabled style={{ height: 40, fontSize: 14, background: '#F1F5F9' }} />
+                {transferableLocations.length > 0 ? (
+                  <SearchableSelect
+                    className="input"
+                    placeholder="Select source…"
+                    searchPlaceholder="Search locations..."
+                    style={{ height: 40, fontSize: 14 }}
+                    value={transferFrom}
+                    onChange={(value) => setTransferFrom(value)}
+                    options={transferableLocations.map((loc) => ({ value: loc.id, label: `${loc.name} (${loc.code})` }))}
+                  />
+                ) : (
+                  <input className="input" value={fromLoc?.name ?? 'Unassigned'} disabled style={{ height: 40, fontSize: 14, background: '#F1F5F9' }} />
+                )}
               </div>
 
               <div style={{ marginBottom: 14 }}>
@@ -1334,7 +1321,7 @@ export default function InventoryPage() {
                   style={{ height: 40, fontSize: 14 }}
                   value={transferTo}
                   onChange={(value) => setTransferTo(value)}
-                  options={state.locations.filter((loc) => loc.id !== sourceLocationId).map((loc) => ({ value: loc.id, label: `${loc.name} (${loc.code})` }))}
+                  options={transferableLocations.filter((loc) => loc.id !== sourceLocationId).map((loc) => ({ value: loc.id, label: `${loc.name} (${loc.code})` }))}
                 />
               </div>
 
@@ -1365,7 +1352,7 @@ export default function InventoryPage() {
 
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
                 <button className="btn btn-ghost" onClick={closeTransfer}>Cancel</button>
-                <button className="btn btn-primary" onClick={handleTransfer} disabled={!transferTo || qty <= 0 || !hasSource}><ArrowLeftRight size={15} /> Transfer</button>
+                <button className="btn btn-primary" onClick={handleTransfer} disabled={!transferTo || qty <= 0 || !sourceLocationId || transferTo === sourceLocationId}><ArrowLeftRight size={15} /> Transfer</button>
               </div>
             </div>
           </div>
@@ -1412,6 +1399,93 @@ export default function InventoryPage() {
         </div>
       )}
 
+      {viewId && (() => {
+        const target = state.products.find((entry) => entry.id === viewId)
+        if (!target) return null
+        const locationStock = stockByLocation.get(target.id) ?? []
+        return (
+          <div className="modal-overlay">
+            <div className="modal" style={{ maxWidth: 600 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 18 }}>
+                <div>
+                  <div className="auth-badge" style={{ marginBottom: 10 }}>
+                    <Eye size={14} />
+                    Item details
+                  </div>
+                  <h2 style={{ fontSize: 18, fontWeight: 800, color: '#0F172A', letterSpacing: '-0.03em' }}>{target.name}</h2>
+                  <p style={{ color: '#64748B', fontSize: 12, marginTop: 4 }}>Read-only view of this inventory item.</p>
+                </div>
+                <button onClick={() => setViewId(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748B' }}><X size={20} /></button>
+              </div>
+
+              <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2', marginBottom: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A' }}>{target.item_code}</div>
+                <div style={{ fontSize: 12, color: '#64748B', marginTop: 3 }}>{target.description ?? 'No description'}</div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Category</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 4 }}>{target.category?.name ?? 'Uncategorized'}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Supplier</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 4 }}>{target.supplier?.name ?? 'No supplier'}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>UoM</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 4 }}>{target.uom?.abbreviation ?? 'pcs'}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Location</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 4 }}>{target.location?.name ?? 'Unassigned'}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>On Hand</div>
+                  <div style={{ fontWeight: 800, color: '#0F172A', marginTop: 4 }}>{target.quantity_on_hand}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Reorder Point</div>
+                  <div style={{ fontWeight: 800, color: '#0F172A', marginTop: 4 }}>{target.reorder_point}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Unit Cost</div>
+                  <div style={{ fontWeight: 800, color: '#0F172A', marginTop: 4 }}>{formatCurrency(Number(target.unit_cost ?? 0))}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Selling Price</div>
+                  <div style={{ fontWeight: 800, color: '#10B981', marginTop: 4 }}>{formatCurrency(Number(target.selling_price ?? 0))}</div>
+                </div>
+                {isProduction && (
+                  <div style={{ padding: '10px 12px', borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
+                    <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Type</div>
+                    <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 4 }}>{target.is_finished_good ? 'Finished Good' : 'Raw Material'}</div>
+                  </div>
+                )}
+              </div>
+
+              {locationStock.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>Stock by Location</div>
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {locationStock.map((entry) => (
+                      <div key={entry.locationId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: 10, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
+                        <span style={{ fontSize: 13, color: '#475569' }}>{entry.name}</span>
+                        <span style={{ fontWeight: 800, color: '#0F172A' }}>{entry.quantity}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 20 }}>
+                <button className="btn btn-ghost" onClick={() => setViewId(null)}>Close</button>
+                <button className="btn btn-primary" onClick={() => { setViewId(null); openEdit(target) }}>Edit Item</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
       {lotsModal && (() => {
         const target = state.products.find((entry) => entry.id === lotsModal)
         if (!target) return null

@@ -3,7 +3,49 @@
 export type SubscriptionPlan = 'starter' | 'professional' | 'enterprise'
 export type SubscriptionStatus = 'active' | 'inactive' | 'suspended' | 'trial'
 export type BusinessType = 'coffee_shop' | 'manufacturing' | 'convenience_store' | 'restaurant' | 'retail' | 'pharmacy' | 'general'
-export type UserRole = 'super_admin' | 'admin' | 'manager' | 'cashier'
+export type UserRole = 'super_admin' | 'admin' | 'manager' | 'supervisor' | 'inventory_staff' | 'sales_staff' | 'production_staff' | 'purchasing_staff'
+export type MutationAction =
+  | 'resetDemo'
+  | 'updateTenant'
+  | 'addCategory'
+  | 'addUnitOfMeasure'
+  | 'addLocation'
+  | 'updateLocation'
+  | 'deleteLocation'
+  | 'saveProduct'
+  | 'removeProduct'
+  | 'importProductRows'
+  | 'addSupplier'
+  | 'editSupplier'
+  | 'removeSupplier'
+  | 'addUser'
+  | 'editUser'
+  | 'toggleUser'
+  | 'resendInvite'
+  | 'createRecipe'
+  | 'updateRecipe'
+  | 'deleteRecipe'
+  | 'createProductionTemplate'
+  | 'deleteProductionTemplate'
+  | 'produceFinishedGood'
+  | 'createPO'
+  | 'receivePO'
+  | 'updatePurchaseOrder'
+  | 'cancelPurchaseOrder'
+  | 'completeSale'
+  | 'voidSale'
+  | 'refundSale'
+  | 'adjustPrice'
+  | 'openShift'
+  | 'closeShift'
+  | 'recordCashMovement'
+  | 'acknowledge'
+  | 'resolve'
+  | 'recordWaste'
+  | 'transferStock'
+  | 'requestDeletion'
+  | 'approveDeletion'
+  | 'rejectDeletion'
 export type OrderStatus = 'draft' | 'pending_approval' | 'approved' | 'ordered' | 'partially_received' | 'received' | 'cancelled'
 export type MovementType = 'inbound' | 'outbound' | 'adjustment' | 'return' | 'production' | 'waste' | 'defect' | 'reject'
 export type CashMovementKind = 'cash_in' | 'cash_out' | 'cash_sale' | 'refund_payout' | 'denomination_adjustment'
@@ -45,6 +87,9 @@ export interface Tenant {
   stripe_customer_id: string | null
   stripe_subscription_id: string | null
   stripe_price_id: string | null
+  pos_location_id: string | null
+  pos_store_locations: string[]
+  pos_stations: string[]
   created_at: string
   updated_at: string
 }
@@ -123,6 +168,7 @@ export interface Location {
   name: string
   zone: string | null
   is_active: boolean
+  is_waste_location: boolean
   created_at: string
 }
 
@@ -220,6 +266,7 @@ export interface PurchaseOrder {
   approved_by: string | null
   approved_at: string | null
   expected_date: string | null
+  delivery_date: string | null
   received_date: string | null
   notes: string | null
   created_at: string
@@ -265,6 +312,7 @@ export interface SalesTransaction {
   refunded_at: string | null
   refund_reason: string | null
   parent_transaction_id: string | null
+  split_payments?: Array<{ payment_method: PaymentMethod; amount: number; reference?: string | null }>
   created_at: string
   cashier?: User
   items?: SalesTransactionItem[]
@@ -350,12 +398,31 @@ export interface DashboardStats {
   transactions_today: number
 }
 
+export type DeletionRequestStatus = 'pending' | 'approved' | 'rejected'
+
+export interface DeletionRequest {
+  id: string
+  tenant_id: string
+  requested_by: string
+  action: MutationAction
+  target_type: 'product' | 'supplier' | 'recipe' | 'production_template' | 'location'
+  target_id: string
+  details: Record<string, unknown>
+  status: DeletionRequestStatus
+  reviewed_by: string | null
+  reviewed_at: string | null
+  created_at: string
+  updated_at: string
+  requested_by_user?: User
+  reviewed_by_user?: User | null
+}
+
 export interface AuditLog {
   id: string
   tenant_id: string
   user_id: string | null
   action: string
-  target_type: 'user' | 'product' | 'supplier' | 'order' | 'sale' | 'shift' | 'system'
+  target_type: 'user' | 'product' | 'supplier' | 'order' | 'sale' | 'shift' | 'system' | 'recipe' | 'production_template' | 'location'
   target_id: string | null
   details: Record<string, unknown>
   performed_by: string | null

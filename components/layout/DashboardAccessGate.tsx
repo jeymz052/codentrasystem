@@ -10,7 +10,7 @@ export function DashboardAccessGate({ children }: { children: React.ReactNode })
   const pathname = usePathname()
   const { hydrated, state, availableTenants, activeTenantId } = useDemoSystem()
   const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
-  const role = activeTenant?.role ?? 'cashier'
+  const role = activeTenant?.role ?? 'sales_staff'
 
   useEffect(() => {
     if (!hydrated) return

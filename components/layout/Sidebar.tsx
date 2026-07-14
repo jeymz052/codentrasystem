@@ -6,20 +6,21 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, Package, ShoppingCart, Truck,
   BarChart3, Settings, ArrowLeftRight,
-  CreditCard, Users, Building2, LogOut, Factory,
+  CreditCard, Users, Building2, LogOut, Factory, CheckCircle2,
 } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { canAccessDashboardPath, formatRoleLabel } from '@/lib/access-control'
 
 const NAV = [
-  { href: '/dashboard',            icon: LayoutDashboard, label: 'Dashboard',        roles: ['admin','manager','cashier'] },
-  { href: '/dashboard/inventory',  icon: Package,          label: 'Inventory',        roles: ['admin','manager','cashier'] },
-  { href: '/dashboard/pos',        icon: CreditCard,       label: 'Point of Sale',    roles: ['admin','manager','cashier'] },
-  { href: '/dashboard/production', icon: Factory,           label: 'Production',       roles: ['admin','manager'] },
-  { href: '/dashboard/movements',  icon: ArrowLeftRight,   label: 'Stock Movements',  roles: ['admin','manager'] },
-  { href: '/dashboard/orders',     icon: ShoppingCart,     label: 'Purchase Orders',  roles: ['admin','manager'] },
-  { href: '/dashboard/suppliers',  icon: Truck,            label: 'Suppliers',        roles: ['admin','manager'] },
-  { href: '/dashboard/reports',    icon: BarChart3,        label: 'Reports',          roles: ['admin','manager'] },
+  { href: '/dashboard',            icon: LayoutDashboard, label: 'Dashboard',        roles: ['admin','manager','supervisor','inventory_staff','production_staff','purchasing_staff'] },
+  { href: '/dashboard/inventory',  icon: Package,          label: 'Inventory',        roles: ['admin','manager','supervisor','inventory_staff','production_staff','purchasing_staff'] },
+  { href: '/dashboard/pos',        icon: CreditCard,       label: 'Point of Sale',    roles: ['admin','manager','supervisor','sales_staff'] },
+  { href: '/dashboard/production', icon: Factory,          label: 'Production',       roles: ['admin','manager','supervisor','production_staff'] },
+  { href: '/dashboard/movements',  icon: ArrowLeftRight,   label: 'Stock Movements',  roles: ['admin','manager','supervisor','inventory_staff','production_staff'] },
+  { href: '/dashboard/orders',     icon: ShoppingCart,     label: 'Purchase Orders',  roles: ['admin','manager','supervisor','purchasing_staff'] },
+  { href: '/dashboard/suppliers',  icon: Truck,            label: 'Suppliers',        roles: ['admin','manager','supervisor','purchasing_staff'] },
+  { href: '/dashboard/approvals',  icon: CheckCircle2,     label: 'Approvals',        roles: ['admin','manager'] },
+  { href: '/dashboard/reports',    icon: BarChart3,        label: 'Reports',          roles: ['admin','manager','supervisor'] },
   { href: '/dashboard/users',      icon: Users,            label: 'Users',            roles: ['admin'] },
   { href: '/dashboard/settings',   icon: Settings,         label: 'Settings',         roles: ['admin'] },
 ]
@@ -33,7 +34,7 @@ export function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps) {
   const path = usePathname()
   const { state, availableTenants, activeTenantId, authUserEmail, isSuperAdminIdentity, signOut } = useDemoSystem()
   const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
-  const role = activeTenant?.role ?? 'cashier'
+  const role = activeTenant?.role ?? 'sales_staff'
   const fallbackEmail = state.users.find((user) => user.id === state.currentUserId)?.email ?? state.users[0]?.email ?? null
   const displayEmail = authUserEmail ?? fallbackEmail
   const renewalLabel = state.tenant.subscription_ends_at
@@ -46,13 +47,16 @@ export function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps) {
       <div style={{ padding: '22px 18px 18px', borderBottom: '1px solid #D8E4F2' }}>
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
           <Image
-            src="/images/codentralogo-removebg-preview.png"
+            src="/images/codentra-removebg-preview.png"
             alt="Codentra"
             width={170}
             height={60}
             priority
             style={{ width: '170px', height: 'auto', objectFit: 'contain' }}
           />
+        </div>
+        <div style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', color: '#94A3B8', marginTop: 8, textTransform: 'uppercase' }}>
+          Simplicity that Scales
         </div>
       </div>
 

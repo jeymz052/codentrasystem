@@ -5,7 +5,7 @@ import { hasSuperAdminMembership, isConfiguredSuperAdminEmail } from '@/lib/tena
 import type { BusinessType, SubscriptionPlan, UserRole } from '@/types/database'
 
 const VALID_PLANS: SubscriptionPlan[] = ['starter', 'professional', 'enterprise']
-const VALID_ROLES: UserRole[] = ['admin', 'manager', 'cashier']
+const VALID_ROLES: UserRole[] = ['admin', 'manager', 'sales_staff']
 
 export async function POST(request: NextRequest) {
   const supabase = await createSupabaseServerClient()

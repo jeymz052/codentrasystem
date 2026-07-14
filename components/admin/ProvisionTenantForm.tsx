@@ -12,7 +12,7 @@ const BUSINESS_TYPES = [
 const ROLES = [
   { value: 'admin', label: 'Admin' },
   { value: 'manager', label: 'Manager' },
-  { value: 'cashier', label: 'Cashier' },
+  { value: 'sales_staff', label: 'Sales Staff' },
 ]
 
 export function ProvisionTenantForm() {

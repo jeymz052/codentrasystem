@@ -68,6 +68,9 @@ export async function POST(request: NextRequest) {
       bdo_qr_url: null,
       maribank_account: null,
       maribank_qr_url: null,
+      pos_location_id: null,
+      pos_store_locations: [],
+      pos_stations: [],
       created_at: now,
       updated_at: now,
     },
@@ -101,6 +104,7 @@ export async function POST(request: NextRequest) {
     productRecipes: [],
     productionTemplates: [],
     inventoryLots: [],
+    deletionRequests: [],
   }
 
   await upsertTenantState(seed)

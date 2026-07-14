@@ -38,7 +38,7 @@ export function ForgotPasswordForm() {
       <div className="auth-brand-block">
         <div className="auth-brand">
           <Image
-            src="/images/codentralogo-removebg-preview.png"
+            src="/images/codentra-removebg-preview.png"
             alt="Codentra logo"
             width={520}
             height={184}
@@ -46,6 +46,7 @@ export function ForgotPasswordForm() {
             className="auth-brand-logo"
           />
         </div>
+        <p className="auth-brand-tagline">Simplicity that Scales</p>
         <div className="auth-signin-copy">
           <h1 className="auth-title">Reset your password</h1>
           <p className="auth-copy">

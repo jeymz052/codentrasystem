@@ -3,7 +3,7 @@ import { applyDatabaseMutation, ensureDatabaseState, loadTenantState } from '@/l
 import { hasSuperAdminMembership, isConfiguredSuperAdminEmail, loadAccessibleTenants, getTenantMembership } from '@/lib/tenant-access'
 import { canPerformMutation } from '@/lib/access-control'
 import { copyResponseCookies, createSupabaseRouteClient } from '@/lib/supabase-server'
-import type { BusinessType } from '@/types/database'
+import type { BusinessType, UserRole } from '@/types/database'
 
 export async function GET(request: NextRequest) {
   try {
@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
 
     const membership = await getTenantMembership(user.id, tenantId)
     const superAdmin = membership?.role === 'super_admin' || isConfiguredSuperAdminEmail(user.email) || await hasSuperAdminMembership(user.id)
-    const role = (superAdmin ? 'super_admin' : membership?.role) as 'super_admin' | 'admin' | 'manager' | 'cashier' | null
+    const role = (superAdmin ? 'super_admin' : membership?.role) as UserRole | null
 
     if (!role) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })

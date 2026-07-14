@@ -96,6 +96,7 @@ type ReceiptState = {
   reference: string
   date: Date
   cashierName: string
+  splitPayments: Array<{ payment_method: PayMethod; amount: number; reference?: string | null }>
 }
 
 type PendingSale = {
@@ -119,7 +120,7 @@ const blankCheckout: PendingSale = {
 export default function POSPage() {
   const { state, availableTenants, activeTenantId, completeSale, formatCurrency, notifyError, notifySuccess, voidSale, refundSale, openShift, closeShift, recordCashMovement } = useDemoSystem()
   const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
-  const role = activeTenant?.role ?? 'cashier'
+  const role = activeTenant?.role ?? 'sales_staff'
   const perms = getRolePermissions(role)
 
   function formatClock(value: string | null | undefined): string {
@@ -160,22 +161,28 @@ export default function POSPage() {
   const [openingFloat, setOpeningFloat] = useState('')
   const [countedCash, setCountedCash] = useState('')
   const [shiftStation, setShiftStation] = useState('')
-  const [shiftLocationId, setShiftLocationId] = useState<string>(() => state.locations[0]?.id ?? '')
+  const posStoreLocations = state.tenant.pos_store_locations ?? []
+  const [shiftStoreLocationId, setShiftStoreLocationId] = useState<string>(() => posStoreLocations[0] ?? '')
   const [shiftNote, setShiftNote] = useState('')
   const [cashAmount, setCashAmount] = useState('')
   const [cashNote, setCashNote] = useState('')
   const [refundReason, setRefundReason] = useState('')
   const [voidReason, setVoidReason] = useState('')
   const [noShiftBlock, setNoShiftBlock] = useState(false)
+  const [splitPayments, setSplitPayments] = useState<Array<{ payment_method: PayMethod; amount: number; reference?: string | null }>>([])
+  const [newSplitMethod, setNewSplitMethod] = useState<PayMethod>('bank_transfer')
+  const [newSplitAmount, setNewSplitAmount] = useState('')
+  const [newSplitReference, setNewSplitReference] = useState('')
 
   const currentShift = useMemo(() => state.cashShifts.find((shift) => shift.status === 'open'), [state.cashShifts])
+  const posStoreLocationId = currentShift?.location_id ?? posStoreLocations[0] ?? ''
   const lastClosedShift = useMemo(() => {
     return [...state.cashShifts]
       .filter((shift) => shift.status === 'closed' && shift.closed_by === state.currentUserId)
       .sort((a, b) => (b.closed_at ?? '').localeCompare(a.closed_at ?? ''))[0] ?? null
   }, [state.cashShifts, state.currentUserId])
   const currentCashier = state.users.find((user) => user.id === state.currentUserId) ?? null
-  const cashierLabel = currentCashier?.full_name?.trim() || currentCashier?.email || 'Cashier'
+  const cashierLabel = currentCashier?.full_name?.trim() || currentCashier?.email || 'Sales Staff'
   const recentTx = useMemo(() => {
     return [...state.salesTransactions]
       .slice()
@@ -219,14 +226,11 @@ export default function POSPage() {
     const shiftTotal = currentShift ? state.salesTransactions.filter((tx) => tx.shift_id === currentShift.id && tx.status === 'completed').reduce((sum, tx) => sum + Number(tx.total_amount), 0) : 0
     const shiftTxCount = currentShift ? state.salesTransactions.filter((tx) => tx.shift_id === currentShift.id && tx.status === 'completed').length : 0
     return [
-      { label: 'Total SKUs', value: String(state.products.filter((product) => product.is_active).length), hint: 'Active products', icon: Package, color: '#3B82F6', tint: '#DBEAFE' },
       { label: "Today's Sales", value: formatCurrency(todaySales.reduce((sum, tx) => sum + Number(tx.total_amount), 0)), hint: `${todaySales.length} transactions`, icon: CreditCard, color: '#10B981', tint: '#D1FAE5' },
       { label: currentShift ? `Shift Sales (${currentShift.shift_code})` : 'Shift Sales', value: formatCurrency(shiftTotal), hint: `${shiftTxCount} transactions`, icon: Banknote, color: '#F59E0B', tint: '#FEF3C7' },
       { label: 'Starting Cash', value: currentShift ? formatCurrency(Number(currentShift.opening_float)) : '—', hint: currentShift ? `Float for ${currentShift.shift_code}` : 'Open a shift', icon: Wallet, color: '#B45309', tint: '#FEF3C7' },
-      { label: 'Pending Orders', value: String(openOrders), hint: 'Purchase orders', icon: ShoppingCart, color: '#8B5CF6', tint: '#EDE9FE' },
-      { label: 'Stock Movements', value: String(state.stockMovements.length), hint: 'Audit trail', icon: ReceiptText, color: '#EF4444', tint: '#FEE2E2' },
     ]
-  }, [formatCurrency, state.products, state.purchaseOrders, state.salesTransactions, state.stockMovements, currentShift])
+  }, [formatCurrency, state.purchaseOrders, state.salesTransactions, currentShift])
 
   function addToCart(productId: string) {
     const product = state.products.find((entry) => entry.id === productId)
@@ -276,19 +280,43 @@ export default function POSPage() {
     }
   }
 
+  const [qtyInputs, setQtyInputs] = useState<Record<string, string>>({})
+
   function updateQty(productId: string, delta: number) {
     setCart((current) =>
       current
         .map((item) => (item.productId === productId ? { ...item, quantity: Math.max(1, item.quantity + delta) } : item))
         .filter(Boolean)
     )
+    setQtyInputs((current) => {
+      const next = { ...current }
+      delete next[productId]
+      return next
+    })
   }
 
   function setQty(productId: string, value: string) {
-    const parsed = Math.floor(Number(value))
+    setQtyInputs((current) => ({ ...current, [productId]: value }))
+    const trimmed = value.trim()
+    if (trimmed === '') return
+    const parsed = Math.floor(Number(trimmed))
     setCart((current) =>
       current.map((item) => (item.productId === productId ? { ...item, quantity: Number.isFinite(parsed) && parsed > 0 ? parsed : 1 } : item))
     )
+  }
+
+  function commitQty(productId: string) {
+    const inputValue = qtyInputs[productId]
+    if (inputValue === undefined || inputValue.trim() === '') {
+      setCart((current) =>
+        current.map((item) => (item.productId === productId ? { ...item, quantity: 1 } : item))
+      )
+      setQtyInputs((current) => {
+        const next = { ...current }
+        delete next[productId]
+        return next
+      })
+    }
   }
 
   function removeItem(productId: string) {
@@ -359,7 +387,7 @@ export default function POSPage() {
           const sale = pendingSale
           if (!sale) return
 
-          const cashierName = state.users.find((user) => user.id === state.currentUserId)?.full_name ?? 'Cashier'
+          const cashierName = state.users.find((user) => user.id === state.currentUserId)?.full_name ?? 'Sales Staff'
           setLastReceipt({
             receiptNo: data.receiptNumber ?? qrSession.intentId,
             items: sale.items,
@@ -373,6 +401,7 @@ export default function POSPage() {
             reference: '',
             date: new Date(),
             cashierName,
+            splitPayments: [],
           })
           setShowQrModal(false)
           setQrSession(null)
@@ -424,7 +453,7 @@ export default function POSPage() {
     setQrError(null)
 
     const saleSubtotal = grandTotal
-    const locationId = state.locations[0]?.id ?? null
+    const locationId = posStoreLocationId || null
     const receiptHint = `POS-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')}`
     const saleItems = cart.map((item) => {
       const lineNet = item.sellingPrice * item.quantity - item.discount
@@ -500,7 +529,7 @@ export default function POSPage() {
       return
     }
 
-    const cashierName = state.users.find((user) => user.id === state.currentUserId)?.full_name ?? 'Cashier'
+    const cashierName = state.users.find((user) => user.id === state.currentUserId)?.full_name ?? 'Sales Staff'
     const saleItems = cart.map((item) => {
       const lineNet = item.sellingPrice * item.quantity - item.discount
       const share = subtotal > 0 ? lineNet / subtotal : 0
@@ -513,14 +542,24 @@ export default function POSPage() {
       }
     })
 
+    const splits = splitPayments.map((split) => ({ payment_method: split.payment_method, amount: split.amount, reference: split.reference ?? null }))
+    const cashSplitTotal = splits.filter((split) => split.payment_method === 'cash').reduce((sum, split) => sum + split.amount, 0)
+    const nonCashSplitTotal = splits.filter((split) => split.payment_method !== 'cash').reduce((sum, split) => sum + split.amount, 0)
+    const usingSplits = splits.length > 0
+    const tenderedForReceipt = usingSplits ? cashSplitTotal : cashEntered
+    const changeForReceipt = usingSplits
+      ? Math.max(0, cashSplitTotal - Math.max(0, grandTotal - nonCashSplitTotal))
+      : (payMethod === 'cash' ? Math.max(cashEntered - grandTotal, 0) : 0)
+
     const result = completeSale({
       payment_method: payMethod,
       payment_provider: 'manual',
       payment_reference: reference.trim() || null,
-      amount_tendered: cashEntered,
-      location_id: currentShift?.location_id ?? state.locations[0]?.id ?? null,
+      amount_tendered: tenderedForReceipt,
+      location_id: posStoreLocationId || null,
       notes: `Sold at ${state.tenant.name}`,
       items: saleItems,
+      split_payments: splits,
     })
 
     setLastReceipt({
@@ -531,16 +570,18 @@ export default function POSPage() {
       discountLabel,
       totalAmount: grandTotal,
       payMethod,
-      tendered: cashEntered,
-      change: payMethod === 'cash' ? Math.max(cashEntered - grandTotal, 0) : 0,
+      tendered: tenderedForReceipt,
+      change: changeForReceipt,
       reference: reference.trim(),
       date: new Date(),
       cashierName,
+      splitPayments: splits,
     })
     setShowReceipt(true)
     setCart([])
     setOrderDiscountType('none')
     setManualDiscountPercent(0)
+    setSplitPayments([])
     setTendered('')
     setReference('')
   }
@@ -564,14 +605,13 @@ export default function POSPage() {
     }
     openShift({
       openingFloat: Number(openingFloat),
-      locationId: shiftLocationId || (state.locations[0]?.id ?? null),
+      locationId: shiftStoreLocationId || posStoreLocations[0] || null,
       notes: shiftNote || undefined,
-      station: shiftStation || undefined,
+      station: shiftStation || state.tenant.pos_stations?.[0] || undefined,
     })
     setShowShiftModal(false)
     setOpeningFloat('')
     setShiftStation('')
-    setShiftLocationId(state.locations[0]?.id ?? '')
     setShiftNote('')
     notifySuccess('Shift opened')
   }
@@ -647,7 +687,13 @@ export default function POSPage() {
     }
   }
 
-  const canCheckout = cart.length > 0 && !qrBusy && currentShift && (payMethod !== 'cash' || cashEntered >= grandTotal)
+  const totalSplitAmount = splitPayments.reduce((sum, split) => sum + split.amount, 0)
+  const remainingBalance = grandTotal - totalSplitAmount
+  const canCheckout = cart.length > 0 && !qrBusy && currentShift && (() => {
+    if (payMethod === 'qr_ph') return true
+    if (totalSplitAmount > 0) return totalSplitAmount >= grandTotal - 0.01
+    return payMethod !== 'cash' || cashEntered >= grandTotal
+  })()
   const receiptDateText = useMemo(
     () =>
       lastReceipt
@@ -1026,9 +1072,9 @@ export default function POSPage() {
                         <input
                           type="number"
                           min={1}
-                          value={item.quantity}
+                          value={qtyInputs[item.productId] ?? item.quantity}
                           onChange={(event) => setQty(item.productId, event.target.value)}
-                          onBlur={(event) => setQty(item.productId, event.target.value)}
+                          onBlur={() => commitQty(item.productId)}
                           style={{ width: 44, textAlign: 'center', fontSize: 14, fontWeight: 800, color: '#0F172A', background: '#FFFFFF', border: '1px solid #D8E4F2', borderRadius: 8, padding: '4px 2px', outline: 'none' }}
                         />
                         <button onClick={() => updateQty(item.productId, 1)} style={{ width: 28, height: 28, borderRadius: 8, background: '#F8FBFF', border: '1px solid #D8E4F2', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#475569' }}>
@@ -1184,7 +1230,88 @@ export default function POSPage() {
                 ))}
               </div>
 
-              {payMethod === 'cash' && (
+              <div style={{ fontSize: 11, color: '#64748B', fontWeight: 600, margin: '2px 0 8px' }}>
+                Split payment
+              </div>
+              {splitPayments.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+                  {splitPayments.map((split, index) => (
+                    <div key={index} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 10, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A' }}>{paymentLabel(split.payment_method)}</div>
+                        <div style={{ fontSize: 11, color: '#64748B' }}>{split.reference ? `Ref: ${split.reference}` : 'No reference'}</div>
+                      </div>
+                      <div style={{ fontSize: 14, fontWeight: 900, color: '#10B981' }}>{formatCurrency(split.amount)}</div>
+                      <button type="button" onClick={() => setSplitPayments((current) => current.filter((_, i) => i !== index))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: 2 }}>
+                        <X size={13} />
+                      </button>
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#475569' }}>
+                    <span>Split total</span>
+                    <span style={{ fontWeight: 800 }}>{formatCurrency(splitPayments.reduce((sum, split) => sum + split.amount, 0))}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginTop: 2 }}>
+                    <span style={{ color: remainingBalance > 0 ? '#B91C1C' : '#16A34A', fontWeight: 700 }}>
+                      {remainingBalance > 0 ? 'Remaining' : remainingBalance < 0 ? 'Change' : 'Paid in full'}
+                    </span>
+                    <span style={{ fontWeight: 800, color: remainingBalance > 0 ? '#B91C1C' : '#16A34A' }}>
+                      {formatCurrency(Math.abs(remainingBalance))}
+                    </span>
+                  </div>
+                </div>
+              )}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8, marginBottom: 12, alignItems: 'end' }}>
+                <label className="auth-field" style={{ marginBottom: 0 }}>
+                  <span>Method</span>
+                  <select
+                    className="input"
+                    value={newSplitMethod}
+                    onChange={(event) => setNewSplitMethod(event.target.value as PayMethod)}
+                    style={{ height: 38, borderRadius: 10 }}
+                  >
+                    {([
+                      ['cash', 'Cash'],
+                      ['bank_transfer', 'Bank Transfer'],
+                      ['gcash', 'GCash'],
+                      ['maya', 'Maya'],
+                      ['bdo', 'BDO'],
+                      ['maribank', 'Maribank'],
+                      ['card', 'Card'],
+                      ['other', 'Other'],
+                    ] as const).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="auth-field" style={{ marginBottom: 0 }}>
+                  <span>Amount</span>
+                  <input
+                    className="input"
+                    type="number"
+                    placeholder="0.00"
+                    value={newSplitAmount}
+                    onChange={(event) => setNewSplitAmount(event.target.value)}
+                    style={{ height: 38, borderRadius: 10 }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => {
+                    const amount = Number(newSplitAmount)
+                    if (!amount || amount <= 0) return
+                    setSplitPayments((current) => [...current, { payment_method: newSplitMethod, amount, reference: null }])
+                    setNewSplitAmount('')
+                    setNewSplitReference('')
+                  }}
+                  style={{ height: 38, borderRadius: 10, padding: '0 12px', fontSize: 12 }}
+                >
+                  Add
+                </button>
+              </div>
+
+              {payMethod === 'cash' && splitPayments.length === 0 && (
                 <div style={{ marginBottom: 12 }}>
                   <label style={{ fontSize: 11, color: '#475569', display: 'block', marginBottom: 5 }}>Amount Tendered</label>
                   <input className="input" type="number" placeholder="0.00" value={tendered} onChange={(event) => setTendered(event.target.value)} style={{ height: 42, fontSize: 16, fontWeight: 700, borderRadius: 12 }} />
@@ -1322,7 +1449,7 @@ export default function POSPage() {
                   <p style={{ fontSize: 12 }}>No transactions yet</p>
                 </div>
               ) : recentTx.map((tx) => {
-                const cashier = tx.cashier?.full_name ?? 'Cashier'
+                const cashier = tx.cashier?.full_name ?? 'Sales Staff'
                 const total = Number(tx.total_amount ?? 0)
                 const paidVia = paymentLabel(tx.payment_method)
                 const count = tx.items?.length ?? 0
@@ -1344,6 +1471,17 @@ export default function POSPage() {
                         quantity: Number(item.quantity ?? 0),
                         discount: Number(item.discount ?? 0),
                       }))
+                      const txSplits = (tx.split_payments ?? []).map((split) => ({
+                        payment_method: split.payment_method,
+                        amount: Number(split.amount ?? 0),
+                        reference: split.reference ?? null,
+                      }))
+                      const cashSplitTotal = txSplits.filter((split) => split.payment_method === 'cash').reduce((sum, split) => sum + split.amount, 0)
+                      const nonCashSplitTotal = txSplits.reduce((sum, split) => sum + split.amount, 0) - cashSplitTotal
+                      const tenderedValue = txSplits.length > 0 ? cashSplitTotal : Number(tx.amount_tendered ?? total)
+                      const changeValue = txSplits.length > 0
+                        ? Math.max(0, cashSplitTotal - Math.max(0, total - nonCashSplitTotal))
+                        : Number(tx.change_amount ?? 0)
                       setLastReceipt({
                         receiptNo: tx.receipt_number,
                         items: txItems,
@@ -1352,11 +1490,12 @@ export default function POSPage() {
                         discountLabel: null,
                         totalAmount: total,
                         payMethod: tx.payment_method,
-                        tendered: Number(tx.amount_tendered ?? total),
-                        change: Number(tx.change_amount ?? 0),
+                        tendered: tenderedValue,
+                        change: changeValue,
                         reference: tx.payment_reference ?? '',
                         date: new Date(tx.created_at),
                         cashierName: cashier,
+                        splitPayments: txSplits,
                       })
                       setShowReceipt(true)
                     }}
@@ -1426,14 +1565,15 @@ export default function POSPage() {
             <div className="pos-receipt-paper">
               <div className="pos-receipt-header">
                 <img
-                  src="/images/codentralogo-removebg-preview.png"
+                  src="/images/codentra-removebg-preview.png"
                   alt="Codentra"
                   className="pos-receipt-logo"
                 />
                 <div className="pos-receipt-subtitle">{state.tenant.name}</div>
+                <div className="pos-receipt-tagline">Simplicity that Scales</div>
                 <div className="pos-receipt-meta">Receipt #{lastReceipt.receiptNo}</div>
                 <div className="pos-receipt-meta">{receiptDateText}</div>
-                <div className="pos-receipt-meta">Cashier: {lastReceipt.cashierName}</div>
+                <div className="pos-receipt-meta">Sales Staff: {lastReceipt.cashierName}</div>
               </div>
 
               <div className="pos-receipt-divider" />
@@ -1457,11 +1597,20 @@ export default function POSPage() {
                 {lastReceipt.discount > 0 && (
                   <div><span>{lastReceipt.discountLabel ?? 'Discount'}</span><strong>-{formatCurrency(lastReceipt.discount)}</strong></div>
                 )}
-                <div><span>Payment</span><strong>{paymentLabel(lastReceipt.payMethod)}</strong></div>
+                {lastReceipt.splitPayments?.length ? (
+                  lastReceipt.splitPayments.map((split) => (
+                    <div key={split.payment_method}>
+                      <span>{paymentLabel(split.payment_method)}</span>
+                      <strong>{formatCurrency(split.amount)}</strong>
+                    </div>
+                  ))
+                ) : (
+                  <div><span>Payment</span><strong>{paymentLabel(lastReceipt.payMethod)}</strong></div>
+                )}
                 {lastReceipt.reference ? (
                   <div><span>Reference</span><strong>{lastReceipt.reference}</strong></div>
                 ) : null}
-                {lastReceipt.payMethod === 'cash' && (
+                {(lastReceipt.payMethod === 'cash' || lastReceipt.splitPayments?.some((split) => split.payment_method === 'cash')) && (
                   <>
                     <div><span>Tendered</span><strong>{formatCurrency(lastReceipt.tendered)}</strong></div>
                     <div><span>Change</span><strong>{formatCurrency(lastReceipt.change)}</strong></div>
@@ -1590,35 +1739,48 @@ export default function POSPage() {
               )}
               {shiftAction === 'open' && (
                 <div style={{ marginBottom: 12 }}>
-                  <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>Store / Location</label>
-                  <select
-                    className="input"
-                    value={shiftLocationId}
-                    onChange={(event) => setShiftLocationId(event.target.value)}
-                    style={{ height: 42, borderRadius: 12, marginBottom: 4 }}
-                  >
-                    {state.locations.length === 0 ? (
-                      <option value="">No locations configured</option>
-                    ) : (
-                      state.locations.map((location) => (
-                        <option key={location.id} value={location.id}>{location.name} ({location.code})</option>
-                      ))
-                    )}
-                  </select>
-                  <div style={{ fontSize: 11, color: '#94A3B8' }}>Sales during this shift are tagged to this location.</div>
+                  <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>Store Location</label>
+                  {posStoreLocations.length > 0 ? (
+                    <select
+                      className="input"
+                      value={shiftStoreLocationId}
+                      onChange={(event) => setShiftStoreLocationId(event.target.value)}
+                      style={{ height: 42, borderRadius: 12, marginBottom: 4 }}
+                    >
+                      <option value="">-- Select store location --</option>
+                      {posStoreLocations.map((storeLocation) => (
+                        <option key={storeLocation} value={storeLocation}>{storeLocation}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FAFC', border: '1px solid #E2E8F0', fontSize: 12, color: '#64748B' }}>
+                      Optional — no store locations configured in Settings. The shift can still open without one.
+                    </div>
+                  )}
+                  <div style={{ fontSize: 11, color: '#94A3B8' }}>Only locations configured in Settings are shown here.</div>
                 </div>
               )}
               {shiftAction === 'open' && (
                 <div style={{ marginBottom: 12 }}>
-                  <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>Station / Bay (optional)</label>
-                  <input
-                    className="input"
-                    placeholder="e.g. Bay 1, Register A"
-                    value={shiftStation}
-                    onChange={(event) => setShiftStation(event.target.value)}
-                    style={{ height: 42, borderRadius: 12, marginBottom: 4 }}
-                  />
-                  <div style={{ fontSize: 11, color: '#94A3B8' }}>Identifies which register this cashier is working from.</div>
+                  <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>Station / Bay</label>
+                  {state.tenant.pos_stations?.length ? (
+                    <select
+                      className="input"
+                      value={shiftStation}
+                      onChange={(event) => setShiftStation(event.target.value)}
+                      style={{ height: 42, borderRadius: 12, marginBottom: 4 }}
+                    >
+                      <option value="">-- Select station --</option>
+                      {state.tenant.pos_stations.map((station) => (
+                        <option key={station} value={station}>{station}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FAFC', border: '1px solid #E2E8F0', fontSize: 12, color: '#64748B' }}>
+                      Optional — no stations defined in Settings. You can add them later.
+                    </div>
+                  )}
+                  <div style={{ fontSize: 11, color: '#94A3B8' }}>Select the register this cashier is working from (defined in Settings). Optional.</div>
                 </div>
               )}
               <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>Notes (optional)</label>

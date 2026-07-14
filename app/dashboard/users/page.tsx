@@ -15,7 +15,7 @@ import { SearchableSelect } from '@/components/ui/SearchableSelect'
 const EMPTY = {
   full_name: '',
   email: '',
-  role: 'cashier' as UserRole,
+  role: 'sales_staff' as UserRole,
 }
 
 export default function UsersPage() {
@@ -35,7 +35,11 @@ export default function UsersPage() {
           { value: 'all', label: 'All roles' },
           { value: 'admin', label: 'Tenant Admin' },
           { value: 'manager', label: 'Manager' },
-          { value: 'cashier', label: 'Cashier' },
+          { value: 'supervisor', label: 'Supervisor' },
+          { value: 'inventory_staff', label: 'Inventory Staff' },
+          { value: 'sales_staff', label: 'Sales Staff' },
+          { value: 'production_staff', label: 'Production Staff' },
+          { value: 'purchasing_staff', label: 'Purchasing Staff' },
         ],
         getValue: (user) => user.role,
       },
@@ -97,7 +101,11 @@ export default function UsersPage() {
               { value: 'all', label: 'All roles' },
               { value: 'admin', label: 'Tenant Admin' },
               { value: 'manager', label: 'Manager' },
-              { value: 'cashier', label: 'Cashier' },
+              { value: 'supervisor', label: 'Supervisor' },
+              { value: 'inventory_staff', label: 'Inventory Staff' },
+              { value: 'sales_staff', label: 'Sales Staff' },
+              { value: 'production_staff', label: 'Production Staff' },
+              { value: 'purchasing_staff', label: 'Purchasing Staff' },
             ],
           },
         ]}
@@ -235,11 +243,15 @@ export default function UsersPage() {
                   searchPlaceholder="Search roles..."
                   value={form.role}
                   onChange={(value) => setForm((current) => ({ ...current, role: value as UserRole }))}
-                  options={[
-                    { value: 'admin', label: 'Tenant Admin' },
-                    { value: 'manager', label: 'Manager' },
-                    { value: 'cashier', label: 'Cashier' },
-                  ]}
+                   options={[
+                     { value: 'admin', label: 'Tenant Admin' },
+                     { value: 'manager', label: 'Manager' },
+                     { value: 'supervisor', label: 'Supervisor' },
+                     { value: 'inventory_staff', label: 'Inventory Staff' },
+                     { value: 'sales_staff', label: 'Sales Staff' },
+                     { value: 'production_staff', label: 'Production Staff' },
+                     { value: 'purchasing_staff', label: 'Purchasing Staff' },
+                   ]}
                 />
               </label>
             </div>
@@ -258,7 +270,11 @@ export default function UsersPage() {
         {[
           { label: 'Tenant Admins', value: state.users.filter((user) => user.role === 'admin').length, color: '#3B82F6' },
           { label: 'Managers', value: state.users.filter((user) => user.role === 'manager').length, color: '#8B5CF6' },
-          { label: 'Cashiers', value: state.users.filter((user) => user.role === 'cashier').length, color: '#10B981' },
+          { label: 'Supervisors', value: state.users.filter((user) => user.role === 'supervisor').length, color: '#0EA5E9' },
+          { label: 'Inventory Staff', value: state.users.filter((user) => user.role === 'inventory_staff').length, color: '#10B981' },
+          { label: 'Sales Staff', value: state.users.filter((user) => user.role === 'sales_staff').length, color: '#F59E0B' },
+          { label: 'Production Staff', value: state.users.filter((user) => user.role === 'production_staff').length, color: '#EF4444' },
+          { label: 'Purchasing Staff', value: state.users.filter((user) => user.role === 'purchasing_staff').length, color: '#6366F1' },
         ].map((stat) => (
           <div key={stat.label} className="card" style={{ padding: '14px 16px' }}>
             <div style={{ fontSize: 12, color: '#64748B' }}>{stat.label}</div>

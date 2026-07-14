@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Bookmark, Copy, Factory, Layers, Package, Plus, Save, Trash2, X, Zap } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
-import { canPerformMutation } from '@/lib/access-control'
+import { canPerformMutation, getRolePermissions } from '@/lib/access-control'
 import type { Product, ProductRecipe, UnitOfMeasure } from '@/types/database'
 import { useTableState } from '@/lib/use-table-state'
 import { TableToolbar, type ToolbarFilter } from '@/components/ui/table/TableToolbar'
@@ -12,8 +12,10 @@ import { Pagination } from '@/components/ui/table/Pagination'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
 
 export default function ProductionPage() {
-  const { state, availableTenants, activeTenantId, createRecipe, updateRecipe, deleteRecipe, produceFinishedGood, createProductionTemplate, deleteProductionTemplate, notifySuccess, notifyError, formatCurrency } = useDemoSystem()
-  const role = availableTenants.find((t) => t.id === (activeTenantId || state.tenant.id))?.role ?? 'admin'
+  const { state, availableTenants, activeTenantId, createRecipe, updateRecipe, deleteRecipe, produceFinishedGood, createProductionTemplate, deleteProductionTemplate, requestDeletion, notifySuccess, notifyError, formatCurrency } = useDemoSystem()
+  const activeTenant = availableTenants.find((t) => t.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
+  const role = activeTenant?.role ?? 'admin'
+  const perms = getRolePermissions(role)
   const canEdit = canPerformMutation(role, 'createRecipe')
   const canProduce = canPerformMutation(role, 'produceFinishedGood')
 
@@ -177,6 +179,13 @@ export default function ProductionPage() {
   }
 
   function handleDeleteRecipe(recipeId: string) {
+    if (!perms.canDeleteRecords) {
+      const recipe = state.productRecipes.find((r) => r.id === recipeId)
+      requestDeletion('deleteRecipe', 'recipe', recipeId, { finished_good_id: recipe?.finished_good_id, ingredient_id: recipe?.ingredient_id })
+      notifySuccess('Deletion request sent to manager for approval.')
+      if (editingRecipe?.id === recipeId) resetRecipeForm()
+      return
+    }
     deleteRecipe(recipeId)
     notifySuccess('Ingredient removed from recipe.')
     if (editingRecipe?.id === recipeId) resetRecipeForm()
@@ -341,7 +350,13 @@ export default function ProductionPage() {
                     <button className="btn btn-ghost btn-sm" onClick={() => duplicateTemplate(template.id)} aria-label="Duplicate template" title="Duplicate">
                       <Copy size={13} />
                     </button>
-                    <button className="btn btn-ghost btn-sm" onClick={() => deleteProductionTemplate(template.id)} aria-label="Delete template" title="Delete">
+                    <button className="btn btn-ghost btn-sm" onClick={() => {
+                      if (!perms.canDeleteRecords) {
+                        requestDeletion('deleteProductionTemplate', 'production_template', template.id, { name: template.name })
+                        return
+                      }
+                      deleteProductionTemplate(template.id)
+                    }} aria-label="Delete template" title="Delete">
                       <Trash2 size={13} />
                     </button>
                   </div>

@@ -30,9 +30,11 @@ import {
   recordSale,
   recordWaste,
   reverseWaste,
-  editWaste,
+  setWasteTypes,
+  ensureWasteLocation,
   remapStateTenantId,
   resolveAlert,
+  toggleProductActive,
   seedDemoSystem,
   toggleUserActive,
   updatePurchaseOrder,
@@ -49,6 +51,9 @@ import {
   deleteProductionTemplate,
   produceFinishedGood,
   createTransfer,
+  requestDeletion,
+  approveDeletion,
+  rejectDeletion,
   type DemoSystemState,
   type CategoryDraft,
   type LocationDraft,
@@ -97,6 +102,7 @@ type DemoSystemContextValue = {
   addUser: (draft: UserDraft) => void
   editUser: (userId: string, draft: { full_name: string; email: string; role: UserRole }) => void
   toggleUser: (userId: string) => void
+  toggleProduct: (productId: string) => void
   resendInvite: (draft: UserDraft) => void
   createRecipe: (finishedGoodId: string, ingredientId: string, quantityPerUnit: number, uomId?: string | null) => void
   updateRecipe: (recipeId: string, quantityPerUnit: number, uomId?: string | null) => void
@@ -108,7 +114,7 @@ type DemoSystemContextValue = {
   receivePO: (purchaseOrderId: string) => void
   updatePO: (purchaseOrderId: string, draft: PurchaseOrderDraft) => void
   cancelPO: (purchaseOrderId: string) => void
-  completeSale: (payload: { payment_method: PaymentMethod; payment_provider?: string; payment_reference?: string | null; amount_tendered: number; location_id: string | null; notes?: string; items: SaleDraftItem[] }) => { receiptNumber: string; transactionId: string }
+  completeSale: (payload: { payment_method: PaymentMethod; payment_provider?: string; payment_reference?: string | null; amount_tendered: number; location_id: string | null; notes?: string; items: SaleDraftItem[]; split_payments?: Array<{ payment_method: PaymentMethod; amount: number; reference?: string | null }> }) => { receiptNumber: string; transactionId: string }
   voidSale: (transactionId: string, reason?: string) => void
   refundSale: (transactionId: string, reason?: string) => void
   openShift: (payload: { openingFloat: number; locationId?: string | null; notes?: string; station?: string | null }) => void
@@ -118,8 +124,11 @@ type DemoSystemContextValue = {
   resolve: (alertId: string) => void
   recordWaste: (productId: string, wasteType: 'waste' | 'defect' | 'reject', quantity: number, reason?: string) => void
   reverseWaste: (movementId: string) => void
-  editWaste: (movementId: string, draft: { wasteType: 'waste' | 'defect' | 'reject'; quantity: number; reason?: string }) => void
+  setWasteTypes: (productId: string, draft: { waste: number; defect: number; reject: number }) => void
   transferStock: (payload: { productId: string; fromLocationId: string | null; toLocationId: string | null; quantity: number; notes?: string }) => void
+  requestDeletion: (requestedAction: string, targetType: string, targetId: string, details: Record<string, unknown>) => void
+  approveDeletion: (requestId: string) => void
+  rejectDeletion: (requestId: string) => void
   switchTenant: (tenantId: string) => Promise<void>
   signOut: () => Promise<void>
   formatCurrency: (amount: number) => string
@@ -146,20 +155,34 @@ function mergeArray<T extends { id: string }>(localItems: T[], remoteItems: T[])
 // Products are reconciled by item_code (the real business key), not just id.
 // A client optimistic product and its server-persisted twin can carry different
 // random ids (e.g. imported items), which would otherwise both survive a plain
-// id merge and show up as duplicates / "come back" after a delete. Here the
-// server record wins for a shared item_code, and any client-only duplicate is
-// dropped — so deleting by item_code on the server leaves the list empty.
-type ProductLike = { id: string; item_code?: string | null }
+// id merge and show up as duplicates / "come back" after a delete. So for a
+// shared item_code we keep a single record, preferring the server's metadata.
+// However, the server echo can be a stale snapshot (e.g. a PO was received
+// client-side but the persisted state hadn't caught up), and because inventory
+// lots are merged local-wins, blindly taking the server's quantity_on_hand would
+// reset on-hand back to 0 right after the user received stock. We therefore keep
+// the server record as the base but always preserve the locally-optimistic stock
+// counters so the product total stays in sync with its FIFO lots.
+type ProductLike = { id: string; item_code?: string | null; quantity_on_hand?: number; quantity_reserved?: number }
 function mergeProducts<T extends ProductLike>(localItems: T[], remoteItems: T[]): T[] {
   const keyFor = (item: ProductLike) => {
     const code = String(item.item_code ?? '').trim().toLowerCase()
     return code ? `code:${code}` : `id:${item.id}`
   }
+  const remoteByKey = new Map<string, T>()
+  for (const item of remoteItems) remoteByKey.set(keyFor(item), item)
   const result = new Map<string, T>()
+  // Server metadata wins for de-duplication / shared item_code.
   for (const item of remoteItems) result.set(keyFor(item), item)
+  // Re-apply locally-optimistic stock counters and keep any client-only product.
   for (const item of localItems) {
     const key = keyFor(item)
-    if (!result.has(key)) result.set(key, item)
+    const remote = remoteByKey.get(key)
+    if (!remote) {
+      if (!result.has(key)) result.set(key, item)
+    } else {
+      result.set(key, { ...remote, quantity_on_hand: item.quantity_on_hand, quantity_reserved: item.quantity_reserved } as T)
+    }
   }
   return Array.from(result.values())
 }
@@ -176,6 +199,32 @@ function mergeUsers<T extends { id: string; email: string }>(localItems: T[], re
     (item) => !remoteIds.has(item.id) && !remoteEmails.has(item.email.trim().toLowerCase())
   )
   return [...remoteItems, ...localOnly]
+}
+
+// Alerts need de-duplication by product: an optimistic client alert and its
+// server-persisted twin for the same low-stock product can carry different ids
+// (they used to be generated with a random id on each run), so a plain id merge
+// would keep both and show a duplicate notification. Remote is authoritative, so
+// prefer remote rows, keep any local-only rows by id, then collapse duplicate
+// OPEN alerts for the same product into a single row.
+type AlertLike = { id: string; product_id?: string | null; status?: string | null }
+function mergeAlerts<T extends AlertLike>(localItems: T[], remoteItems: T[]): T[] {
+  const byId = new Map<string, T>()
+  for (const item of remoteItems) byId.set(item.id, item)
+  for (const item of localItems) {
+    if (!byId.has(item.id)) byId.set(item.id, item)
+  }
+
+  const seenOpenProduct = new Set<string>()
+  const result: T[] = []
+  for (const item of byId.values()) {
+    if (item.status === 'open' && item.product_id) {
+      if (seenOpenProduct.has(item.product_id)) continue
+      seenOpenProduct.add(item.product_id)
+    }
+    result.push(item)
+  }
+  return result
 }
 
 type FeedbackItem = {
@@ -253,7 +302,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         const hasMutated = requestIdRef.current > 0
         if (!hasMutated) {
           setState((prev) => ({
-            ...remote.state,
+            ...ensureWasteLocation(remote.state),
             currentUserId: resolveCurrentUserId(remote.state),
           }))
           window.localStorage.setItem(STORAGE_KEY, JSON.stringify(remote.state))
@@ -264,7 +313,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       } catch {
         if (!mounted) return
         const cached = loadCachedState()
-        setState(cached)
+        setState(ensureWasteLocation(cached))
         setAvailableTenants([{
           id: cached.tenant.id,
           name: cached.tenant.name,
@@ -340,13 +389,14 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       salesTransactions: mergeArray(local.salesTransactions, remote.salesTransactions),
       salesTransactionItems: mergeArray(local.salesTransactionItems, remote.salesTransactionItems),
       stockMovements: mergeArray(local.stockMovements, remote.stockMovements ?? []),
-      alerts: mergeArray(local.alerts, remote.alerts),
+      alerts: mergeAlerts(local.alerts, remote.alerts),
       auditLogs: mergeArray(local.auditLogs, remote.auditLogs),
       productRecipes: mergeArray(local.productRecipes, remote.productRecipes),
       productionTemplates: mergeArray(local.productionTemplates, remote.productionTemplates),
       cashShifts: mergeArray(local.cashShifts, remote.cashShifts),
       cashMovements: mergeArray(local.cashMovements, remote.cashMovements),
       inventoryLots: mergeArray(local.inventoryLots, remote.inventoryLots ?? []),
+      deletionRequests: mergeArray(local.deletionRequests, remote.deletionRequests ?? []),
     }
   }
 
@@ -477,6 +527,11 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     (current) => toggleUserActive(current, userId),
     { action: 'toggleUser', userId }
   ),
+  toggleProduct: (productId) => sync(
+    (current) => toggleProductActive(current, productId),
+    { action: 'toggleProduct', productId },
+    { successMessage: 'Item updated.', errorLabel: 'Could not update item' }
+  ),
   resendInvite: (draft) => sync(
     (current) => markInviteResent(current, draft.email),
     { action: 'resendInvite', draft },
@@ -589,14 +644,29 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       { action: 'reverseWaste', movementId },
       { successMessage: 'Waste entry reversed — stock restored.', errorLabel: 'Could not reverse waste' }
     ),
-    editWaste: (movementId, draft) => sync(
-      (current) => editWaste(current, movementId, draft),
-      { action: 'editWaste', movementId, ...draft },
-      { successMessage: 'Waste entry updated.', errorLabel: 'Could not update waste' }
+    setWasteTypes: (productId, draft) => sync(
+      (current) => setWasteTypes(current, productId, draft),
+      { action: 'setWasteTypes', productId, ...draft },
+      { successMessage: 'Waste / defect / reject updated.', errorLabel: 'Could not update waste' }
     ),
     transferStock: (payload) => sync(
       (current) => createTransfer(current, payload),
       { action: 'transferStock', payload }
+    ),
+    requestDeletion: (requestedAction, targetType, targetId, details) => sync(
+      (current) => requestDeletion(current, requestedAction, targetType, targetId, details),
+      { action: 'requestDeletion', requestedAction, targetType, targetId, details },
+      { successMessage: 'Deletion request sent to manager for approval.', errorLabel: 'Could not request deletion' }
+    ),
+    approveDeletion: (requestId) => sync(
+      (current) => approveDeletion(current, requestId),
+      { action: 'approveDeletion', requestId },
+      { successMessage: 'Deletion approved and record removed.', errorLabel: 'Could not approve deletion' }
+    ),
+    rejectDeletion: (requestId) => sync(
+      (current) => rejectDeletion(current, requestId),
+      { action: 'rejectDeletion', requestId },
+      { successMessage: 'Deletion request rejected.', errorLabel: 'Could not reject deletion' }
     ),
     switchTenant: async (tenantId: string) => {
       const response = await fetch('/api/session/tenant', {
@@ -609,7 +679,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       }
 
       const remote = await fetchRemoteState(tenantId)
-      setState(remote.state)
+      setState(ensureWasteLocation(remote.state))
       setAvailableTenants(remote.availableTenants)
       setActiveTenantId(remote.activeTenantId)
       window.localStorage.setItem(ACTIVE_TENANT_KEY, remote.activeTenantId)

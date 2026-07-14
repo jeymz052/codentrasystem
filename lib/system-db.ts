@@ -29,6 +29,7 @@ import {
   refundTransaction,
   resolveAlert,
   seedDemoSystem,
+  toggleProductActive,
   toggleUserActive,
   updatePurchaseOrder,
   updateSupplier,
@@ -43,6 +44,9 @@ import {
   deleteProductionTemplate,
   produceFinishedGood,
   createTransfer,
+  requestDeletion,
+  approveDeletion,
+  rejectDeletion,
   type CategoryDraft,
   type LocationDraft,
   type ProductDraft,
@@ -53,7 +57,7 @@ import {
   type UserDraft,
 } from '@/lib/demo-system'
 import { getSupabaseAdminClient } from '@/lib/supabase-admin'
-import type { BusinessType, CashMovementKind, PaymentMethod, SubscriptionPlan, SubscriptionStatus, UserRole } from '@/types/database'
+import type { BusinessType, CashMovementKind, MutationAction, PaymentMethod, SubscriptionPlan, SubscriptionStatus, UserRole } from '@/types/database'
 
 type AnyRow = Record<string, any>
 
@@ -75,6 +79,7 @@ type MutationPayload =
   | { action: 'addUser'; draft: UserDraft }
   | { action: 'editUser'; userId: string; draft: { full_name: string; email: string; role: UserRole } }
   | { action: 'toggleUser'; userId: string }
+  | { action: 'toggleProduct'; productId: string }
   | { action: 'resendInvite'; draft: UserDraft }
   | { action: 'createRecipe'; finishedGoodId: string; ingredientId: string; quantityPerUnit: number; uomId?: string | null }
   | { action: 'updateRecipe'; recipeId: string; quantityPerUnit: number; uomId?: string | null }
@@ -84,7 +89,7 @@ type MutationPayload =
   | { action: 'produceFinishedGood'; finishedGoodId: string; quantity: number; locationId?: string | null }
   | { action: 'createPO'; draft: PurchaseOrderDraft; orderId: string }
   | { action: 'receivePO'; purchaseOrderId: string }
-  | { action: 'completeSale'; payload: { payment_method: PaymentMethod; payment_provider?: string; payment_reference?: string | null; amount_tendered: number; location_id: string | null; notes?: string; items: SaleDraftItem[]; receiptNumber?: string; transactionId?: string; itemIds?: string[]; movementIds?: string[]; auditLogId?: string } }
+  | { action: 'completeSale'; payload: { payment_method: PaymentMethod; payment_provider?: string; payment_reference?: string | null; amount_tendered: number; location_id: string | null; notes?: string; items: SaleDraftItem[]; receiptNumber?: string; transactionId?: string; itemIds?: string[]; movementIds?: string[]; auditLogId?: string; split_payments?: Array<{ payment_method: PaymentMethod; amount: number; reference?: string | null }> } }
   | { action: 'voidSale'; transactionId: string; reason?: string }
   | { action: 'refundSale'; transactionId: string; reason?: string }
   | { action: 'openShift'; payload: { openingFloat: number; locationId?: string | null; notes?: string } }
@@ -98,6 +103,9 @@ type MutationPayload =
   | { action: 'transferStock'; payload: { productId: string; fromLocationId: string | null; toLocationId: string | null; quantity: number; notes?: string } }
   | { action: 'updatePurchaseOrder'; purchaseOrderId: string; draft: PurchaseOrderDraft }
   | { action: 'cancelPurchaseOrder'; purchaseOrderId: string }
+  | { action: 'requestDeletion'; requestedAction: MutationAction; targetType: string; targetId: string; details: Record<string, unknown> }
+  | { action: 'approveDeletion'; requestId: string }
+  | { action: 'rejectDeletion'; requestId: string }
 
 function asArray<T>(value: T[] | null | undefined) {
   return Array.isArray(value) ? value : []
@@ -197,6 +205,14 @@ export async function loadTenantState(tenantId?: string | null) {
   const productRecipes = asArray(recipesResult.data)
   const cashShiftsRaw = asArray(cashShiftsResult.data)
   const cashMovementsRaw = asArray(cashMovementsResult.data)
+  let deletionRequestsRaw: AnyRow[] = []
+  try {
+    const deletionResult = await client.from('deletion_requests').select('*').eq('tenant_id', tenant.id).order('created_at', { ascending: false })
+    deletionRequestsRaw = asArray(deletionResult.data as AnyRow[] | null)
+  } catch {
+    // deletion_requests table may not exist in older deployments; requests are best-effort loaded.
+    deletionRequestsRaw = []
+  }
 
   let inventoryLots: AnyRow[] = []
   try {
@@ -311,6 +327,11 @@ export async function loadTenantState(tenantId?: string | null) {
     cashMovements: cashMovementsRaw.map((row) => ({
       ...row,
     })),
+    deletionRequests: deletionRequestsRaw.map((row) => ({
+      ...row,
+      requested_by_user: userById.get(row.requested_by) ?? undefined,
+      reviewed_by_user: row.reviewed_by ? userById.get(row.reviewed_by) ?? null : null,
+    })) as DemoSystemState['deletionRequests'],
     inventoryLots: inventoryLots as DemoSystemState['inventoryLots'],
   } satisfies DemoSystemState
 }
@@ -363,7 +384,7 @@ export async function upsertTenantState(state: DemoSystemState) {
 
   const productRows = state.products.map(({ category, supplier, location, uom, ...row }) => row)
   const purchaseOrderRows = state.purchaseOrders.map(({ supplier, items, ...row }) => row)
-  const salesTransactionRows = state.salesTransactions.map(({ cashier, items, ...row }) => row)
+  const salesTransactionRows = state.salesTransactions.map(({ cashier, items, split_payments, ...row }) => row)
   const purchaseOrderItemRows = state.purchaseOrderItems.map(({ product, ...row }) => row)
   const salesTransactionItemRows = state.salesTransactionItems.map(({ product, ...row }) => row)
   const alertRows = state.alerts.map(({ product, ...row }) => row)
@@ -372,6 +393,7 @@ export async function upsertTenantState(state: DemoSystemState) {
   const stockMovementRows = state.stockMovements.map(({ product, ...row }) => row)
   const cashShiftRows = state.cashShifts.map(({ opened_by_user, closed_by_user, location, ...row }) => row)
   const cashMovementRows = state.cashMovements.map(({ performed_by, ...row }) => row)
+  const deletionRequestRows = state.deletionRequests.map(({ requested_by_user, reviewed_by_user, ...row }) => row)
 
   await upsert('tenants', [tenantRow])
   await upsert('categories', state.categories)
@@ -403,6 +425,13 @@ export async function upsertTenantState(state: DemoSystemState) {
     await prune('production_templates', state.productionTemplates.map((row) => row.id))
   } catch {
     // production_templates table may not exist in older deployments; templates are best-effort persisted.
+  }
+
+  try {
+    await upsert('deletion_requests', deletionRequestRows)
+    await prune('deletion_requests', state.deletionRequests.map((row) => row.id))
+  } catch {
+    // deletion_requests table may not exist in older deployments; requests are best-effort persisted.
   }
 
   // Prune product-dependent rows FIRST. Several child tables use
@@ -763,6 +792,9 @@ export async function applyDatabaseMutation(
     case 'toggleUser':
       state = toggleUserActive(state, mutation.userId)
       break
+    case 'toggleProduct':
+      state = toggleProductActive(state, mutation.productId)
+      break
     case 'resendInvite':
       await resendTenantInvite(currentTenantId, mutation.draft, origin)
       state = markInviteResent(state, mutation.draft.email)
@@ -834,6 +866,15 @@ export async function applyDatabaseMutation(
       break
     case 'cancelPurchaseOrder':
       state = cancelPurchaseOrder(state, mutation.purchaseOrderId)
+      break
+    case 'requestDeletion':
+      state = requestDeletion(state, mutation.requestedAction, mutation.targetType, mutation.targetId, mutation.details)
+      break
+    case 'approveDeletion':
+      state = approveDeletion(state, mutation.requestId)
+      break
+    case 'rejectDeletion':
+      state = rejectDeletion(state, mutation.requestId)
       break
   }
 
