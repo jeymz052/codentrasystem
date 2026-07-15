@@ -34,7 +34,7 @@ export function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps) {
   const path = usePathname()
   const { state, availableTenants, activeTenantId, authUserEmail, isSuperAdminIdentity, signOut } = useDemoSystem()
   const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
-  const role = activeTenant?.role ?? 'sales_staff'
+  const role = activeTenant?.role ?? (isSuperAdminIdentity ? 'super_admin' : 'admin')
   const fallbackEmail = state.users.find((user) => user.id === state.currentUserId)?.email ?? state.users[0]?.email ?? null
   const displayEmail = authUserEmail ?? fallbackEmail
   const renewalLabel = state.tenant.subscription_ends_at

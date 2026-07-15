@@ -35,7 +35,7 @@ function formatNotificationDateTime(value: string) {
 
 export function TopBar({ onToggleSidebar }: TopBarProps) {
   const path = usePathname()
-  const { state, stats, availableTenants, activeTenantId, switchTenant, acknowledge, resolve, acknowledgeAll, resolveAll } = useDemoSystem()
+  const { state, stats, availableTenants, activeTenantId, isSuperAdminIdentity, switchTenant, acknowledge, resolve, acknowledgeAll, resolveAll } = useDemoSystem()
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const title = TITLES[path] ?? 'Codentra'

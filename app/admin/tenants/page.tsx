@@ -1,6 +1,5 @@
-import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { ArrowLeft, BarChart3, Building2, ShieldCheck, Users } from 'lucide-react'
+import { BarChart3, Building2, ShieldCheck, Users } from 'lucide-react'
 import { createSupabaseServerClient, getSupabaseServiceClient } from '@/lib/supabase-server'
 import { hasSuperAdminMembership, isConfiguredSuperAdminEmail } from '@/lib/tenant-access'
 import { formatTimestamp } from '@/lib/utils'
@@ -105,18 +104,14 @@ export default async function AdminTenantsPage() {
       background: 'linear-gradient(180deg, #F8FBFF 0%, #FFFFFF 50%, #F7FAFC 100%)',
       color: '#0F172A',
     }}>
-      <div style={{ maxWidth: 1440, margin: '0 auto', padding: '28px 24px 40px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 24 }}>
+      <div style={{ padding: '28px 24px 40px' }}>
+        <div style={{ marginBottom: 24 }}>
           <div>
             <h1 style={{ fontSize: 28, fontWeight: 900, letterSpacing: '-0.05em', marginBottom: 6 }}>Tenant monitoring</h1>
             <p style={{ color: '#475569', fontSize: 14, maxWidth: 760 }}>
               Review every tenant, plan, and membership from a single place. This page is for global oversight and account health.
             </p>
           </div>
-          <Link href="/dashboard" className="btn btn-ghost">
-            <ArrowLeft size={16} />
-            Back to dashboard
-          </Link>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginBottom: 22 }}>
