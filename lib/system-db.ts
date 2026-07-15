@@ -407,6 +407,34 @@ export async function upsertTenantState(state: DemoSystemState) {
   const cashMovementRows = state.cashMovements.map(({ performed_by, ...row }) => row)
   const deletionRequestRows = state.deletionRequests.map(({ requested_by_user, reviewed_by_user, ...row }) => row)
 
+  const baseTenantRow = {
+    id: tenantId,
+    name: state.tenant.name,
+    business_type: state.tenant.business_type,
+    logo_url: state.tenant.logo_url,
+    address: state.tenant.address,
+    phone: state.tenant.phone,
+    email: state.tenant.email,
+    tax_id: state.tenant.tax_id,
+    currency: state.tenant.currency,
+    timezone: state.tenant.timezone,
+    billing_email: state.tenant.billing_email,
+    plan: state.tenant.plan,
+    subscription_status: state.tenant.subscription_status,
+    trial_ends_at: state.tenant.trial_ends_at,
+    subscription_ends_at: state.tenant.subscription_ends_at,
+    max_users: state.tenant.max_users,
+    max_products: state.tenant.max_products,
+    max_locations: state.tenant.max_locations,
+    stripe_customer_id: state.tenant.stripe_customer_id,
+    stripe_subscription_id: state.tenant.stripe_subscription_id,
+    stripe_price_id: state.tenant.stripe_price_id,
+    is_active: state.tenant.is_active,
+    created_at: state.tenant.created_at,
+    updated_at: state.tenant.updated_at,
+  }
+  await upsert('tenants', [baseTenantRow])
+
   await upsert('categories', state.categories)
   await upsert('units_of_measure', state.unitsOfMeasure)
   await upsert('locations', state.locations)
@@ -473,14 +501,15 @@ export async function upsertTenantState(state: DemoSystemState) {
     prune('cash_movements', state.cashMovements.map((row) => row.id)),
   ])
 
-  // Persist the tenant row LAST and tolerate a missing column. The row spreads
-  // the full state.tenant (including newer optional JSONB columns such as
-  // payment_accounts), so if a migration hasn't been applied yet the upsert
-  // would throw. Previously that aborted the whole save — dropping sales,
-  // stock and other transactional data so it "disappeared" after a reload. We
-  // therefore never let a tenant-column error abort persistence: on failure we
-  // retry without the optional JSONB columns and otherwise continue, so the
-  // business data is always saved even before every migration is deployed.
+  // The base tenant row was already inserted above (before child tables) to
+  // satisfy FK constraints. Now persist the full tenant row with newer optional
+  // columns (JSONB fields such as payment_accounts). If a migration hasn't been
+  // applied yet the upsert would throw. Previously that aborted the whole save
+  // — dropping sales, stock and other transactional data so it "disappeared"
+  // after a reload. We therefore never let a tenant-column error abort
+  // persistence: on failure we retry without the optional JSONB columns and
+  // otherwise continue, so the business data is always saved even before every
+  // migration is deployed.
   const optionalTenantColumns = ['payment_accounts', 'pos_store_locations', 'pos_stations']
   try {
     await upsert('tenants', [tenantRow])
