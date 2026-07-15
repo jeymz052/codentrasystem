@@ -178,6 +178,7 @@ export function OnboardingForm({ initialPlan }: { initialPlan?: string }) {
             value={form.timezone}
             onChange={(value) => setForm((current) => ({ ...current, timezone: value }))}
             options={TIMEZONES}
+            dropUp
           />
         </label>
       </div>
