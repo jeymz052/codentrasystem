@@ -51,6 +51,7 @@ export type MutationAction =
   | 'acknowledge'
   | 'resolve'
   | 'recordWaste'
+  | 'setWasteTypes'
   | 'transferStock'
   | 'requestDeletion'
   | 'approveDeletion'
@@ -90,6 +91,7 @@ const MANAGER_ACTIONS: MutationAction[] = [
   'acknowledge',
   'resolve',
   'recordWaste',
+  'setWasteTypes',
   'createRecipe',
   'updateRecipe',
   'deleteRecipe',
@@ -206,7 +208,7 @@ export function canPerformMutation(role: UserRole, action: MutationAction) {
   }
 
   if (role === 'supervisor') {
-    return MANAGER_ACTIONS.includes(action) && !DELETION_ACTIONS.includes(action) && !APPROVAL_ACTIONS.includes(action)
+    return MANAGER_ACTIONS.includes(action) && !DELETION_ACTIONS.includes(action)
   }
 
   if (role === 'inventory_staff') {
@@ -223,6 +225,7 @@ export function canPerformMutation(role: UserRole, action: MutationAction) {
       'resolve',
       'transferStock',
       'recordWaste',
+      'setWasteTypes',
       'requestDeletion',
     ].includes(action)
   }
@@ -234,6 +237,8 @@ export function canPerformMutation(role: UserRole, action: MutationAction) {
       'closeShift',
       'recordCashMovement',
       'voidSale',
+      'refundSale',
+      'requestDeletion',
     ].includes(action)
   }
 
@@ -318,9 +323,10 @@ export function getRolePermissions(role: UserRole) {
     canManageSuppliers: isManagerial || role === 'purchasing_staff',
     canManageOrders: isManagerial || role === 'purchasing_staff',
     canVoidSales: canPOS,
-    canRefundSales: isManagerial,
+    canRefundSales: canPOS,
     canOpenCloseShift: canPOS,
     canAdjustCash: canPOS,
+    canApproveRequests: role === 'super_admin' || role === 'admin' || role === 'manager',
     canUseAllPaymentMethods: isManagerial,
     canChangePrices: isManagerial,
     canDeleteRecords: isManagerial && role !== 'supervisor',

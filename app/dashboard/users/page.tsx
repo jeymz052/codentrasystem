@@ -241,6 +241,7 @@ export default function UsersPage() {
                   className="input"
                   placeholder="Role"
                   searchPlaceholder="Search roles..."
+                  dropUp
                   value={form.role}
                   onChange={(value) => setForm((current) => ({ ...current, role: value as UserRole }))}
                    options={[

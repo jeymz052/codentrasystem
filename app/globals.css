@@ -936,7 +936,7 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
 @media print {
   @page {
     margin: 0;
-    size: 80mm auto;
+    size: 58mm auto;
   }
 
   body {
@@ -960,8 +960,8 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
   .pos-receipt-modal {
     position: fixed;
     inset: 0;
-    width: 80mm;
-    max-width: 80mm;
+    width: 58mm;
+    max-width: 58mm;
     min-height: 100vh;
     margin: 0 auto;
     border: none;
@@ -972,12 +972,28 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
   }
 
   .pos-receipt-paper {
-    padding: 4mm 4mm 5mm;
-    width: 80mm;
+    padding: 3mm 2mm 4mm;
+    width: 58mm;
     box-sizing: border-box;
     font-family: "Courier New", Courier, monospace;
     font-size: 11px;
     line-height: 1.25;
+  }
+
+  /* Print the monospace text receipt instead of the on-screen flex layout so
+     columns/alignment survive text-mode thermal drivers. */
+  .pos-receipt-screen {
+    display: none !important;
+  }
+
+  .pos-receipt-text {
+    display: block !important;
+    white-space: pre;
+    margin: 0;
+    font-family: "Courier New", Courier, monospace;
+    font-size: 11.2px;
+    line-height: 1.4;
+    color: #000;
   }
 
   .pos-receipt-logo {
@@ -987,7 +1003,10 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
   }
 
   .pos-receipt-brand {
-    font-size: 13px;
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
   }
 
   .pos-receipt-subtitle {
@@ -1049,4 +1068,43 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
   .pos-print-hide {
     display: none !important;
   }
+}
+
+/* On-screen slip sizes to the text so nothing is clipped; the printed version
+   is fixed to 58mm via @media print. The receipt shown on screen is the exact
+   monospace text that prints — no logo, no flex layout. */
+.pos-receipt-paper {
+  width: fit-content;
+  margin: 0 auto;
+  box-sizing: border-box;
+  background: #ffffff;
+}
+
+.pos-receipt-screen {
+  display: none;
+}
+
+/* Logo shown on screen and printed by raster/ESC-POS drivers; the text
+   "CODERTRA" brand in the receipt is the fallback for text-only drivers. */
+.pos-receipt-logo {
+  display: block;
+  margin: 0 auto 6px;
+  width: 50mm;
+  max-width: 100%;
+  height: auto;
+}
+
+.pos-receipt-text {
+  display: block;
+  white-space: pre;
+  margin: 0 auto;
+  width: max-content;
+  max-width: 100%;
+  padding: 8px 4px;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #111827;
+  text-align: left;
+  overflow: visible;
 }

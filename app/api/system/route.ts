@@ -40,6 +40,7 @@ export async function GET(request: NextRequest) {
       activeTenantId: activeTenant.id,
       availableTenants: tenants,
     })
+    response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     copyResponseCookies(cookieResponse, response)
     response.cookies.set({
       name: 'codentra.active-tenant',
@@ -101,6 +102,7 @@ export async function POST(request: NextRequest) {
       activeTenantId: tenantId,
       availableTenants: tenants,
     })
+    response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     copyResponseCookies(cookieResponse, response)
     response.cookies.set({
       name: 'codentra.active-tenant',

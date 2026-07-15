@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bell, Building2, CheckCircle2, AlertTriangle, Menu } from 'lucide-react'
+import { Bell, Building2, CheckCircle2, Check, AlertTriangle, Menu } from 'lucide-react'
 import { usePathname } from 'next/navigation'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
@@ -35,7 +35,7 @@ function formatNotificationDateTime(value: string) {
 
 export function TopBar({ onToggleSidebar }: TopBarProps) {
   const path = usePathname()
-  const { state, stats, availableTenants, activeTenantId, switchTenant, acknowledge, resolve } = useDemoSystem()
+  const { state, stats, availableTenants, activeTenantId, switchTenant, acknowledge, resolve, acknowledgeAll, resolveAll } = useDemoSystem()
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const title = TITLES[path] ?? 'Codentra'
@@ -152,7 +152,26 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
                   <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A' }}>Notifications</div>
                   <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>{stats.open_alerts} open alerts</div>
                 </div>
-                <div style={{ fontSize: 11, color: '#64748B' }}>Bell only</div>
+                {stats.open_alerts > 0 && (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => acknowledgeAll()}
+                      style={{ fontSize: 11, padding: '5px 8px' }}
+                    >
+                      <Check size={13} /> Acknowledge all
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={() => resolveAll()}
+                      style={{ fontSize: 11, padding: '5px 8px' }}
+                    >
+                      <CheckCircle2 size={13} /> Resolve all
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div style={{ maxHeight: 360, overflowY: 'auto' }}>
@@ -190,10 +209,7 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
                             <button
                               type="button"
                               className="btn btn-ghost btn-sm"
-                              onClick={() => {
-                                acknowledge(alert.id)
-                                setNotificationsOpen(false)
-                              }}
+                              onClick={() => acknowledge(alert.id)}
                               style={{ fontSize: 11, padding: '5px 8px' }}
                             >
                               Acknowledge
@@ -202,10 +218,7 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
                           <button
                             type="button"
                             className="btn btn-primary btn-sm"
-                            onClick={() => {
-                              resolve(alert.id)
-                              setNotificationsOpen(false)
-                            }}
+                            onClick={() => resolve(alert.id)}
                             style={{ fontSize: 11, padding: '5px 8px' }}
                           >
                             <CheckCircle2 size={13} /> Resolve

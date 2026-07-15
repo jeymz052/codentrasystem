@@ -1,25 +1,23 @@
 'use client'
 
-import { useEffect, useState, type ChangeEvent } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { Building2, Coins, Factory, Landmark, Layers3, MapPin, Pencil, Plus, RotateCcw, Save, Settings as SettingsIcon, Sparkles, Tag, Trash2, Users, Wallet, Warehouse, X } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { getRolePermissions } from '@/lib/access-control'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
-import type { BusinessType, SubscriptionPlan, SubscriptionStatus } from '@/types/database'
+import { TIMEZONES, DEFAULT_TIMEZONE } from '@/lib/timezones'
+import type { BusinessType, PaymentAccount, SubscriptionPlan, SubscriptionStatus } from '@/types/database'
 
 function humanize(value: string) {
   return value.replaceAll('_', ' ')
 }
 
-const PAYMENT_ACCOUNT_FIELDS = [
-  { key: 'gcash', label: 'GCash', accountLabel: 'GCash number / account', Icon: Wallet },
-  { key: 'maya', label: 'Maya', accountLabel: 'Maya account', Icon: Wallet },
-  { key: 'bdo', label: 'BDO', accountLabel: 'BDO account number', Icon: Landmark },
-  { key: 'maribank', label: 'Maribank', accountLabel: 'Maribank account', Icon: Landmark },
-] as const
+function paymentAccountId() {
+  return `pa_${Math.random().toString(36).slice(2, 10)}`
+}
 
 export default function SettingsPage() {
-  const { state, availableTenants, activeTenantId, updateTenant, resetDemo, addCategory, addUnitOfMeasure, addLocation, editLocation, removeLocation, requestDeletion, notifySuccess, notifyError, isSuperAdminIdentity } = useDemoSystem()
+  const { state, availableTenants, activeTenantId, updateTenant, resetDemo, addCategory, addUnitOfMeasure, addLocation, editLocation, removeLocation, requestDeletion, notifySuccess, notifyError, isSuperAdminIdentity, hydrated } = useDemoSystem()
   const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
   const role = activeTenant?.role ?? 'admin'
   const perms = getRolePermissions(role)
@@ -30,20 +28,18 @@ export default function SettingsPage() {
   const [uomForm, setUomForm] = useState({ name: '', abbreviation: '' })
   const [locationForm, setLocationForm] = useState({ code: '', name: '', zone: '' })
   const [editingLocationId, setEditingLocationId] = useState<string | null>(null)
-  const [paymentForm, setPaymentForm] = useState({
-    gcash_account: state.tenant.gcash_account ?? '',
-    gcash_qr_url: state.tenant.gcash_qr_url ?? '',
-    maya_account: state.tenant.maya_account ?? '',
-    maya_qr_url: state.tenant.maya_qr_url ?? '',
-    bdo_account: state.tenant.bdo_account ?? '',
-    bdo_qr_url: state.tenant.bdo_qr_url ?? '',
-    maribank_account: state.tenant.maribank_account ?? '',
-    maribank_qr_url: state.tenant.maribank_qr_url ?? '',
-  })
+  const [paymentAccounts, setPaymentAccounts] = useState<PaymentAccount[]>(
+    () => state.tenant.payment_accounts ?? []
+  )
   const [posStoreLocations, setPosStoreLocations] = useState<string[]>(() => state.tenant.pos_store_locations ?? [])
   const [newStoreLocation, setNewStoreLocation] = useState('')
   const [posStations, setPosStations] = useState<string[]>(() => state.tenant.pos_stations ?? [])
   const [newStation, setNewStation] = useState('')
+  // Only re-sync the local form from the tenant when the tenant identity or the
+  // initial server load changes — NOT on every tenant field update. Previously the
+  // effect ran on every `state.tenant` change, which clobbered unsaved POS
+  // location/station edits and made configured values appear to "disappear".
+  const syncedKeyRef = useRef('')
   const [form, setForm] = useState({
     name: state.tenant.name,
     business_type: state.tenant.business_type,
@@ -57,6 +53,9 @@ export default function SettingsPage() {
   })
 
   useEffect(() => {
+    const key = `${state.tenant.id}|${hydrated ? 'loaded' : 'pending'}`
+    if (syncedKeyRef.current === key) return
+    syncedKeyRef.current = key
     setForm({
       name: state.tenant.name,
       business_type: state.tenant.business_type,
@@ -68,21 +67,12 @@ export default function SettingsPage() {
       max_products: String(state.tenant.max_products),
       max_locations: String(state.tenant.max_locations),
     })
-    setPaymentForm({
-      gcash_account: state.tenant.gcash_account ?? '',
-      gcash_qr_url: state.tenant.gcash_qr_url ?? '',
-      maya_account: state.tenant.maya_account ?? '',
-      maya_qr_url: state.tenant.maya_qr_url ?? '',
-      bdo_account: state.tenant.bdo_account ?? '',
-      bdo_qr_url: state.tenant.bdo_qr_url ?? '',
-      maribank_account: state.tenant.maribank_account ?? '',
-      maribank_qr_url: state.tenant.maribank_qr_url ?? '',
-    })
+    setPaymentAccounts(state.tenant.payment_accounts ?? [])
     setPosStoreLocations(state.tenant.pos_store_locations ?? [])
     setNewStoreLocation('')
     setPosStations(state.tenant.pos_stations ?? [])
     setNewStation('')
-  }, [state.tenant])
+  }, [state.tenant.id, hydrated])
 
   function handleSave() {
     updateTenant({
@@ -179,34 +169,39 @@ export default function SettingsPage() {
 
   function handleSavePayments() {
     updateTenant({
-      gcash_account: paymentForm.gcash_account.trim() || null,
-      gcash_qr_url: paymentForm.gcash_qr_url.trim() || state.tenant.gcash_qr_url || null,
-      maya_account: paymentForm.maya_account.trim() || null,
-      maya_qr_url: paymentForm.maya_qr_url.trim() || state.tenant.maya_qr_url || null,
-      bdo_account: paymentForm.bdo_account.trim() || null,
-      bdo_qr_url: paymentForm.bdo_qr_url.trim() || state.tenant.bdo_qr_url || null,
-      maribank_account: paymentForm.maribank_account.trim() || null,
-      maribank_qr_url: paymentForm.maribank_qr_url.trim() || state.tenant.maribank_qr_url || null,
+      payment_accounts: paymentAccounts.map((account) => ({
+        ...account,
+        label: account.label.trim(),
+        account: account.account.trim(),
+      })),
     })
     notifySuccess('Payment accounts saved successfully.')
   }
 
-  async function handleQrUpload(method: (typeof PAYMENT_ACCOUNT_FIELDS)[number]['key'], event: ChangeEvent<HTMLInputElement>) {
+  function updatePaymentAccount(accountId: string, patch: Partial<PaymentAccount>) {
+    setPaymentAccounts((current) => current.map((account) => (account.id === accountId ? { ...account, ...patch } : account)))
+  }
+
+  async function handleQrUpload(accountId: string, event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     if (!file) return
     try {
       const body = new FormData()
       body.append('file', file)
       body.append('tenantId', state.tenant.id)
-      body.append('method', method)
+      body.append('method', accountId)
       const response = await fetch('/api/tenant/payment-qr', { method: 'POST', body })
       if (!response.ok) {
         const error = await response.json().catch(() => ({}) as { error?: string })
         throw new Error(error.error || 'Upload failed')
       }
       const data = (await response.json()) as { url: string }
-      setPaymentForm((current) => ({ ...current, [`${method}_qr_url`]: data.url }))
-      updateTenant({ [`${method}_qr_url`]: data.url } as unknown as Parameters<typeof updateTenant>[0])
+      updatePaymentAccount(accountId, { qr_url: data.url })
+      updateTenant({
+        payment_accounts: paymentAccounts.map((account) =>
+          account.id === accountId ? { ...account, qr_url: data.url } : account
+        ),
+      })
       notifySuccess('QR image uploaded and saved.')
     } catch (error) {
       notifyError(error instanceof Error ? error.message : 'Upload failed')
@@ -440,7 +435,14 @@ export default function SettingsPage() {
             </label>
             <label className="auth-field">
               <span>Timezone</span>
-              <input className="input" value={form.timezone} onChange={(event) => setForm((current) => ({ ...current, timezone: event.target.value }))} placeholder="Timezone" />
+              <SearchableSelect
+                className="auth-select"
+                placeholder="Timezone"
+                searchPlaceholder="Search countries or timezones..."
+                value={form.timezone}
+                onChange={(value) => setForm((current) => ({ ...current, timezone: value }))}
+                options={TIMEZONES}
+              />
             </label>
           </div>
 
@@ -515,51 +517,86 @@ export default function SettingsPage() {
         </div>
         <h3 style={{ fontSize: 18, fontWeight: 900, color: '#0F172A', letterSpacing: '-0.04em' }}>Direct payment accounts</h3>
         <p style={{ fontSize: 13, color: '#64748B', marginTop: 4, lineHeight: 1.6 }}>
-          Add your store&apos;s own GCash, Maya, BDO, and Maribank details so the POS can show a &quot;Scan this to pay&quot; QR at checkout. These are manual tenders recorded by the sales staff — no third-party gateway is involved.
+          Add whatever e-wallets and bank accounts your store uses (GCash, Maya, BDO, UnionBank, GoTyme, …). E-wallets and online banks use a number/ID; banks use a bank account number. Each account can show a &quot;Scan this to pay&quot; QR at the POS. These are manual tenders recorded by the sales staff — no third-party gateway is involved.
         </p>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14, marginTop: 16 }}>
-          {PAYMENT_ACCOUNT_FIELDS.map(({ key, label, accountLabel, Icon }) => {
-            const accountKey = `${key}_account` as const
-            const qrKey = `${key}_qr_url` as const
+        <div style={{ display: 'grid', gap: 14, marginTop: 16 }}>
+          {paymentAccounts.map((account) => {
+            const Icon = account.kind === 'bank' ? Landmark : Wallet
             return (
-              <div key={key} style={{ padding: 16, borderRadius: 16, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-                  <div style={{ width: 34, height: 34, borderRadius: 10, background: '#EFF6FF', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#3B82F6' }}>
-                    <Icon size={16} />
+              <div key={account.id} style={{ padding: 16, borderRadius: 16, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ width: 34, height: 34, borderRadius: 10, background: '#EFF6FF', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#3B82F6' }}>
+                      <Icon size={16} />
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: '#0F172A' }}>{account.label || 'New account'}</div>
                   </div>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: '#0F172A' }}>{label}</div>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentAccounts((current) => current.filter((entry) => entry.id !== account.id))}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#DC2626', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 700 }}
+                    title="Remove account"
+                  >
+                    <Trash2 size={13} /> Remove
+                  </button>
                 </div>
-                <label className="auth-field">
-                  <span>{accountLabel}</span>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px', gap: 10 }}>
+                  <label className="auth-field" style={{ marginBottom: 0 }}>
+                    <span>Account name</span>
+                    <input
+                      className="input"
+                      value={account.label}
+                      onChange={(event) => updatePaymentAccount(account.id, { label: event.target.value })}
+                      placeholder="e.g. GCash, BDO, UnionBank"
+                    />
+                  </label>
+                  <label className="auth-field" style={{ marginBottom: 0 }}>
+                    <span>Type</span>
+                    <select
+                      className="input"
+                      value={account.kind}
+                      onChange={(event) => updatePaymentAccount(account.id, { kind: event.target.value as PaymentAccount['kind'] })}
+                      style={{ height: 42, borderRadius: 12 }}
+                    >
+                      <option value="ewallet">E-wallet / Online</option>
+                      <option value="bank">Bank account</option>
+                    </select>
+                  </label>
+                </div>
+
+                <label className="auth-field" style={{ marginTop: 10 }}>
+                  <span>{account.kind === 'bank' ? 'Bank account number' : 'Account number / ID'}</span>
                   <input
                     className="input"
-                    value={paymentForm[accountKey]}
-                    onChange={(event) => setPaymentForm((current) => ({ ...current, [accountKey]: event.target.value }))}
-                    placeholder="e.g. 0917 123 4567"
+                    value={account.account}
+                    onChange={(event) => updatePaymentAccount(account.id, { account: event.target.value })}
+                    placeholder={account.kind === 'bank' ? 'e.g. 0123 4567 8901' : 'e.g. 0917 123 4567'}
                   />
                 </label>
+
                 <label className="auth-field" style={{ marginTop: 10 }}>
                   <span>QR image</span>
                   <input
                     type="file"
                     accept="image/png,image/jpeg,image/webp,image/gif"
-                    onChange={(event) => handleQrUpload(key, event)}
+                    onChange={(event) => handleQrUpload(account.id, event)}
                     className="input"
                     style={{ padding: 6, fontSize: 12 }}
                   />
                 </label>
-                {paymentForm[qrKey] ? (
+                {account.qr_url ? (
                   <div style={{ marginTop: 10, textAlign: 'center', position: 'relative' }}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={paymentForm[qrKey]}
-                      alt={`${label} QR code`}
+                      src={account.qr_url}
+                      alt={`${account.label} QR code`}
                       style={{ width: 120, height: 120, objectFit: 'contain', borderRadius: 10, background: '#fff', border: '1px solid #E2E8F0' }}
                     />
                     <button
                       type="button"
-                      onClick={() => setPaymentForm((current) => ({ ...current, [qrKey]: '' }))}
+                      onClick={() => updatePaymentAccount(account.id, { qr_url: null })}
                       style={{ marginTop: 8, fontSize: 12, color: '#DC2626', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700 }}
                     >
                       Remove
@@ -569,7 +606,22 @@ export default function SettingsPage() {
               </div>
             )
           })}
+
+          {paymentAccounts.length === 0 && (
+            <div style={{ padding: '14px 14px', color: '#64748B', fontSize: 13, borderRadius: 14, background: '#F8FBFF', border: '1px dashed #D8E4F2' }}>
+              No payment accounts yet. Add your first e-wallet or bank account below.
+            </div>
+          )}
         </div>
+
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={() => setPaymentAccounts((current) => [...current, { id: paymentAccountId(), label: '', kind: 'ewallet', account: '', qr_url: null }])}
+          style={{ marginTop: 14 }}
+        >
+          <Plus size={15} /> Add payment account
+        </button>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
           <button className="btn btn-primary" onClick={handleSavePayments}>
@@ -725,6 +777,12 @@ export default function SettingsPage() {
               ))}
             </div>
           )}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+          <button className="btn btn-primary" onClick={handleSave}>
+            <Save size={15} /> Save locations and stations
+          </button>
         </div>
       </section>
 

@@ -5,6 +5,7 @@ import { CheckCircle2, X, AlertTriangle } from 'lucide-react'
 import {
   addOrUpdateProduct,
   acknowledgeAlert,
+  acknowledgeAllAlerts,
   closeShift,
   computeDashboardStats,
   createCategory,
@@ -34,6 +35,7 @@ import {
   ensureWasteLocation,
   remapStateTenantId,
   resolveAlert,
+  resolveAllAlerts,
   toggleProductActive,
   seedDemoSystem,
   toggleUserActive,
@@ -122,9 +124,11 @@ type DemoSystemContextValue = {
   recordCashMovement: (shiftId: string, kind: 'cash_in' | 'cash_out' | 'denomination_adjustment', amount: number, note?: string | null, denominations?: Record<string, number> | null) => void
   acknowledge: (alertId: string) => void
   resolve: (alertId: string) => void
+  acknowledgeAll: () => void
+  resolveAll: () => void
   recordWaste: (productId: string, wasteType: 'waste' | 'defect' | 'reject', quantity: number, reason?: string) => void
   reverseWaste: (movementId: string) => void
-  setWasteTypes: (productId: string, draft: { waste: number; defect: number; reject: number }) => void
+  setWasteTypes: (productId: string, draft: { waste: number; defect: number; reject: number }, reason?: string) => void
   transferStock: (payload: { productId: string; fromLocationId: string | null; toLocationId: string | null; quantity: number; notes?: string }) => void
   requestDeletion: (requestedAction: string, targetType: string, targetId: string, details: Record<string, unknown>) => void
   approveDeletion: (requestId: string) => void
@@ -152,6 +156,50 @@ function mergeArray<T extends { id: string }>(localItems: T[], remoteItems: T[])
   return merged
 }
 
+function mergeDeletionRequests(localItems: DemoSystemState['deletionRequests'], remoteItems: DemoSystemState['deletionRequests']): DemoSystemState['deletionRequests'] {
+  const keyFor = (item: DemoSystemState['deletionRequests'][number]) =>
+    `${item.action}|${item.target_type}|${item.target_id}|${item.status}`
+  const seen = new Set(localItems.map(keyFor))
+  const merged = [...localItems]
+  for (const remoteItem of remoteItems) {
+    const key = keyFor(remoteItem)
+    if (!seen.has(key)) {
+      merged.push(remoteItem)
+      seen.add(key)
+    }
+  }
+  return merged
+}
+
+// Stock movements are generated twice for the same logical event: once
+// optimistically on the client (random ids) and again when the server
+// recomputes the mutation (different random ids). mergeArray keeps both
+// because the ids differ, which double-counts Sales / Void / Refund history.
+// Collapse to one per logical movement using a stable natural key so the
+// movement ledger shows each event exactly once.
+type StockMovementLike = {
+  reference_id?: string | null
+  product_id?: string | null
+  movement_type?: string | null
+  quantity?: number | null
+  quantity_before?: number | null
+  quantity_after?: number | null
+}
+function mergeStockMovements<T extends StockMovementLike>(localItems: T[], remoteItems: T[]): T[] {
+  const keyFor = (item: StockMovementLike) =>
+    `${item.reference_id ?? ''}|${item.product_id ?? ''}|${item.movement_type ?? ''}|${item.quantity ?? 0}|${item.quantity_before ?? 0}|${item.quantity_after ?? 0}`
+  const seen = new Set(localItems.map(keyFor))
+  const merged = [...localItems]
+  for (const remoteItem of remoteItems) {
+    const key = keyFor(remoteItem)
+    if (!seen.has(key)) {
+      seen.add(key)
+      merged.push(remoteItem)
+    }
+  }
+  return merged
+}
+
 // Products are reconciled by item_code (the real business key), not just id.
 // A client optimistic product and its server-persisted twin can carry different
 // random ids (e.g. imported items), which would otherwise both survive a plain
@@ -163,7 +211,7 @@ function mergeArray<T extends { id: string }>(localItems: T[], remoteItems: T[])
 // reset on-hand back to 0 right after the user received stock. We therefore keep
 // the server record as the base but always preserve the locally-optimistic stock
 // counters so the product total stays in sync with its FIFO lots.
-type ProductLike = { id: string; item_code?: string | null; quantity_on_hand?: number; quantity_reserved?: number }
+type ProductLike = { id: string; item_code?: string | null; quantity_on_hand?: number; quantity_reserved?: number; is_active?: boolean }
 function mergeProducts<T extends ProductLike>(localItems: T[], remoteItems: T[]): T[] {
   const keyFor = (item: ProductLike) => {
     const code = String(item.item_code ?? '').trim().toLowerCase()
@@ -181,7 +229,7 @@ function mergeProducts<T extends ProductLike>(localItems: T[], remoteItems: T[])
     if (!remote) {
       if (!result.has(key)) result.set(key, item)
     } else {
-      result.set(key, { ...remote, quantity_on_hand: item.quantity_on_hand, quantity_reserved: item.quantity_reserved } as T)
+      result.set(key, { ...remote, quantity_on_hand: item.quantity_on_hand, quantity_reserved: item.quantity_reserved, is_active: item.is_active } as T)
     }
   }
   return Array.from(result.values())
@@ -270,6 +318,7 @@ async function postMutation(tenantId: string, body: Record<string, unknown>) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ tenantId, ...body }),
+    cache: 'no-store',
   })
   if (!response.ok) {
     const message = await response.text()
@@ -378,6 +427,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     return {
       ...remote,
       currentUserId: resolveCurrentUserId(remote),
+      tenant: { ...remote.tenant, ...local.tenant },
       categories: mergeArray(local.categories, remote.categories),
       unitsOfMeasure: mergeArray(local.unitsOfMeasure, remote.unitsOfMeasure),
       locations: mergeArray(local.locations, remote.locations),
@@ -388,7 +438,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       purchaseOrderItems: mergeArray(local.purchaseOrderItems, remote.purchaseOrderItems),
       salesTransactions: mergeArray(local.salesTransactions, remote.salesTransactions),
       salesTransactionItems: mergeArray(local.salesTransactionItems, remote.salesTransactionItems),
-      stockMovements: mergeArray(local.stockMovements, remote.stockMovements ?? []),
+      stockMovements: mergeStockMovements(local.stockMovements, remote.stockMovements ?? []),
       alerts: mergeAlerts(local.alerts, remote.alerts),
       auditLogs: mergeArray(local.auditLogs, remote.auditLogs),
       productRecipes: mergeArray(local.productRecipes, remote.productRecipes),
@@ -396,7 +446,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       cashShifts: mergeArray(local.cashShifts, remote.cashShifts),
       cashMovements: mergeArray(local.cashMovements, remote.cashMovements),
       inventoryLots: mergeArray(local.inventoryLots, remote.inventoryLots ?? []),
-      deletionRequests: mergeArray(local.deletionRequests, remote.deletionRequests ?? []),
+      deletionRequests: mergeDeletionRequests(local.deletionRequests, remote.deletionRequests ?? []),
     }
   }
 
@@ -452,7 +502,8 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     ),
     updateTenant: (patch) => sync(
       (current) => updateTenantSettings(current, patch),
-      { action: 'updateTenant', patch }
+      { action: 'updateTenant', patch },
+      { successMessage: 'Settings saved successfully.', errorLabel: 'Could not save settings' }
     ),
     addCategory: (draft) => sync(
       (current) => createCategory(current, draft),
@@ -635,6 +686,16 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       (current) => resolveAlert(current, alertId),
       { action: 'resolve', alertId }
     ),
+    acknowledgeAll: () => sync(
+      (current) => acknowledgeAllAlerts(current),
+      { action: 'acknowledgeAll' },
+      { successMessage: 'All open alerts acknowledged.' }
+    ),
+    resolveAll: () => sync(
+      (current) => resolveAllAlerts(current),
+      { action: 'resolveAll' },
+      { successMessage: 'All alerts resolved.' }
+    ),
     recordWaste: (productId, wasteType, quantity, reason) => sync(
       (current) => recordWaste(current, { productId, wasteType, quantity, reason }),
       { action: 'recordWaste', productId, wasteType, quantity, reason }
@@ -644,8 +705,8 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       { action: 'reverseWaste', movementId },
       { successMessage: 'Waste entry reversed — stock restored.', errorLabel: 'Could not reverse waste' }
     ),
-    setWasteTypes: (productId, draft) => sync(
-      (current) => setWasteTypes(current, productId, draft),
+    setWasteTypes: (productId, draft, reason) => sync(
+      (current) => setWasteTypes(current, productId, draft, reason),
       { action: 'setWasteTypes', productId, ...draft },
       { successMessage: 'Waste / defect / reject updated.', errorLabel: 'Could not update waste' }
     ),

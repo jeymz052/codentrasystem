@@ -29,6 +29,7 @@ import {
   refundTransaction,
   resolveAlert,
   seedDemoSystem,
+  setWasteTypes,
   toggleProductActive,
   toggleUserActive,
   updatePurchaseOrder,
@@ -98,6 +99,7 @@ type MutationPayload =
   | { action: 'acknowledge'; alertId: string }
   | { action: 'resolve'; alertId: string }
   | { action: 'recordWaste'; productId: string; wasteType: 'waste' | 'defect' | 'reject'; quantity: number; reason?: string }
+  | { action: 'setWasteTypes'; productId: string; waste: number; defect: number; reject: number; reason?: string }
   | { action: 'reverseWaste'; movementId: string }
   | { action: 'editWaste'; movementId: string; wasteType: 'waste' | 'defect' | 'reject'; quantity: number; reason?: string }
   | { action: 'transferStock'; payload: { productId: string; fromLocationId: string | null; toLocationId: string | null; quantity: number; notes?: string } }
@@ -147,10 +149,17 @@ export async function loadTenantState(tenantId?: string | null) {
     : client.from('tenants').select('*').order('created_at', { ascending: true }).limit(1)
 
   const tenantResult = await tenantQuery
-  const tenant = tenantId ? (tenantResult.data ?? null) : firstRow(tenantResult.data as AnyRow[] | null)
+  const tenantRow = tenantId ? (tenantResult.data ?? null) : firstRow(tenantResult.data as AnyRow[] | null)
 
-  if (!tenant) {
+  if (!tenantRow) {
     return null
+  }
+
+  const tenant = {
+    ...tenantRow,
+    pos_location_id: tenantRow.pos_location_id ?? null,
+    pos_store_locations: Array.isArray(tenantRow.pos_store_locations) ? tenantRow.pos_store_locations : [],
+    pos_stations: Array.isArray(tenantRow.pos_stations) ? tenantRow.pos_stations : [],
   }
 
   const [
@@ -380,6 +389,9 @@ export async function upsertTenantState(state: DemoSystemState) {
     ...state.tenant,
     plan: state.tenant.plan as SubscriptionPlan,
     subscription_status: state.tenant.subscription_status as SubscriptionStatus,
+    pos_location_id: state.tenant.pos_location_id ?? null,
+    pos_store_locations: Array.isArray(state.tenant.pos_store_locations) ? state.tenant.pos_store_locations : [],
+    pos_stations: Array.isArray(state.tenant.pos_stations) ? state.tenant.pos_stations : [],
   }
 
   const productRows = state.products.map(({ category, supplier, location, uom, ...row }) => row)
@@ -395,7 +407,6 @@ export async function upsertTenantState(state: DemoSystemState) {
   const cashMovementRows = state.cashMovements.map(({ performed_by, ...row }) => row)
   const deletionRequestRows = state.deletionRequests.map(({ requested_by_user, reviewed_by_user, ...row }) => row)
 
-  await upsert('tenants', [tenantRow])
   await upsert('categories', state.categories)
   await upsert('units_of_measure', state.unitsOfMeasure)
   await upsert('locations', state.locations)
@@ -461,6 +472,28 @@ export async function upsertTenantState(state: DemoSystemState) {
     prune('cash_shifts', state.cashShifts.map((row) => row.id)),
     prune('cash_movements', state.cashMovements.map((row) => row.id)),
   ])
+
+  // Persist the tenant row LAST and tolerate a missing column. The row spreads
+  // the full state.tenant (including newer optional JSONB columns such as
+  // payment_accounts), so if a migration hasn't been applied yet the upsert
+  // would throw. Previously that aborted the whole save — dropping sales,
+  // stock and other transactional data so it "disappeared" after a reload. We
+  // therefore never let a tenant-column error abort persistence: on failure we
+  // retry without the optional JSONB columns and otherwise continue, so the
+  // business data is always saved even before every migration is deployed.
+  const optionalTenantColumns = ['payment_accounts', 'pos_store_locations', 'pos_stations']
+  try {
+    await upsert('tenants', [tenantRow])
+  } catch (error) {
+    console.warn('[upsertTenantState] tenant upsert failed; retrying without optional columns', error)
+    const fallback = { ...tenantRow } as Record<string, unknown>
+    for (const column of optionalTenantColumns) delete fallback[column]
+    try {
+      await upsert('tenants', [fallback as AnyRow])
+    } catch (fallbackError) {
+      console.warn('[upsertTenantState] tenant upsert failed even without optional columns', fallbackError)
+    }
+  }
 }
 
 function normalizeSeedState(state: DemoSystemState, tenantId?: string) {
@@ -851,6 +884,14 @@ export async function applyDatabaseMutation(
       break
     case 'recordWaste':
       state = recordWaste(state, { productId: mutation.productId, wasteType: mutation.wasteType, quantity: mutation.quantity, reason: mutation.reason })
+      break
+    case 'setWasteTypes':
+      state = setWasteTypes(
+        state,
+        mutation.productId,
+        { waste: Number(mutation.waste) || 0, defect: Number(mutation.defect) || 0, reject: Number(mutation.reject) || 0 },
+        mutation.reason
+      )
       break
     case 'reverseWaste':
       state = reverseWaste(state, mutation.movementId)

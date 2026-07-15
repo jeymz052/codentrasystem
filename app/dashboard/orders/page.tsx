@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { Ban, CalendarDays, CalendarCheck, CheckCircle2, Clock3, DollarSign, Edit2, Eye, Package, Plus, ShoppingCart, Truck, X } from 'lucide-react'
+import { Ban, CalendarDays, CheckCircle2, Clock3, DollarSign, Edit2, Eye, Package, Plus, ShoppingCart, Truck, X } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import type { PurchaseOrderDraft } from '@/lib/demo-system'
 import type { PurchaseOrder } from '@/types/database'
@@ -17,7 +17,6 @@ type PoForm = {
   quantity: string
   unitCost: string
   expectedDate: string
-  deliveryDate: string
   notes: string
 }
 
@@ -29,7 +28,6 @@ const EMPTY_FORM: PoForm = {
   quantity: '10',
   unitCost: '',
   expectedDate: TODAY,
-  deliveryDate: '',
   notes: '',
 }
 
@@ -133,7 +131,6 @@ export default function OrdersPage() {
       quantity: '10',
       unitCost: '',
       expectedDate: TODAY,
-      deliveryDate: '',
       notes: '',
     })
   }
@@ -165,7 +162,6 @@ export default function OrdersPage() {
     const draft: PurchaseOrderDraft = {
       supplier_id: form.supplierId,
       expected_date: form.expectedDate,
-      delivery_date: form.deliveryDate,
       notes: form.notes,
       items: [
         {
@@ -193,7 +189,6 @@ export default function OrdersPage() {
       quantity: String(first?.quantity_ordered ?? 10),
       unitCost: String(first?.unit_cost ?? 0),
       expectedDate: order.expected_date ?? TODAY,
-      deliveryDate: order.delivery_date ?? '',
       notes: order.notes ?? '',
     })
   }
@@ -203,7 +198,6 @@ export default function OrdersPage() {
     const draft: PurchaseOrderDraft = {
       supplier_id: editForm.supplierId,
       expected_date: editForm.expectedDate,
-      delivery_date: editForm.deliveryDate,
       notes: editForm.notes,
       items: [
         {
@@ -304,6 +298,17 @@ export default function OrdersPage() {
         onReset={table.resetFilters}
       />
 
+      <Pagination
+        page={table.page}
+        totalPages={table.totalPages}
+        onPageChange={table.setPage}
+        pageSize={table.pageSize}
+        onPageSizeChange={table.setPageSize}
+        rangeStart={table.range.start}
+        rangeEnd={table.range.end}
+        totalItems={table.totalItems}
+      />
+
       <section className="card table-scroll" style={{ overflow: 'hidden', borderRadius: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '16px 18px', borderBottom: '1px solid #E2E8F0' }}>
           <div>
@@ -371,6 +376,8 @@ export default function OrdersPage() {
                           <span className="badge badge-green">Received</span>
                         ) : order.status === 'cancelled' ? (
                           <span className="badge" style={{ background: '#FEE2E2', color: '#DC2626' }}>Cancelled</span>
+                        ) : order.status === 'pending_approval' ? (
+                          <span className="badge" style={{ background: '#FEF3C7', color: '#D97706' }}>Awaiting Approval</span>
                         ) : (
                           <>
                             <button className="btn btn-ghost btn-sm" onClick={() => openEdit(order)} style={{ padding: '4px 8px' }} title="Edit purchase order"><Edit2 size={14} /></button>
@@ -395,17 +402,6 @@ export default function OrdersPage() {
           </table>
         </div>
       </section>
-
-      <Pagination
-        page={table.page}
-        totalPages={table.totalPages}
-        onPageChange={table.setPage}
-        pageSize={table.pageSize}
-        onPageSizeChange={table.setPageSize}
-        rangeStart={table.range.start}
-        rangeEnd={table.range.end}
-        totalItems={table.totalItems}
-      />
 
       {showCreateModal && (
         <div className="modal-overlay">
@@ -468,14 +464,6 @@ export default function OrdersPage() {
                 <div className="auth-input-wrap">
                   <CalendarDays size={14} />
                   <input className="input" type="date" value={form.expectedDate} onChange={(event) => setForm((current) => ({ ...current, expectedDate: event.target.value }))} />
-                </div>
-              </label>
-
-              <label className="auth-field">
-                <span>Delivery date</span>
-                <div className="auth-input-wrap">
-                  <CalendarCheck size={14} />
-                  <input className="input" type="date" value={form.deliveryDate} onChange={(event) => setForm((current) => ({ ...current, deliveryDate: event.target.value }))} />
                 </div>
               </label>
 
@@ -575,14 +563,6 @@ export default function OrdersPage() {
                 <div className="auth-input-wrap">
                   <CalendarDays size={14} />
                   <input className="input" type="date" value={editForm.expectedDate} onChange={(event) => setEditForm((current) => ({ ...current, expectedDate: event.target.value }))} />
-                </div>
-              </label>
-
-              <label className="auth-field">
-                <span>Delivery date</span>
-                <div className="auth-input-wrap">
-                  <CalendarCheck size={14} />
-                  <input className="input" type="date" value={editForm.deliveryDate} onChange={(event) => setEditForm((current) => ({ ...current, deliveryDate: event.target.value }))} />
                 </div>
               </label>
 

@@ -28,7 +28,9 @@ export async function POST(request: NextRequest) {
   if (!tenantId) {
     return NextResponse.json({ error: 'tenantId is required' }, { status: 400 })
   }
-  if (!METHODS.includes(method as (typeof METHODS)[number])) {
+  // Allow the legacy fixed methods as well as arbitrary per-account ids
+  // (e.g. "pa_abc123") created from the dynamic payment accounts list.
+  if (!method || (!METHODS.includes(method as (typeof METHODS)[number]) && !/^pa_[a-z0-9]+$/i.test(method))) {
     return NextResponse.json({ error: 'invalid method' }, { status: 400 })
   }
   if (!ALLOWED.includes(file.type)) {

@@ -3,9 +3,10 @@
 import Image from 'next/image'
 import { useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowRight, Building2, CalendarDays, CircleDollarSign, Factory, Layers3, ShoppingBag } from 'lucide-react'
+import { ArrowRight, Building2, CircleDollarSign, Factory, Layers3, ShoppingBag } from 'lucide-react'
 import { SUBSCRIPTION_PLANS } from '@/lib/subscription-plans'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
+import { TIMEZONES, DEFAULT_TIMEZONE } from '@/lib/timezones'
 
 type OnboardingFormState = {
   business_name: string
@@ -20,7 +21,7 @@ const DEFAULT_STATE: OnboardingFormState = {
   business_type: 'retail',
   billing_email: '',
   plan: 'starter',
-  timezone: 'Asia/Manila',
+  timezone: DEFAULT_TIMEZONE,
 }
 
 export function OnboardingForm({ initialPlan }: { initialPlan?: string }) {
@@ -170,10 +171,14 @@ export function OnboardingForm({ initialPlan }: { initialPlan?: string }) {
         </label>
         <label className="auth-field">
           <span>Timezone</span>
-          <div className="auth-input-wrap">
-            <CalendarDays size={14} />
-            <input value={form.timezone} onChange={(event) => setForm((current) => ({ ...current, timezone: event.target.value }))} placeholder="Asia/Manila" />
-          </div>
+          <SearchableSelect
+            className="auth-select"
+            placeholder="Timezone"
+            searchPlaceholder="Search countries or timezones..."
+            value={form.timezone}
+            onChange={(value) => setForm((current) => ({ ...current, timezone: value }))}
+            options={TIMEZONES}
+          />
         </label>
       </div>
 

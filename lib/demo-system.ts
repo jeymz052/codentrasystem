@@ -14,6 +14,7 @@ import type {
   Location,
   MovementType,
   OrderStatus,
+  PaymentAccount,
   PaymentMethod,
   Product,
   ProductionTemplate,
@@ -47,6 +48,7 @@ export type ProductDraft = {
   location: string
   description?: string
   is_finished_good?: boolean
+  barcode?: string
 }
 
 export type SupplierDraft = {
@@ -85,7 +87,7 @@ export type UserDraft = {
 export type PurchaseOrderDraft = {
   supplier_id: string
   expected_date: string
-  delivery_date: string
+  delivery_date?: string
   notes: string
   items: Array<{
     product_id: string
@@ -182,6 +184,47 @@ function lower(value: string) {
   return normalizeName(value).toLowerCase()
 }
 
+type FixedPaymentColumns = {
+  gcash_account: string | null
+  gcash_qr_url: string | null
+  maya_account: string | null
+  maya_qr_url: string | null
+  bdo_account: string | null
+  bdo_qr_url: string | null
+  maribank_account: string | null
+  maribank_qr_url: string | null
+}
+
+// Build the dynamic payment-account list from the legacy fixed columns. Used
+// when seeding a fresh tenant (all null => empty list) and when migrating an
+// existing tenant that still stores its accounts in the old columns.
+export function buildDefaultPaymentAccounts(fixed: FixedPaymentColumns, tenantId = 'seed'): PaymentAccount[] {
+  const entries: Array<{ label: string; kind: 'ewallet' | 'bank'; account: string | null; qr_url: string | null }> = [
+    { label: 'GCash', kind: 'ewallet', account: fixed.gcash_account, qr_url: fixed.gcash_qr_url },
+    { label: 'Maya', kind: 'ewallet', account: fixed.maya_account, qr_url: fixed.maya_qr_url },
+    { label: 'BDO', kind: 'bank', account: fixed.bdo_account, qr_url: fixed.bdo_qr_url },
+    { label: 'Maribank', kind: 'bank', account: fixed.maribank_account, qr_url: fixed.maribank_qr_url },
+  ]
+  return entries
+    .filter((entry) => entry.account || entry.qr_url)
+    .map((entry) => ({
+      id: deterministicUuid(tenantId, 'payacct', entry.label),
+      label: entry.label,
+      kind: entry.kind,
+      account: entry.account ?? '',
+      qr_url: entry.qr_url ?? null,
+    }))
+}
+
+// Ensure a loaded tenant has a populated payment_accounts list. If the new
+// JSONB column is empty but the legacy fixed columns carry data, fold them in
+// so existing setups aren't lost.
+export function migratePaymentAccounts(tenant: Tenant): PaymentAccount[] {
+  const existing = Array.isArray(tenant.payment_accounts) ? tenant.payment_accounts.filter(Boolean) : []
+  if (existing.length > 0) return existing
+  return buildDefaultPaymentAccounts(tenant, tenant.id)
+}
+
 function isValidBusinessType(value: string): value is BusinessType {
   return ['coffee_shop', 'manufacturing', 'convenience_store', 'restaurant', 'retail', 'pharmacy', 'general'].includes(value)
 }
@@ -227,6 +270,16 @@ function baseTenant(businessType: BusinessType): Tenant {
     bdo_qr_url: null,
       maribank_account: null,
       maribank_qr_url: null,
+      payment_accounts: buildDefaultPaymentAccounts({
+        gcash_account: null,
+        gcash_qr_url: null,
+        maya_account: null,
+        maya_qr_url: null,
+        bdo_account: null,
+        bdo_qr_url: null,
+        maribank_account: null,
+        maribank_qr_url: null,
+      }),
       pos_location_id: null,
       pos_store_locations: [],
       pos_stations: [],
@@ -1004,6 +1057,19 @@ function lotQuantity(state: DemoSystemState, productId: string, locationId?: str
     .reduce((sum, lot) => sum + lot.quantity, 0)
 }
 
+// Returns the single location that holds *all* of a product's non-waste on-hand
+// stock, or null when its stock is spread across zero or multiple locations.
+function primaryProductLocation(state: DemoSystemState, productId: string): string | null {
+  const wasteIds = state.locations.filter((location) => location.is_waste_location).map((location) => location.id)
+  const byLocation = new Map<string, number>()
+  for (const lot of state.inventoryLots) {
+    if (lot.product_id !== productId || lot.quantity <= 0 || !lot.location_id) continue
+    if (wasteIds.includes(lot.location_id)) continue
+    byLocation.set(lot.location_id, (byLocation.get(lot.location_id) ?? 0) + lot.quantity)
+  }
+  return byLocation.size === 1 ? [...byLocation.keys()][0] : null
+}
+
 function lotsForProduct(state: DemoSystemState, productId: string, locationId?: string | null) {
   return state.inventoryLots
     .filter((lot) => lot.product_id === productId && lot.quantity > 0 && (locationId == null || lot.location_id === locationId))
@@ -1030,7 +1096,10 @@ function addLot(
 }
 
 function syncProductQuantity(state: DemoSystemState, productId: string): DemoSystemState {
-  const quantity = lotQuantity(state, productId)
+  const wasteIds = state.locations.filter((location) => location.is_waste_location).map((location) => location.id)
+  const quantity = lotsForProduct(state, productId)
+    .filter((lot) => lot.location_id == null || !wasteIds.includes(lot.location_id))
+    .reduce((sum, lot) => sum + lot.quantity, 0)
   return {
     ...state,
     products: state.products.map((product) =>
@@ -1049,7 +1118,7 @@ function consumeFifo(
   quantity: number,
   locationId?: string | null,
   excludeLocationId?: string | null | string[]
-): { state: DemoSystemState; consumedQuantity: number; consumedCost: number } {
+): { state: DemoSystemState; consumedQuantity: number; consumedCost: number; consumedLotIds: string[] } {
   let lots = lotsForProduct(state, productId, locationId)
   const excluded = excludeLocationId ? (Array.isArray(excludeLocationId) ? excludeLocationId : [excludeLocationId]) : []
   if (excluded.length > 0) lots = lots.filter((lot) => lot.location_id !== null && !excluded.includes(lot.location_id))
@@ -1057,7 +1126,7 @@ function consumeFifo(
   // A product can have on-hand stock without any FIFO lot row (stock created
   // directly, or lots never seeded). Treat the on-hand quantity as a single
   // implicit lot so the sale can proceed and the ledger stays accurate.
-  if (lots.length === 0) {
+  if (lots.length === 0 && locationId == null) {
     const product = state.products.find((entry) => entry.id === productId)
     const onHand = Number(product?.quantity_on_hand ?? 0)
     if (onHand > 0) {
@@ -1082,6 +1151,7 @@ function consumeFifo(
   let remaining = take
   let cost = 0
   const kept: InventoryLot[] = []
+  const consumedLotIds: string[] = []
 
   for (const lot of lots) {
     if (remaining <= 0) {
@@ -1093,6 +1163,8 @@ function consumeFifo(
     remaining -= fromLot
     if (fromLot < lot.quantity) {
       kept.push({ ...lot, quantity: lot.quantity - fromLot })
+    } else {
+      consumedLotIds.push(lot.id)
     }
   }
 
@@ -1108,7 +1180,7 @@ function consumeFifo(
   ]
   let nextState: DemoSystemState = { ...state, inventoryLots: nextLots }
   nextState = syncProductQuantity(nextState, productId)
-  return { state: nextState, consumedQuantity: take, consumedCost: cost }
+  return { state: nextState, consumedQuantity: take, consumedCost: cost, consumedLotIds }
 }
 
 // Returns the id of the designated Waste / Defect / Reject storage location,
@@ -1133,9 +1205,10 @@ const WASTE_LOCATION_SEED = [
 ] as const
 
 export function ensureWasteLocation(state: DemoSystemState): DemoSystemState {
+  const tenant = { ...state.tenant, payment_accounts: migratePaymentAccounts(state.tenant) }
   const existing = new Set(state.locations.filter((location) => location.is_waste_location).map((location) => location.code))
   const missing = WASTE_LOCATION_SEED.filter((seed) => !existing.has(seed.code))
-  if (missing.length === 0) return state
+  if (missing.length === 0) return { ...state, tenant }
 
   const additions: Location[] = missing.map((seed) => ({
     id: deterministicUuid(state.tenant.id, seed.key),
@@ -1147,7 +1220,7 @@ export function ensureWasteLocation(state: DemoSystemState): DemoSystemState {
     is_waste_location: true,
     created_at: nowIso(),
   }))
-  return { ...state, locations: [...state.locations, ...additions] }
+  return { ...state, tenant, locations: [...state.locations, ...additions] }
 }
 
 function setCurrentUser(state: DemoSystemState) {
@@ -1271,7 +1344,7 @@ export function addOrUpdateProduct(state: DemoSystemState, draft: ProductDraft, 
     max_stock: existing?.max_stock ?? null,
     unit_cost: Number(draft.unit_cost ?? 0),
     selling_price: Number(draft.selling_price ?? 0),
-    barcode: existing?.barcode ?? null,
+    barcode: draft.barcode?.trim() ? draft.barcode.trim() : existing?.barcode ?? null,
     image_url: existing?.image_url ?? null,
     is_active: existing?.is_active ?? true,
     is_finished_good: draft.is_finished_good ?? existing?.is_finished_good ?? false,
@@ -1720,6 +1793,11 @@ export function requestDeletion(
   targetId: string,
   details: Record<string, unknown>,
 ): DemoSystemState {
+  const alreadyPending = state.deletionRequests.some(
+    (req) => req.action === requestedAction && req.target_type === targetType && req.target_id === targetId && req.status === 'pending'
+  )
+  if (alreadyPending) return state
+
   const request: DeletionRequest = {
     id: id(),
     tenant_id: state.tenant.id,
@@ -1783,6 +1861,23 @@ export function approveDeletion(state: DemoSystemState, requestId: string): Demo
     case 'deleteLocation':
       next = deleteLocation(next, request.target_id)
       break
+    case 'approvePurchaseOrder':
+      next = {
+        ...next,
+        purchaseOrders: next.purchaseOrders.map((row) =>
+          row.id === request.target_id ? { ...row, status: 'approved' as OrderStatus, approved_by: state.currentUserId, approved_at: nowIso(), updated_at: nowIso() } : row
+        ),
+      }
+      break
+    case 'voidSale':
+    case 'refundSale':
+      next = {
+        ...next,
+        deletionRequests: next.deletionRequests.map((row) =>
+          row.id === requestId ? { ...row, status: 'approved' as const, reviewed_by: state.currentUserId, reviewed_at: nowIso(), updated_at: nowIso() } : row
+        ),
+      }
+      break
     default:
       break
   }
@@ -1808,7 +1903,7 @@ export function rejectDeletion(state: DemoSystemState, requestId: string): DemoS
   const request = state.deletionRequests.find((row) => row.id === requestId)
   if (!request || request.status !== 'pending') return state
 
-  return {
+  let next: DemoSystemState = {
     ...state,
     deletionRequests: state.deletionRequests.map((row) =>
       row.id === requestId ? { ...row, status: 'rejected' as const, reviewed_by: state.currentUserId, reviewed_at: nowIso(), updated_at: nowIso() } : row
@@ -1828,6 +1923,23 @@ export function rejectDeletion(state: DemoSystemState, requestId: string): DemoS
       },
     ],
   }
+
+  // Rejecting a provisional void/refund reverses it: the transaction is
+  // restored and the stock returned to the customer is put back on the shelf.
+  if (request.action === 'voidSale' || request.action === 'refundSale') {
+    next = reverseSaleCancellation(next, request.target_id, request.action)
+  }
+
+  if (request.action === 'approvePurchaseOrder') {
+    next = {
+      ...next,
+      purchaseOrders: next.purchaseOrders.map((row) =>
+        row.id === request.target_id ? { ...row, status: 'cancelled' as OrderStatus, updated_at: nowIso() } : row
+      ),
+    }
+  }
+
+  return next
 }
 
 // Records that a pending invitee was sent a fresh invitation. Matched by email
@@ -2067,21 +2179,24 @@ export function produceFinishedGood(state: DemoSystemState, finishedGoodId: stri
   }
 }
 
-export function createPurchaseOrder(state: DemoSystemState, draft: PurchaseOrderDraft, orderId?: string): DemoSystemState {
+export function createPurchaseOrder(state: DemoSystemState, draft: PurchaseOrderDraft, orderId?: string, _status?: OrderStatus): DemoSystemState {
   const supplier = state.suppliers.find((row) => row.id === draft.supplier_id) ?? null
   const orderIdToUse = orderId ?? id()
   const createdAt = nowIso()
+  const currentUser = state.users.find((u) => u.id === state.currentUserId)
+  const userRole = currentUser?.role
+  const needsApproval = userRole === 'purchasing_staff'
   const po: PurchaseOrder = {
     id: orderIdToUse,
     tenant_id: state.tenant.id,
     po_number: nextCode('PO', state.purchaseOrders.length),
     supplier_id: draft.supplier_id,
-    status: 'draft',
+    status: needsApproval ? 'pending_approval' : 'approved',
     created_by: state.currentUserId || null,
-    approved_by: null,
-    approved_at: null,
+    approved_by: needsApproval ? null : (state.currentUserId || null),
+    approved_at: needsApproval ? null : createdAt,
     expected_date: draft.expected_date || null,
-    delivery_date: draft.delivery_date || null,
+    delivery_date: null,
     received_date: null,
     notes: draft.notes.trim() || null,
     created_at: createdAt,
@@ -2105,11 +2220,24 @@ export function createPurchaseOrder(state: DemoSystemState, draft: PurchaseOrder
     }
   })
 
-  return {
+  let next = {
     ...state,
     purchaseOrders: [...state.purchaseOrders, po],
     purchaseOrderItems: [...state.purchaseOrderItems, ...items],
   }
+
+  if (needsApproval) {
+    next = requestDeletion(next, 'approvePurchaseOrder', 'purchase_order', po.id, {
+      po_number: po.po_number,
+      supplier_id: draft.supplier_id,
+      supplier_name: supplier?.name ?? null,
+      total: items.reduce((sum, item) => sum + Number(item.unit_cost ?? 0) * item.quantity_ordered, 0),
+      expected_date: draft.expected_date || null,
+      item_count: items.length,
+    })
+  }
+
+  return next
 }
 
 export function updatePurchaseOrder(
@@ -2126,7 +2254,7 @@ export function updatePurchaseOrder(
     ...order,
     supplier_id: payload.draft.supplier_id,
     expected_date: payload.draft.expected_date || null,
-    delivery_date: payload.draft.delivery_date || null,
+    delivery_date: order.delivery_date,
     notes: payload.draft.notes.trim() || null,
     updated_at: now,
     supplier: supplier ?? undefined,
@@ -2174,10 +2302,7 @@ export function cancelPurchaseOrder(state: DemoSystemState, purchaseOrderId: str
 export function receivePurchaseOrder(state: DemoSystemState, purchaseOrderId: string): DemoSystemState {
   const order = state.purchaseOrders.find((row) => row.id === purchaseOrderId)
   if (!order) return state
-  // Idempotency guard: a received (or cancelled) PO must never add stock again.
-  // Without this, re-applying the mutation would push duplicate lots and inflate
-  // the on-hand quantity.
-  if (order.status === 'received' || order.status === 'cancelled') return state
+  if (order.status === 'received' || order.status === 'cancelled' || order.status === 'pending_approval') return state
 
   const orderItems = state.purchaseOrderItems.filter((row) => row.po_id === purchaseOrderId)
   const now = nowIso()
@@ -2257,6 +2382,7 @@ export function receivePurchaseOrder(state: DemoSystemState, purchaseOrderId: st
         ? {
             ...row,
             status: 'received' as OrderStatus,
+            delivery_date: now.slice(0, 10),
             received_date: now,
             updated_at: now,
           }
@@ -2271,6 +2397,27 @@ export function receivePurchaseOrder(state: DemoSystemState, purchaseOrderId: st
 
 function buildSaleTransactionId(state: DemoSystemState) {
   return nextCode('RCP', state.salesTransactions.length)
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// POS store locations / stations are free-text values (e.g. "Main Store", "Bay 1")
+// defined in Settings and are intentionally separate from inventory warehouse
+// locations. location_id is a UUID foreign key to locations(id), so a free-text
+// value must never be written there — doing so throws "invalid input syntax for
+// type uuid" and aborts the whole sale/shift upsert. Resolve to a real inventory
+// location UUID when the value matches one; otherwise keep location_id NULL and
+// stash the free text in pos_store_location.
+function resolvePosLocation(
+  state: DemoSystemState,
+  rawLocationId: string | null | undefined
+): { location_id: string | null; pos_store_location: string | null } {
+  if (!rawLocationId) return { location_id: null, pos_store_location: null }
+  const isUuid = UUID_RE.test(rawLocationId)
+  if (isUuid && state.locations.some((location) => location.id === rawLocationId)) {
+    return { location_id: rawLocationId, pos_store_location: null }
+  }
+  return { location_id: null, pos_store_location: rawLocationId }
 }
 
 export function recordSale(
@@ -2294,6 +2441,7 @@ export function recordSale(
   const now = nowIso()
   const receiptNumber = payload.receiptNumber ?? buildSaleTransactionId(state)
   const transactionId = payload.transactionId ?? id()
+  const posLocation = resolvePosLocation(state, payload.location_id)
   const itemIdIter = payload.itemIds ? payload.itemIds.values() : null
   const movementIdIter = payload.movementIds ? payload.movementIds.values() : null
   const splitPayments = payload.split_payments ?? []
@@ -2339,7 +2487,8 @@ export function recordSale(
       quantity_after: after,
       reference_id: transactionId,
       reference_type: 'sales_transaction',
-      location_id: payload.location_id,
+      location_id: posLocation.location_id,
+      pos_store_location: posLocation.pos_store_location,
       performed_by: state.currentUserId || null,
       notes: payload.notes?.trim() || null,
       created_at: now,
@@ -2364,7 +2513,8 @@ export function recordSale(
     receipt_number: receiptNumber,
     cashier_id: state.currentUserId || null,
     shift_id: openShiftId,
-    location_id: payload.location_id,
+    location_id: posLocation.location_id,
+    pos_store_location: posLocation.pos_store_location,
     status: 'completed',
     payment_method: splitPayments.length > 0 ? splitPayments[0].payment_method : payload.payment_method,
     payment_provider: payload.payment_provider ?? null,
@@ -2438,17 +2588,31 @@ export function recordWaste(
 
   const before = Number(product.quantity_on_hand ?? 0)
   const requested = Math.max(0, Number(payload.quantity ?? 0))
-  // Pull the written-off stock out of the product's lots (FIFO) regardless of
-  // which location holds it, then drop it into the dedicated waste location so
-  // it is quarantined rather than removed. On-hand stays the same.
-  const consume = consumeFifo(working, payload.productId, requested)
-  if (consume.consumedQuantity <= 0) return state
-
+  if (requested <= 0) return state
+  const wasteIds = wasteLocationIds(working)
+  const consume = consumeFifo(working, payload.productId, requested, null, wasteIds)
+  // Cap to whatever is actually available instead of throwing. Waste / defect /
+  // reject are quarantined from real sellable stock, so we can never create more
+  // than what is physically on hand. Returning early (no-op) keeps the mutation
+  // from failing with a server/network error when a user requests too much.
   const moved = consume.consumedQuantity
+  if (moved <= 0) return state
   const cost = moved > 0 ? consume.consumedCost / moved : 0
   const now = nowIso()
 
-  const wasteMovementId = deterministicUuid(state.tenant.id, product.id, payload.wasteType, String(before), String(moved))
+  // Chain the movement id from the previous waste movement of this product +
+  // type so repeated, identical write-offs (e.g. log 10, clear, log 10 again)
+  // get distinct ids. A purely content-based id (tenant/product/type/before/
+  // moved) collides on repeat, which made a reversed write-off share an id with
+  // the new one — double-rendering it in the ledger and corrupting reversal
+  // tracking so "clear to 0" failed to restore stock. Chaining keeps the id
+  // deterministic (optimistic client + server still match and merge) yet unique
+  // per logical event.
+  const prevWaste = state.stockMovements
+    .filter((movement) => movement.product_id === product.id && movement.movement_type === payload.wasteType)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
+  const chainSeed = prevWaste ? prevWaste.id : `${state.tenant.id}::${product.id}::${payload.wasteType}`
+  const wasteMovementId = deterministicUuid(chainSeed, String(before), String(moved))
 
   let nextState: DemoSystemState = addLot(consume.state, {
     id: deterministicUuid(wasteMovementId, 'lot'),
@@ -2543,7 +2707,7 @@ export function reverseWaste(state: DemoSystemState, movementId: string): DemoSy
     id: deterministicUuid(state.tenant.id, movement.id, 'waste-reversal'),
     tenant_id: state.tenant.id,
     product_id: movement.product_id,
-    movement_type: movement.movement_type,
+    movement_type: 'adjustment',
     quantity: qty,
     quantity_before: before,
     quantity_after: after,
@@ -2582,31 +2746,53 @@ export function editWaste(
   })
 }
 
-// Reconcile a product's written-off stock for each type independently. Every
-// existing non-reversed write-off of a type is reversed (restoring its stock),
-// then the requested quantity (if > 0) is re-recorded. This lets each of
-// waste / defect / reject be set to its own value — including 0 — without the
-// types interfering with one another.
+// Reconcile a product's waste / defect / reject to an explicit target per type.
+//
+// Strategy (robust, never throws, never inflates on-hand):
+//   1. Release every currently-quarantined unit of these types back to sellable
+//      stock. After this the full physical pool is available to redistribute.
+//   2. Treat the released sellable on-hand as the hard cap. Walk the three types
+//      in order, assigning each the smaller of (requested, remaining pool) so the
+//      grand total can never exceed what is physically on hand.
+//   3. Re-record only the positive targets.
+//
+// Because step 2 caps the running remainder, waste + defect + reject <= on-hand
+// always holds, which is exactly the constraint that "editing waste to a larger
+// number inflates stock on hand" violated previously. recordWaste now caps to
+// available stock internally as well, so a partial pool can never throw.
 export function setWasteTypes(
   state: DemoSystemState,
   productId: string,
-  draft: { waste: number; defect: number; reject: number }
+  draft: { waste: number; defect: number; reject: number },
+  reason?: string
 ): DemoSystemState {
+  // Step 1: release everything back to sellable stock.
   let next = state
+  const existing = state.stockMovements.filter(
+    (movement) =>
+      movement.product_id === productId &&
+      (['waste', 'defect', 'reject'] as const).includes(movement.movement_type as WasteType) &&
+      movement.reference_type !== 'waste_reversal' &&
+      !isWasteReversed(state, movement.id)
+  )
+  for (const entry of existing) {
+    next = reverseWaste(next, entry.id)
+  }
+
+  // Step 2: the released sellable on-hand is the absolute pool we can quarantine.
+  const product = next.products.find((row) => row.id === productId)
+  let remaining = Math.max(0, Number(product?.quantity_on_hand ?? 0))
+
   const targets: Array<[WasteType, number]> = [
     ['waste', Math.max(0, Number(draft.waste) || 0)],
     ['defect', Math.max(0, Number(draft.defect) || 0)],
     ['reject', Math.max(0, Number(draft.reject) || 0)],
   ]
-  for (const [wasteType, target] of targets) {
-    const entries = state.stockMovements.filter(
-      (movement) => movement.product_id === productId && movement.movement_type === wasteType && !isWasteReversed(state, movement.id)
-    )
-    for (const entry of entries) {
-      next = reverseWaste(next, entry.id)
-    }
+  for (const [wasteType, requested] of targets) {
+    const target = Math.min(requested, remaining)
+    remaining -= target
     if (target > 0) {
-      next = recordWaste(next, { productId, wasteType, quantity: target })
+      next = recordWaste(next, { productId, wasteType, quantity: target, reason })
     }
   }
   return next
@@ -2617,13 +2803,15 @@ export function openShift(
   payload: { openingFloat: number; locationId?: string | null; notes?: string; station?: string | null }
 ): DemoSystemState {
   const now = nowIso()
+  const posLocation = resolvePosLocation(state, payload.locationId)
   const shift: CashShift = {
     id: id(),
     tenant_id: state.tenant.id,
     shift_code: '',
     opened_by: state.currentUserId || '',
     closed_by: null,
-    location_id: payload.locationId ?? null,
+    location_id: posLocation.location_id,
+    pos_store_location: posLocation.pos_store_location,
     status: 'open',
     opening_float: Number(payload.openingFloat ?? 0),
     closing_float: null,
@@ -2943,6 +3131,104 @@ export function refundTransaction(
   return syncAlerts(nextState)
 }
 
+// Reverses a provisional void/refund after a supervisor rejects it: the
+// transaction is restored to 'completed' and the stock that was returned to
+// on-hand is sold again (decremented). Mirrors the stock restore performed by
+// voidTransaction / refundTransaction, just in the opposite direction.
+export function reverseSaleCancellation(
+  state: DemoSystemState,
+  transactionId: string,
+  action: 'voidSale' | 'refundSale',
+): DemoSystemState {
+  const transaction = state.salesTransactions.find((row) => row.id === transactionId)
+  if (!transaction || (transaction.status !== 'voided' && transaction.status !== 'refunded')) return state
+
+  const items = state.salesTransactionItems.filter((item) => item.transaction_id === transactionId)
+  const userId = state.currentUserId || null
+  const now = nowIso()
+
+  let next: DemoSystemState = {
+    ...state,
+    salesTransactions: state.salesTransactions.map((row) =>
+      row.id === transactionId
+        ? {
+            ...row,
+            status: 'completed' as TransactionStatus,
+            voided_by: null,
+            voided_at: null,
+            void_reason: null,
+            refunded_by: null,
+            refunded_at: null,
+            refund_reason: null,
+          }
+        : row
+    ),
+  }
+
+  for (const item of items) {
+    const product = next.products.find((row) => row.id === item.product_id)
+    if (!product) continue
+    const before = Number(product.quantity_on_hand ?? 0)
+    const after = Math.max(0, before - Number(item.quantity ?? 0))
+    next = {
+      ...next,
+      products: next.products.map((row) => (row.id === item.product_id ? { ...row, quantity_on_hand: after } : row)),
+      stockMovements: [
+        ...next.stockMovements,
+        {
+          id: id(),
+          tenant_id: state.tenant.id,
+          product_id: item.product_id,
+          movement_type: 'outbound' as MovementType,
+          quantity: Number(item.quantity ?? 0),
+          quantity_before: before,
+          quantity_after: after,
+          reference_id: transactionId,
+          reference_type: action === 'voidSale' ? 'void_reversed' : 'refund_reversed',
+          location_id: transaction.location_id,
+          performed_by: userId,
+          notes: `Reversed ${action === 'voidSale' ? 'void' : 'refund'} of ${transaction.receipt_number}`,
+          created_at: now,
+          product,
+        },
+      ],
+    }
+  }
+
+  if (action === 'refundSale' && transaction.shift_id) {
+    const shift = next.cashShifts.find((row) => row.id === transaction.shift_id)
+    if (shift) {
+      const refundAmount = Number(transaction.total_amount ?? 0)
+      next = {
+        ...next,
+        cashShifts: next.cashShifts.map((row) =>
+          row.id === transaction.shift_id ? { ...row, total_sales: Number(row.total_sales ?? 0) + refundAmount, updated_at: now } : row
+        ),
+      }
+    }
+  }
+
+  next = {
+    ...next,
+    auditLogs: [
+      ...next.auditLogs,
+      {
+        id: id(),
+        tenant_id: state.tenant.id,
+        user_id: userId,
+        action: 'sale.cancellation.reversed',
+        target_type: 'sale',
+        target_id: transaction.id,
+        details: { receipt_number: transaction.receipt_number, original_action: action },
+        performed_by: userId,
+        performed_at: now,
+      },
+    ],
+  }
+
+  return syncAlerts(next)
+}
+
 export function createTransfer(
   state: DemoSystemState,
   payload: { productId: string; fromLocationId: string | null; toLocationId: string | null; quantity: number; notes?: string }
@@ -2950,7 +3236,13 @@ export function createTransfer(
   const product = state.products.find((row) => row.id === payload.productId)
   if (!product) return state
 
-  const fromLocationId = payload.fromLocationId ?? product.location_id ?? null
+  // An explicit `fromLocationId` of null means "consume from the product's
+  // total on-hand lots" (stock with no location-specific FIFO lots, or lots
+  // left at a null location). Only fall back to the product's own location when
+  // the caller didn't specify a source at all, so a deliberate "no location"
+  // transfer is never silently re-pointed at an empty product.location_id.
+  const fromLocationId =
+    payload.fromLocationId === undefined ? (product.location_id ?? null) : payload.fromLocationId || null
   const toLocationId = payload.toLocationId ?? null
   const requested = Math.max(0, Number(payload.quantity ?? 0))
   // Stock in a Waste / Defect / Reject location cannot be issued out, and that
@@ -2961,23 +3253,55 @@ export function createTransfer(
   if (requested <= 0 || !toLocationId || toLocationId === fromLocationId) return state
 
   const consume = consumeFifo(state, product.id, requested, fromLocationId)
+  // Cap to whatever is actually at the source instead of throwing. A transfer can
+  // never move more than what is physically present, and returning early (no-op)
+  // keeps the mutation from failing with a server/network error when the caller
+  // requests more than is available. consumeFifo already limits qty to the source.
   const qty = consume.consumedQuantity
   if (qty <= 0) return state
 
   const avgCost = qty > 0 ? consume.consumedCost / qty : 0
   const now = nowIso()
 
-  const fromLoc = state.locations.find((loc) => loc.id === fromLocationId)
   const toLoc = state.locations.find((loc) => loc.id === toLocationId)
-  const fromName = fromLoc?.name ?? 'Unknown'
+  // A move-all transfer sends a null source so it can pull from every location,
+  // so resolve the source name(s) from the product's actual lots instead of the
+  // (missing) fromLocationId — otherwise the movement note reads "← Unknown".
+  const sourceLocationIds = fromLocationId
+    ? [fromLocationId]
+    : [...new Set(
+        state.inventoryLots
+          .filter((lot) => lot.product_id === product.id && Number(lot.quantity ?? 0) > 0 && lot.location_id)
+          .map((lot) => lot.location_id as string)
+      )]
+  const fromName =
+    sourceLocationIds.length === 1
+      ? state.locations.find((loc) => loc.id === sourceLocationIds[0])?.name ?? 'Unknown'
+      : sourceLocationIds.length > 1
+        ? 'All locations'
+        : product.location?.name ?? 'Unassigned'
   const toName = toLoc?.name ?? 'Unknown'
 
   const sourceAfter = lotQuantity(consume.state, product.id, fromLocationId)
   const sourceBefore = sourceAfter + qty
   const destBefore = lotQuantity(state, product.id, toLocationId)
 
+  // Derive the transfer's ids from the lots actually consumed at the source. This
+  // is unique per transfer (each lot is consumed once) and identical between the
+  // client's optimistic run and the server's run, so reconciliation still merges
+  // them into one record. Basing ids on sourceBefore/destBefore instead reset to
+  // the same values whenever stock returns to an empty shelf, regenerating an
+  // existing id and causing "ON CONFLICT ... cannot affect row a second time".
+  const transferKey = deterministicUuid(
+    product.id,
+    fromLocationId ?? 'none',
+    toLocationId ?? 'none',
+    String(qty),
+    ...consume.consumedLotIds.sort()
+  )
+
   const destLot: InventoryLot = {
-    id: deterministicUuid(product.id, toLocationId ?? 'none', 'transfer-dest', String(qty), String(destBefore)),
+    id: deterministicUuid('transfer-dest', transferKey),
     tenant_id: state.tenant.id,
     product_id: product.id,
     quantity: qty,
@@ -2992,11 +3316,27 @@ export function createTransfer(
   let nextState: DemoSystemState = { ...consume.state, inventoryLots: [...consume.state.inventoryLots, destLot] }
   nextState = syncProductQuantity(nextState, product.id)
 
+  // Keep the product's stored location in sync with where its stock now lives.
+  // When a transfer empties the source and all remaining on-hand stock is
+  // consolidated at a single location (e.g. an exact-on-hand move), point the
+  // product at that location so the inventory list stops showing the old shelf.
+  const primaryLoc = primaryProductLocation(nextState, product.id)
+  if (primaryLoc) {
+    nextState = {
+      ...nextState,
+      products: nextState.products.map((p) => {
+        if (p.id !== product.id || p.location_id === primaryLoc) return p
+        const loc = nextState.locations.find((l) => l.id === primaryLoc)
+        return { ...p, location_id: primaryLoc, location: loc }
+      }),
+    }
+  }
+
   const productRef = nextState.products.find((row) => row.id === product.id)
   const destAfter = lotQuantity(nextState, product.id, toLocationId)
 
   const outMovement: StockMovement = {
-    id: deterministicUuid(product.id, fromLocationId ?? 'none', 'transfer-out', String(qty), String(sourceBefore)),
+    id: deterministicUuid('transfer-out', transferKey),
     tenant_id: state.tenant.id,
     product_id: product.id,
     movement_type: 'outbound',
@@ -3013,7 +3353,7 @@ export function createTransfer(
   }
 
   const inMovement: StockMovement = {
-    id: deterministicUuid(product.id, toLocationId ?? 'none', 'transfer-in', String(qty), String(destBefore)),
+    id: deterministicUuid('transfer-in', transferKey),
     tenant_id: state.tenant.id,
     product_id: product.id,
     movement_type: 'inbound',
@@ -3054,6 +3394,24 @@ export function resolveAlert(state: DemoSystemState, alertId: string): DemoSyste
         ? { ...alert, status: 'resolved', resolved_at: nowIso() }
         : alert
     ),
+  }
+}
+
+export function acknowledgeAllAlerts(state: DemoSystemState): DemoSystemState {
+  return {
+    ...state,
+    alerts: state.alerts.map((alert) =>
+      alert.status === 'open'
+        ? { ...alert, status: 'acknowledged', acknowledged_by: state.currentUserId || null, acknowledged_at: nowIso() }
+        : alert
+    ),
+  }
+}
+
+export function resolveAllAlerts(state: DemoSystemState): DemoSystemState {
+  return {
+    ...state,
+    alerts: state.alerts.map((alert) => ({ ...alert, status: 'resolved', resolved_at: nowIso() })),
   }
 }
 

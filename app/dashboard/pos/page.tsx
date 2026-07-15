@@ -10,9 +10,11 @@ import {
   CreditCard,
   Landmark,
   Minus,
+  MapPin,
   Package,
   Percent,
   Plus,
+  Store,
   Printer,
   QrCode,
   ReceiptText,
@@ -27,9 +29,9 @@ import {
   UserRound,
 } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
-import { formatTimestamp } from '@/lib/utils'
+import { formatTimestamp, formatCurrency } from '@/lib/utils'
 import { getRolePermissions } from '@/lib/access-control'
-import type { PaymentMethod, Tenant, CashShift, CashMovementKind, TransactionStatus } from '@/types/database'
+import type { PaymentAccount, PaymentMethod, Tenant, CashShift, CashMovementKind, TransactionStatus } from '@/types/database'
 
 type CartItem = {
   productId: string
@@ -44,7 +46,7 @@ type CartItem = {
 
 type PayMethod = PaymentMethod
 
-const PAYMENT_LABELS: Record<string, string> = {
+const MANUAL_LABELS: Record<string, string> = {
   cash: 'Cash',
   qr_ph: 'QR Ph (PayMongo)',
   gcash: 'GCash',
@@ -57,24 +59,87 @@ const PAYMENT_LABELS: Record<string, string> = {
 }
 
 function paymentLabel(method: string): string {
-  return PAYMENT_LABELS[method] ?? 'Other'
+  return MANUAL_LABELS[method] ?? 'Other'
 }
 
-const MANUAL_METHODS = new Set<PayMethod>(['gcash', 'maya', 'bdo', 'maribank'])
+// Thermal receipt printers use a limited built-in font (code page 437/850) that
+// cannot render the PHP peso sign (₱) or the bullet (•). Swap those for ASCII
+// so the printout is not garbled when sent through the system print dialog.
+function receiptMoney(value: number): string {
+  return formatCurrency(value).replace(/₱/g, 'PHP ')
+}
 
-function storePaymentDetails(tenant: Tenant, method: PaymentMethod) {
-  switch (method) {
-    case 'gcash':
-      return { account: tenant.gcash_account ?? null, qrUrl: tenant.gcash_qr_url ?? null }
-    case 'maya':
-      return { account: tenant.maya_account ?? null, qrUrl: tenant.maya_qr_url ?? null }
-    case 'bdo':
-      return { account: tenant.bdo_account ?? null, qrUrl: tenant.bdo_qr_url ?? null }
-    case 'maribank':
-      return { account: tenant.maribank_account ?? null, qrUrl: tenant.maribank_qr_url ?? null }
-    default:
-      return { account: null, qrUrl: null }
+// Build a fixed-width, monospace text receipt. Text-mode thermal drivers ignore
+// CSS layout (flexbox, alignment, spacing), so the printed receipt is rendered
+// as pre-formatted lines padded with spaces. 32 columns suits a 58mm printer.
+function buildTextReceipt(
+  r: ReceiptState,
+  dateText: string,
+  businessName: string,
+  location?: string | null,
+  station?: string | null,
+): string {
+  const W = 32
+  const clip = (s: string) => (s.length > W ? s.slice(0, W) : s)
+  const center = (s: string) => {
+    s = clip(s)
+    const left = Math.max(0, Math.floor((W - s.length) / 2))
+    return ' '.repeat(left) + s
   }
+  const row = (l: string, right: string) => {
+    const rgt = clip(right)
+    const sp = Math.max(1, W - l.length - rgt.length)
+    return l + ' '.repeat(sp) + rgt
+  }
+  const lines: string[] = []
+  lines.push(center('Simplicity that Scales'))
+  if (businessName) lines.push(center(businessName))
+  lines.push('')
+  lines.push(clip(`Store: ${location || 'Main'}`))
+  lines.push(clip(`Bay:   ${station || '—'}`))
+  lines.push(clip(`Sales Staff: ${r.cashierName}`))
+  lines.push(clip(`Receipt #: ${r.receiptNo}`))
+  lines.push(clip(`Date: ${dateText}`))
+  lines.push('')
+  lines.push('-'.repeat(W))
+  for (const item of r.items) {
+    lines.push(clip(item.name))
+    const meta = `${item.itemCode} ${item.quantity} x ${receiptMoney(item.sellingPrice)}`
+    lines.push(row(clip(meta), receiptMoney(item.sellingPrice * item.quantity - item.discount)))
+  }
+  lines.push('-'.repeat(W))
+  lines.push(row('Subtotal', receiptMoney(r.subtotal)))
+  if (r.discount > 0) lines.push(row(r.discountLabel ?? 'Discount', '-' + receiptMoney(r.discount)))
+  const payments = r.splitPayments?.length
+    ? r.splitPayments
+    : [{ payment_method: r.payMethod, amount: r.totalAmount }]
+  for (const p of payments) lines.push(row(paymentLabel(p.payment_method), receiptMoney(p.amount)))
+  if (r.reference) lines.push(row('Reference', r.reference))
+  const hasCash = r.payMethod === 'cash' || r.splitPayments?.some((s) => s.payment_method === 'cash')
+  if (hasCash && r.change > 0) lines.push(row('Change', receiptMoney(r.change)))
+  lines.push('-'.repeat(W))
+  lines.push(row('TOTAL', receiptMoney(r.totalAmount)))
+  lines.push('')
+  lines.push(center('Thank you for your purchase!'))
+  lines.push(center('Please come again.'))
+  lines.push('')
+  lines.push(center('This serves as your'))
+  lines.push(center('official sales receipt.'))
+  lines.push('')
+  lines.push(center('* * * * * * * * * * * *'))
+  return lines.join('\n')
+}
+
+// Map a dynamic payment account to a recognized payment_method enum value so
+// the sale records cleanly. Known labels keep their identity; everything else
+// falls back to a generic bucket by kind.
+function resolveAccountMethod(account: PaymentAccount): PaymentMethod {
+  const name = account.label.toLowerCase()
+  if (name.includes('gcash')) return 'gcash'
+  if (name.includes('maya')) return 'maya'
+  if (name.includes('bdo')) return 'bdo'
+  if (name.includes('maribank')) return 'maribank'
+  return account.kind === 'bank' ? 'bank_transfer' : 'qr_ph'
 }
 
 type QrSession = {
@@ -118,7 +183,7 @@ const blankCheckout: PendingSale = {
 }
 
 export default function POSPage() {
-  const { state, availableTenants, activeTenantId, completeSale, formatCurrency, notifyError, notifySuccess, voidSale, refundSale, openShift, closeShift, recordCashMovement } = useDemoSystem()
+  const { state, availableTenants, activeTenantId, completeSale, formatCurrency, notifyError, notifySuccess, voidSale, refundSale, requestDeletion, openShift, closeShift, recordCashMovement } = useDemoSystem()
   const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
   const role = activeTenant?.role ?? 'sales_staff'
   const perms = getRolePermissions(role)
@@ -133,6 +198,9 @@ export default function POSPage() {
   const [cat, setCat] = useState('All')
   const [cart, setCart] = useState<CartItem[]>([])
   const [payMethod, setPayMethod] = useState<PayMethod>('cash')
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null)
+  const paymentAccounts = state.tenant.payment_accounts ?? []
+  const selectedAccount = paymentAccounts.find((account) => account.id === selectedAccountId) ?? null
   const [tendered, setTendered] = useState('')
   const [reference, setReference] = useState('')
   const [qrZoom, setQrZoom] = useState<string | null>(null)
@@ -160,7 +228,7 @@ export default function POSPage() {
   const [cashAction, setCashAction] = useState<'cash_in' | 'cash_out'>('cash_in')
   const [openingFloat, setOpeningFloat] = useState('')
   const [countedCash, setCountedCash] = useState('')
-  const [shiftStation, setShiftStation] = useState('')
+  const [shiftStation, setShiftStation] = useState<string>(() => state.tenant.pos_stations?.[0] ?? '')
   const posStoreLocations = state.tenant.pos_store_locations ?? []
   const [shiftStoreLocationId, setShiftStoreLocationId] = useState<string>(() => posStoreLocations[0] ?? '')
   const [shiftNote, setShiftNote] = useState('')
@@ -173,6 +241,8 @@ export default function POSPage() {
   const [newSplitMethod, setNewSplitMethod] = useState<PayMethod>('bank_transfer')
   const [newSplitAmount, setNewSplitAmount] = useState('')
   const [newSplitReference, setNewSplitReference] = useState('')
+  const [voidBusy, setVoidBusy] = useState(false)
+  const [refundBusy, setRefundBusy] = useState(false)
 
   const currentShift = useMemo(() => state.cashShifts.find((shift) => shift.status === 'open'), [state.cashShifts])
   const posStoreLocationId = currentShift?.location_id ?? posStoreLocations[0] ?? ''
@@ -554,7 +624,7 @@ export default function POSPage() {
     const result = completeSale({
       payment_method: payMethod,
       payment_provider: 'manual',
-      payment_reference: reference.trim() || null,
+      payment_reference: reference.trim() || (selectedAccount ? selectedAccount.label : null),
       amount_tendered: tenderedForReceipt,
       location_id: posStoreLocationId || null,
       notes: `Sold at ${state.tenant.name}`,
@@ -603,6 +673,14 @@ export default function POSPage() {
       notifyError('Enter a valid starting cash amount.')
       return
     }
+    if (posStoreLocations.length > 0 && !shiftStoreLocationId) {
+      notifyError('Select a store location before opening a shift.')
+      return
+    }
+    if ((state.tenant.pos_stations?.length ?? 0) > 0 && !shiftStation) {
+      notifyError('Select a station / bay before opening a shift.')
+      return
+    }
     openShift({
       openingFloat: Number(openingFloat),
       locationId: shiftStoreLocationId || posStoreLocations[0] || null,
@@ -647,6 +725,7 @@ export default function POSPage() {
 
   function confirmVoid() {
     if (!targetTx) return
+    if (voidBusy) return
     if (!perms.canVoidSales) {
       notifyError('Access denied: you are not allowed to void sales.')
       return
@@ -655,19 +734,39 @@ export default function POSPage() {
       notifyError('Please provide a reason for voiding.')
       return
     }
+    const needsApproval = role === 'sales_staff'
+    if (needsApproval) {
+      const alreadyPending = state.deletionRequests.some(
+        (req) => req.target_id === targetTx.id && req.action === 'voidSale' && req.status === 'pending'
+      )
+      if (alreadyPending) {
+        notifyError('A void request for this transaction is already pending approval.')
+        return
+      }
+    }
+    setVoidBusy(true)
     voidSale(targetTx.id, voidReason.trim())
+    if (needsApproval) {
+      requestDeletion('voidSale', 'sale', targetTx.id, {
+        receipt_number: targetTx.receipt_number,
+        total_amount: Number(targetTx.total_amount ?? 0),
+        reason: voidReason.trim(),
+      })
+    }
     setShowVoidModal(false)
     setTargetTx(null)
     setVoidReason('')
-    notifySuccess('Transaction voided')
+    notifySuccess(needsApproval ? 'Transaction voided — pending supervisor approval.' : 'Transaction voided successfully.')
     if (lastReceipt && targetTx.receipt_number === lastReceipt.receiptNo) {
       setShowReceipt(false)
       setLastReceipt(null)
     }
+    setTimeout(() => setVoidBusy(false), 1000)
   }
 
   function confirmRefund() {
     if (!targetTx) return
+    if (refundBusy) return
     if (!perms.canRefundSales) {
       notifyError('Access denied: only a manager can process refunds.')
       return
@@ -676,15 +775,34 @@ export default function POSPage() {
       notifyError('Please provide a reason for the refund.')
       return
     }
+    const needsApproval = role === 'sales_staff'
+    if (needsApproval) {
+      const alreadyPending = state.deletionRequests.some(
+        (req) => req.target_id === targetTx.id && req.action === 'refundSale' && req.status === 'pending'
+      )
+      if (alreadyPending) {
+        notifyError('A refund request for this transaction is already pending approval.')
+        return
+      }
+    }
+    setRefundBusy(true)
     refundSale(targetTx.id, refundReason.trim())
+    if (needsApproval) {
+      requestDeletion('refundSale', 'sale', targetTx.id, {
+        receipt_number: targetTx.receipt_number,
+        total_amount: Number(targetTx.total_amount ?? 0),
+        reason: refundReason.trim(),
+      })
+    }
     setShowRefundModal(false)
     setTargetTx(null)
     setRefundReason('')
-    notifySuccess('Refund processed and stock restored')
+    notifySuccess(needsApproval ? 'Refund processed — pending supervisor approval.' : 'Refund processed successfully.')
     if (lastReceipt && targetTx.receipt_number === lastReceipt.receiptNo) {
       setShowReceipt(false)
       setLastReceipt(null)
     }
+    setTimeout(() => setRefundBusy(false), 1000)
   }
 
   const totalSplitAmount = splitPayments.reduce((sum, split) => sum + split.amount, 0)
@@ -738,6 +856,18 @@ export default function POSPage() {
               {cashierLabel}
               {currentShift?.station ? ` · ${currentShift.station}` : ''}
             </span>
+            {currentShift?.pos_store_location ? (
+              <span className="badge badge-gray" title="Store location">
+                <MapPin size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
+                {currentShift.pos_store_location}
+              </span>
+            ) : null}
+            {currentShift?.station ? (
+              <span className="badge badge-gray" title="Station / bay">
+                <Store size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
+                {currentShift.station}
+              </span>
+            ) : null}
             <span className="badge badge-gray">
               {currentShift
                 ? `In ${formatClock(currentShift.opened_at)}`
@@ -820,6 +950,65 @@ export default function POSPage() {
             </div>
           )
         })}
+      </section>
+
+      <section className="card" style={{ padding: 16, borderRadius: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+          <div>
+            <h3 style={{ fontSize: 15, fontWeight: 800, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Wallet size={16} color="#3B82F6" /> Cash Drawer
+            </h3>
+            <p style={{ fontSize: 12, color: '#64748B', marginTop: 3 }}>
+              {currentShift ? `Shift ${currentShift.shift_code}` : 'Open a shift to record cash'}
+            </p>
+          </div>
+        </div>
+
+        {currentShift ? (() => {
+          const shiftMovements = state.cashMovements
+            .filter((movement) => movement.shift_id === currentShift.id)
+            .slice()
+            .sort((a, b) => b.created_at.localeCompare(a.created_at))
+          const balance = shiftMovements.reduce(
+            (sum, movement) => sum + (movement.kind === 'cash_out' ? -Number(movement.amount ?? 0) : Number(movement.amount ?? 0)),
+            Number(currentShift.opening_float ?? 0)
+          )
+          return (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderRadius: 12, background: '#F0FDF4', border: '1px solid #BBF7D0', marginBottom: 10 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#047857' }}>Drawer balance</span>
+                <span style={{ fontSize: 18, fontWeight: 900, color: '#047857' }}>{formatCurrency(balance)}</span>
+              </div>
+              {shiftMovements.length === 0 ? (
+                <div style={{ fontSize: 12, color: '#94A3B8', textAlign: 'center', padding: '14px 0' }}>
+                  No cash movements yet. Use Cash In / Cash Out above.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto' }}>
+                  {shiftMovements.map((movement) => {
+                    const isOut = movement.kind === 'cash_out'
+                    const label = movement.kind === 'cash_in' ? 'Cash In' : movement.kind === 'cash_out' ? 'Cash Out' : movement.kind
+                    return (
+                      <div key={movement.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '8px 10px', borderRadius: 10, background: '#F8FBFF', border: '1px solid #E2E8F0' }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A' }}>{label}</div>
+                          <div style={{ fontSize: 11, color: '#64748B', marginTop: 1 }}>{movement.note ? `${movement.note} · ` : ''}{formatClock(movement.created_at)}</div>
+                        </div>
+                        <span style={{ fontSize: 14, fontWeight: 900, color: isOut ? '#DC2626' : '#16A34A' }}>
+                          {isOut ? '−' : '+'}{formatCurrency(Number(movement.amount ?? 0))}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </>
+          )
+        })() : (
+          <div style={{ fontSize: 12, color: '#94A3B8', textAlign: 'center', padding: '14px 0' }}>
+            Open a shift to record cash in / cash out movements.
+          </div>
+        )}
       </section>
 
       <section className="card" style={{ padding: 14, borderRadius: 20 }}>
@@ -1170,13 +1359,13 @@ export default function POSPage() {
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, marginBottom: 12 }}>
-                {([
-                  ['cash', 'Cash', Banknote],
-                  ['qr_ph', 'QR Ph', QrCode],
-                ] as const).map(([value, label, Icon]) => (
-                  <button
-                    key={value}
-                    onClick={() => setPayMethod(value)}
+                  {([
+                    ['cash', 'Cash', Banknote],
+                    ['qr_ph', 'QR Ph', QrCode],
+                  ] as const).map(([value, label, Icon]) => (
+                    <button
+                      key={value}
+                      onClick={() => { setSelectedAccountId(null); setPayMethod(value) }}
                     style={{
                       padding: '10px 8px',
                       borderRadius: 12,
@@ -1201,33 +1390,36 @@ export default function POSPage() {
                 Direct (store account / e-wallet)
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, marginBottom: 12 }}>
-                {([
-                  ['gcash', 'GCash', Wallet],
-                  ['maya', 'Maya', Wallet],
-                  ['bdo', 'BDO', Landmark],
-                  ['maribank', 'Maribank', Landmark],
-                ] as const).map(([value, label, Icon]) => (
-                  <button
-                    key={value}
-                    onClick={() => setPayMethod(value)}
-                    style={{
-                      padding: '10px 8px',
-                      borderRadius: 12,
-                      border: `1px solid ${payMethod === value ? '#3B82F6' : '#D8E4F2'}`,
-                      background: payMethod === value ? '#EFF6FF' : '#FFFFFF',
-                      color: payMethod === value ? '#2563EB' : '#475569',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 6,
-                      fontSize: 12,
-                      fontWeight: 700,
-                    }}
-                  >
-                    <Icon size={14} />{label}
-                  </button>
-                ))}
+                {paymentAccounts.length === 0 ? (
+                  <div style={{ gridColumn: '1 / -1', fontSize: 12, color: '#94A3B8', padding: '6px 2px' }}>
+                    No store payment accounts yet. Add them in Settings → Store payment accounts.
+                  </div>
+                ) : paymentAccounts.map((account) => {
+                  const Icon = account.kind === 'bank' ? Landmark : Wallet
+                  const active = selectedAccountId === account.id
+                  return (
+                    <button
+                      key={account.id}
+                      onClick={() => { setSelectedAccountId(account.id); setPayMethod(resolveAccountMethod(account)) }}
+                      style={{
+                        padding: '10px 8px',
+                        borderRadius: 12,
+                        border: `1px solid ${active ? '#3B82F6' : '#D8E4F2'}`,
+                        background: active ? '#EFF6FF' : '#FFFFFF',
+                        color: active ? '#2563EB' : '#475569',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 6,
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      <Icon size={14} />{account.label || 'Account'}
+                    </button>
+                  )
+                })}
               </div>
 
               <div style={{ fontSize: 11, color: '#64748B', fontWeight: 600, margin: '2px 0 8px' }}>
@@ -1351,9 +1543,9 @@ export default function POSPage() {
                 </div>
               )}
 
-              {MANUAL_METHODS.has(payMethod) && (() => {
-                const label = paymentLabel(payMethod)
-                const details = storePaymentDetails(state.tenant, payMethod)
+              {selectedAccount && (() => {
+                const label = selectedAccount.label || 'Account'
+                const details = { account: selectedAccount.account || null, qrUrl: selectedAccount.qr_url || null }
                 return (
                   <div style={{ marginBottom: 12, padding: '12px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
                     <div style={{ fontSize: 12, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>Scan this to pay — {label}</div>
@@ -1456,6 +1648,9 @@ export default function POSPage() {
                 const isCompleted = tx.status === 'completed'
                 const isVoided = tx.status === 'voided'
                 const isRefunded = tx.status === 'refunded'
+                const pendingApproval = state.deletionRequests.some(
+                  (req) => req.target_id === tx.id && (req.action === 'voidSale' || req.action === 'refundSale') && req.status === 'pending'
+                )
                 return (
                   <div
                     key={tx.id}
@@ -1514,8 +1709,9 @@ export default function POSPage() {
                         <div style={{ fontSize: 12, fontWeight: 800, color: '#0F172A' }}>{tx.receipt_number}</div>
                         <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>
                            {formatTimestamp(tx.created_at)}
-                          {isVoided && <span style={{ marginLeft: 6, color: '#B91C1C', fontWeight: 700 }}>VOIDED</span>}
-                          {isRefunded && <span style={{ marginLeft: 6, color: '#047857', fontWeight: 700 }}>REFUNDED</span>}
+                           {isVoided && <span style={{ marginLeft: 6, color: '#B91C1C', fontWeight: 700 }}>VOIDED</span>}
+                           {isRefunded && <span style={{ marginLeft: 6, color: '#047857', fontWeight: 700 }}>REFUNDED</span>}
+                           {pendingApproval && <span style={{ marginLeft: 6, color: '#B45309', fontWeight: 700 }}>· PENDING APPROVAL</span>}
                         </div>
                       </div>
                       <div style={{ textAlign: 'right' }}>
@@ -1533,7 +1729,7 @@ export default function POSPage() {
                           <button
                             type="button"
                             className="btn btn-ghost btn-sm"
-                            onClick={() => { setTargetTx(tx); setShowVoidModal(true) }}
+                            onClick={(e) => { e.stopPropagation(); setTargetTx(tx); setShowVoidModal(true) }}
                             style={{ fontSize: 10, padding: '2px 8px', color: '#B91C1C' }}
                           >
                             <Trash2 size={12} /> Void
@@ -1543,7 +1739,7 @@ export default function POSPage() {
                           <button
                             type="button"
                             className="btn btn-ghost btn-sm"
-                            onClick={() => { setTargetTx(tx); setShowRefundModal(true) }}
+                            onClick={(e) => { e.stopPropagation(); setTargetTx(tx); setShowRefundModal(true) }}
                             style={{ fontSize: 10, padding: '2px 8px', color: '#047857' }}
                           >
                             <Repeat size={12} /> Refund
@@ -1561,14 +1757,16 @@ export default function POSPage() {
 
       {showReceipt && lastReceipt && (
         <div className="modal-overlay">
-          <div className="modal pos-receipt-modal" style={{ maxWidth: 400, padding: 0, overflow: 'hidden' }}>
+          <div className="modal pos-receipt-modal" style={{ maxWidth: 'fit-content', padding: 0 }}>
             <div className="pos-receipt-paper">
+              <div className="pos-receipt-screen">
               <div className="pos-receipt-header">
                 <img
                   src="/images/codentra-removebg-preview.png"
                   alt="Codentra"
                   className="pos-receipt-logo"
                 />
+                <div className="pos-receipt-brand">CODERTRA</div>
                 <div className="pos-receipt-subtitle">{state.tenant.name}</div>
                 <div className="pos-receipt-tagline">Simplicity that Scales</div>
                 <div className="pos-receipt-meta">Receipt #{lastReceipt.receiptNo}</div>
@@ -1583,9 +1781,9 @@ export default function POSPage() {
                   <div key={`${item.productId}-${item.itemCode}`} className="pos-receipt-line">
                     <div className="pos-receipt-line-main">
                       <div className="pos-receipt-item-name">{item.name}</div>
-                      <div className="pos-receipt-item-meta">{item.itemCode} • {item.quantity} x {formatCurrency(item.sellingPrice)}</div>
-                    </div>
-                    <div className="pos-receipt-line-total">{formatCurrency(item.sellingPrice * item.quantity - item.discount)}</div>
+                    <div className="pos-receipt-item-meta">{item.itemCode} | {item.quantity} x {receiptMoney(item.sellingPrice)}</div>
+                  </div>
+                  <div className="pos-receipt-line-total">{receiptMoney(item.sellingPrice * item.quantity - item.discount)}</div>
                   </div>
                 ))}
               </div>
@@ -1593,15 +1791,15 @@ export default function POSPage() {
               <div className="pos-receipt-divider" />
 
               <div className="pos-receipt-totals">
-                <div><span>Subtotal</span><strong>{formatCurrency(lastReceipt.subtotal)}</strong></div>
+                <div><span>Subtotal</span><strong>{receiptMoney(lastReceipt.subtotal)}</strong></div>
                 {lastReceipt.discount > 0 && (
-                  <div><span>{lastReceipt.discountLabel ?? 'Discount'}</span><strong>-{formatCurrency(lastReceipt.discount)}</strong></div>
+                  <div><span>{lastReceipt.discountLabel ?? 'Discount'}</span><strong>-{receiptMoney(lastReceipt.discount)}</strong></div>
                 )}
                 {lastReceipt.splitPayments?.length ? (
                   lastReceipt.splitPayments.map((split) => (
                     <div key={split.payment_method}>
                       <span>{paymentLabel(split.payment_method)}</span>
-                      <strong>{formatCurrency(split.amount)}</strong>
+                      <strong>{receiptMoney(split.amount)}</strong>
                     </div>
                   ))
                 ) : (
@@ -1612,8 +1810,7 @@ export default function POSPage() {
                 ) : null}
                 {(lastReceipt.payMethod === 'cash' || lastReceipt.splitPayments?.some((split) => split.payment_method === 'cash')) && (
                   <>
-                    <div><span>Tendered</span><strong>{formatCurrency(lastReceipt.tendered)}</strong></div>
-                    <div><span>Change</span><strong>{formatCurrency(lastReceipt.change)}</strong></div>
+                    <div><span>Change</span><strong>{receiptMoney(lastReceipt.change)}</strong></div>
                   </>
                 )}
               </div>
@@ -1622,13 +1819,29 @@ export default function POSPage() {
 
               <div className="pos-receipt-total-row">
                 <span>TOTAL</span>
-                <strong>{formatCurrency(lastReceipt.totalAmount)}</strong>
+                <strong>{receiptMoney(lastReceipt.totalAmount)}</strong>
               </div>
 
               <div className="pos-receipt-footer">
                 <div>Thank you.</div>
                 <div>Please keep this receipt.</div>
               </div>
+              </div>
+              {/* Logo prints on raster/ESC-POS drivers; the text "CODERTRA" brand
+                  in the receipt below is the fallback for text-only drivers. */}
+              <img src="/images/codentra-removebg-preview.png" alt="Codentra" className="pos-receipt-logo" />
+
+              <pre className="pos-receipt-text">
+                {lastReceipt
+                  ? buildTextReceipt(
+                      lastReceipt,
+                      receiptDateText,
+                      state.tenant.name,
+                      currentShift?.location_id,
+                      currentShift?.station,
+                    )
+                  : ''}
+              </pre>
             </div>
 
             <div className="pos-print-hide" style={{ display: 'flex', gap: 10, padding: 16, borderTop: '1px solid #E2E8F0' }}>
@@ -1853,7 +2066,7 @@ export default function POSPage() {
             <div style={{ padding: '20px 20px 0' }}>
               <h3 style={{ fontSize: 16, fontWeight: 800, color: '#B91C1C', marginBottom: 4 }}>Void Transaction</h3>
               <p style={{ fontSize: 12, color: '#64748B', marginBottom: 12 }}>
-                This will cancel {targetTx?.receipt_number ?? 'this transaction'} and restore the stock. This action cannot be undone.
+                This voids {targetTx?.receipt_number ?? 'this transaction'} and restores the stock right now. Your supervisor will review it afterwards — if they reject it, the sale is reinstated.
               </p>
               <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>Reason for voiding</label>
               <input
@@ -1864,11 +2077,11 @@ export default function POSPage() {
                 style={{ height: 42, borderRadius: 12, marginBottom: 16 }}
               />
               <div style={{ display: 'flex', gap: 10 }}>
-                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setShowVoidModal(false); setTargetTx(null); setVoidReason('') }}>
+                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setShowVoidModal(false); setTargetTx(null); setVoidReason(''); setVoidBusy(false) }}>
                   <X size={14} /> Cancel
                 </button>
-                <button className="btn btn-danger" style={{ flex: 1 }} onClick={confirmVoid}>
-                  <Trash2 size={14} /> Void
+                <button className="btn btn-danger" style={{ flex: 1 }} onClick={confirmVoid} disabled={voidBusy}>
+                  <Trash2 size={14} /> {voidBusy ? 'Processing...' : 'Void'}
                 </button>
               </div>
             </div>
@@ -1880,9 +2093,9 @@ export default function POSPage() {
         <div className="modal-overlay pos-print-hide">
           <div className="modal" style={{ maxWidth: 420 }} onClick={(event) => event.stopPropagation()}>
             <div style={{ padding: '20px 20px 0' }}>
-              <h3 style={{ fontSize: 16, fontWeight: 800, color: '#047857', marginBottom: 4 }}>Process Refund</h3>
+              <h3 style={{ fontSize: 16, fontWeight: 800, color: '#047857', marginBottom: 4 }}>Refund Transaction</h3>
               <p style={{ fontSize: 12, color: '#64748B', marginBottom: 12 }}>
-                This will refund {targetTx?.receipt_number ?? 'this transaction'} and restore the stock to inventory.
+                This refunds {targetTx?.receipt_number ?? 'this transaction'} and restores the stock right now. Your supervisor will review it afterwards — if they reject it, the sale is reinstated.
               </p>
               <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>Reason for refund</label>
               <input
@@ -1893,11 +2106,11 @@ export default function POSPage() {
                 style={{ height: 42, borderRadius: 12, marginBottom: 16 }}
               />
               <div style={{ display: 'flex', gap: 10 }}>
-                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setShowRefundModal(false); setTargetTx(null); setRefundReason('') }}>
+                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setShowRefundModal(false); setTargetTx(null); setRefundReason(''); setRefundBusy(false) }}>
                   <X size={14} /> Cancel
                 </button>
-                <button className="btn btn-primary" style={{ flex: 1 }} onClick={confirmRefund}>
-                  <Repeat size={14} /> Refund
+                <button className="btn btn-primary" style={{ flex: 1 }} onClick={confirmRefund} disabled={refundBusy}>
+                  <Repeat size={14} /> {refundBusy ? 'Processing...' : 'Refund'}
                 </button>
               </div>
             </div>

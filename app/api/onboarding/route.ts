@@ -68,6 +68,7 @@ export async function POST(request: NextRequest) {
       bdo_qr_url: null,
       maribank_account: null,
       maribank_qr_url: null,
+      payment_accounts: [],
       pos_location_id: null,
       pos_store_locations: [],
       pos_stations: [],

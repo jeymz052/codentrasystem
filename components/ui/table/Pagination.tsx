@@ -52,6 +52,7 @@ export function Pagination({
             searchPlaceholder="Search..."
             ariaLabel="Rows per page"
             style={{ width: 'auto', height: 32, fontSize: 12 }}
+            dropUp
             value={String(pageSize)}
             onChange={(value) => onPageSizeChange(Number(value))}
             options={pageSizeOptions.map((size) => ({ value: String(size), label: String(size) }))}

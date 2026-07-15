@@ -29,6 +29,7 @@ export type MutationAction =
   | 'deleteProductionTemplate'
   | 'produceFinishedGood'
   | 'createPO'
+  | 'approvePurchaseOrder'
   | 'receivePO'
   | 'updatePurchaseOrder'
   | 'cancelPurchaseOrder'
@@ -42,6 +43,7 @@ export type MutationAction =
   | 'acknowledge'
   | 'resolve'
   | 'recordWaste'
+  | 'setWasteTypes'
   | 'transferStock'
   | 'requestDeletion'
   | 'approveDeletion'
@@ -54,6 +56,16 @@ export type AlertStatus = 'open' | 'acknowledged' | 'resolved'
 export type ShiftStatus = 'open' | 'closed' | 'voided'
 export type PaymentMethod = 'cash' | 'qr_ph' | 'gcash' | 'maya' | 'bdo' | 'maribank' | 'card' | 'bank_transfer' | 'other'
 export type TransactionStatus = 'completed' | 'voided' | 'refunded'
+
+export type PaymentAccountKind = 'ewallet' | 'bank'
+
+export interface PaymentAccount {
+  id: string
+  label: string
+  kind: PaymentAccountKind
+  account: string
+  qr_url: string | null
+}
 
 export interface Tenant {
   id: string
@@ -84,6 +96,7 @@ export interface Tenant {
   bdo_qr_url: string | null
   maribank_account: string | null
   maribank_qr_url: string | null
+  payment_accounts: PaymentAccount[]
   stripe_customer_id: string | null
   stripe_subscription_id: string | null
   stripe_price_id: string | null
@@ -250,6 +263,7 @@ export interface StockMovement {
   reference_id: string | null
   reference_type: string | null
   location_id: string | null
+  pos_store_location?: string | null
   performed_by: string | null
   notes: string | null
   created_at: string
@@ -294,6 +308,7 @@ export interface SalesTransaction {
   cashier_id: string | null
   shift_id: string | null
   location_id: string | null
+  pos_store_location?: string | null
   status: TransactionStatus
   payment_method: PaymentMethod
   payment_provider?: string | null
@@ -325,6 +340,7 @@ export interface CashShift {
   opened_by: string
   closed_by: string | null
   location_id: string | null
+  pos_store_location?: string | null
   status: ShiftStatus
   opening_float: number
   closing_float: number | null
@@ -405,7 +421,7 @@ export interface DeletionRequest {
   tenant_id: string
   requested_by: string
   action: MutationAction
-  target_type: 'product' | 'supplier' | 'recipe' | 'production_template' | 'location'
+  target_type: 'product' | 'supplier' | 'recipe' | 'production_template' | 'location' | 'sale' | 'purchase_order'
   target_id: string
   details: Record<string, unknown>
   status: DeletionRequestStatus

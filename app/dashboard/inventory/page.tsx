@@ -7,9 +7,30 @@ import { useDemoSystem } from '@/components/demo-system-provider'
 import { getRolePermissions } from '@/lib/access-control'
 import { formatTimestamp } from '@/lib/utils'
 import type { ProductDraft } from '@/lib/demo-system'
+import { isWasteReversed } from '@/lib/demo-system'
 import type { InventoryLot } from '@/types/database'
 import { useTableState, type SortDirection } from '@/lib/use-table-state'
 import { TableToolbar, type ToolbarFilter } from '@/components/ui/table/TableToolbar'
+
+// Resolve the location that actually holds a product's on-hand stock. A
+// product's `location_id` can drift from where its FIFO lots are stored, which
+// made the transfer check report "Only 0 units available" even though stock
+// existed. Prefer the explicitly requested source when it holds stock;
+// otherwise fall back to the location that actually holds the on-hand quantity.
+function resolveStockSourceLocation(
+  lots: InventoryLot[],
+  productId: string,
+  requestedSource: string | null
+): string | null {
+  const atRequested = lots
+    .filter((lot) => lot.product_id === productId && lot.location_id === requestedSource)
+    .reduce((sum, lot) => sum + Number(lot.quantity ?? 0), 0)
+  if (atRequested > 0) return requestedSource
+  const held = [...lots]
+    .filter((lot) => lot.product_id === productId && Number(lot.quantity ?? 0) > 0 && lot.location_id)
+    .sort((a, b) => Number(b.quantity ?? 0) - Number(a.quantity ?? 0))[0]
+  return held?.location_id ?? requestedSource
+}
 import { SortHeader } from '@/components/ui/table/SortHeader'
 import { Pagination } from '@/components/ui/table/Pagination'
 import { SelectAllCheckbox, RowCheckbox, BulkActionBar } from '@/components/ui/table/TableSelection'
@@ -27,6 +48,7 @@ type ProductForm = {
   supplier: string
   location: string
   description: string
+  barcode: string
   finishedGood: boolean
 }
 
@@ -42,24 +64,23 @@ const EMPTY_FORM: ProductForm = {
   supplier: '',
   location: '',
   description: '',
+  barcode: '',
   finishedGood: false,
 }
 
 type LocationStock = { locationId: string; name: string; quantity: number }
 
 function StockLocationBreakdown({ items, wasteIds }: { items: LocationStock[]; wasteIds?: Set<string> }) {
-  if (items.length <= 1) return null
+  const filtered = items.filter((item) => !wasteIds?.has(item.locationId))
+  if (filtered.length <= 1) return null
   return (
     <div style={{ marginTop: 5, display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-end', fontSize: 10, color: '#64748B', lineHeight: 1.3 }}>
-      {items.map((item) => {
-        const isWaste = wasteIds?.has(item.locationId)
-        return (
-          <div key={item.locationId} style={{ display: 'flex', gap: 5, alignItems: 'baseline', justifyContent: 'flex-end' }}>
-            <strong style={{ color: isWaste ? '#EF4444' : '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>{item.quantity}</strong>
-            <span style={{ textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: isWaste ? '#EF4444' : undefined }}>@ {item.name}</span>
-          </div>
-        )
-      })}
+      {filtered.map((item) => (
+        <div key={item.locationId} style={{ display: 'flex', gap: 5, alignItems: 'baseline', justifyContent: 'flex-end' }}>
+          <strong style={{ color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>{item.quantity}</strong>
+          <span style={{ textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>@ {item.name}</span>
+        </div>
+      ))}
     </div>
   )
 }
@@ -122,11 +143,36 @@ function toNumber(value: unknown) {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+function isFinishedGoodCategory(categoryValue: string): boolean {
+  const norm = normalizeHeader(categoryValue)
+  if (!norm) return false
+  if (norm === 'fg' || norm === 'finishedgood' || norm === 'finishedgoods') return true
+  return norm.includes('finished good') || norm.includes('finish good')
+}
+
+function parseFinishedGoodFlag(value: unknown): boolean {
+  const norm = normalizeHeader(value)
+  if (!norm) return false
+  if (['yes', 'y', 'true', '1', 'finished', 'finished good', 'fg'].includes(norm)) return true
+  return norm.startsWith('finish')
+}
+
+const FINISHED_GOOD_COLUMN_ALIASES = [
+  'finished good',
+  'finished_good',
+  'is finished good',
+  'is_finished_good',
+  'finishedgood',
+  'product type',
+  'type',
+]
+
 function normalizeImportRow(row: Record<string, unknown> | unknown[]): ProductDraft | null {
+  let normalizedEntries: Record<string, unknown> = {}
   const values = Array.isArray(row)
     ? row
     : (() => {
-        const normalizedEntries = Object.entries(row).reduce<Record<string, unknown>>((accumulator, [key, value]) => {
+        normalizedEntries = Object.entries(row).reduce<Record<string, unknown>>((accumulator, [key, value]) => {
           const normalized = normalizeHeader(key)
           if (normalized) accumulator[normalized] = value
           return accumulator
@@ -163,11 +209,42 @@ function normalizeImportRow(row: Record<string, unknown> | unknown[]): ProductDr
   }
 
   if (!draft.item_code || !draft.name) return null
-  return draft
+
+  // A product whose category is named like "Finished Good" (or that has an
+  // explicit finished-good column set to yes/true) is auto-marked as a
+  // finished good on import. The Finished Good toggle in the add/edit form is
+  // still available for manual control.
+  let isFinishedGood = isFinishedGoodCategory(draft.category)
+  if (!isFinishedGood) {
+    for (const alias of FINISHED_GOOD_COLUMN_ALIASES) {
+      const value = normalizedEntries[alias]
+      if (value !== undefined && value !== '' && parseFinishedGoodFlag(value)) {
+        isFinishedGood = true
+        break
+      }
+    }
+  }
+
+  // Optional barcode column (barcode / upc / ean). Strips surrounding whitespace
+  // and quotes so scanner output maps cleanly to the product.
+  const BARCODE_ALIASES = ['barcode', 'bar code', 'upc', 'ean']
+  let barcode: string | undefined
+  for (const alias of BARCODE_ALIASES) {
+    const value = normalizedEntries[alias]
+    if (value !== undefined && value !== '') {
+      const cleaned = String(value).replace(/^["'\s]+|["'\s]+$/g, '').trim()
+      if (cleaned) {
+        barcode = cleaned
+        break
+      }
+    }
+  }
+
+  return { ...draft, is_finished_good: isFinishedGood, barcode }
 }
 
 export default function InventoryPage() {
-  const { state, availableTenants, activeTenantId, saveProduct, removeProduct, removeProducts, importProductRows, setWasteTypes, transferStock, toggleProduct, requestDeletion, formatCurrency, notifySuccess, notifyError } = useDemoSystem()
+  const { state, availableTenants, activeTenantId, saveProduct, removeProduct, removeProducts, importProductRows, setWasteTypes, reverseWaste, transferStock, toggleProduct, requestDeletion, formatCurrency, notifySuccess, notifyError } = useDemoSystem()
   const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
   const role = activeTenant?.role ?? 'admin'
   const perms = getRolePermissions(role)
@@ -183,10 +260,12 @@ export default function InventoryPage() {
   const [importRows, setImportRows] = useState<ProductDraft[]>([])
   const [wasteModal, setWasteModal] = useState<string | null>(null)
   const [wasteDraft, setWasteDraft] = useState<{ waste: string; defect: string; reject: string }>({ waste: '', defect: '', reject: '' })
+  const [wasteRemark, setWasteRemark] = useState('')
   const [lotsModal, setLotsModal] = useState<string | null>(null)
   const [transferModal, setTransferModal] = useState<string | null>(null)
   const [warningsFilter, setWarningsFilter] = useState<null | 'low' | 'out'>(null)
   const [wasteSummaryModal, setWasteSummaryModal] = useState<WasteType | 'all' | null>(null)
+  const [wasteReverseConfirm, setWasteReverseConfirm] = useState<string | null>(null)
   const [transferTo, setTransferTo] = useState('')
   const [transferFrom, setTransferFrom] = useState('')
   const [transferQty, setTransferQty] = useState('')
@@ -226,6 +305,7 @@ export default function InventoryPage() {
     for (const lot of state.inventoryLots) {
       const quantity = Number(lot.quantity ?? 0)
       if (quantity <= 0) continue
+      if (lot.location_id && wasteLocationIds.includes(lot.location_id)) continue
       const key = lot.location_id ?? 'unassigned'
       const arr = map.get(lot.product_id) ?? []
       const existing = arr.find((entry) => entry.locationId === key)
@@ -235,7 +315,7 @@ export default function InventoryPage() {
     }
     for (const arr of map.values()) arr.sort((a, b) => b.quantity - a.quantity)
     return map
-  }, [state.inventoryLots, state.locations])
+  }, [state.inventoryLots, state.locations, wasteLocationIds])
 
   const quarantineLocations = state.locations.filter((location) => location.is_waste_location)
   const quarantineStock = useMemo(() => {
@@ -266,7 +346,12 @@ export default function InventoryPage() {
     const productFor = (movement: (typeof state.stockMovements)[number]) =>
       movement.product ?? state.products.find((product) => product.id === movement.product_id)
     return state.stockMovements
-      .filter((movement) => WASTE_TYPES.includes(movement.movement_type as WasteType) && movement.reference_type !== 'waste_reversal')
+      .filter(
+        (movement) =>
+          WASTE_TYPES.includes(movement.movement_type as WasteType) &&
+          movement.reference_type !== 'waste_reversal' &&
+          !isWasteReversed(state, movement.id)
+      )
       .map((movement) => ({
         id: movement.id,
         type: movement.movement_type as WasteType,
@@ -302,6 +387,7 @@ export default function InventoryPage() {
         unitCost: Number(product.unit_cost ?? 0),
         price: Number(product.selling_price ?? 0),
         locationName: product.location?.name ?? 'Unassigned',
+        barcode: product.barcode ?? '',
         wasteTotal: waste,
         status: waste > 0 ? 'waste' : status,
       }
@@ -399,6 +485,7 @@ export default function InventoryPage() {
       location: product.location?.name ?? state.locations.find((location) => location.id === product.location_id)?.name ?? '',
       description: product.description ?? '',
       finishedGood: product.is_finished_good ?? false,
+      barcode: product.barcode ?? '',
     })
   }
 
@@ -428,6 +515,7 @@ export default function InventoryPage() {
       location: input.location.trim(),
       description: input.description.trim(),
       is_finished_good: input.finishedGood,
+      barcode: input.barcode.trim(),
     }
   }
 
@@ -469,11 +557,13 @@ export default function InventoryPage() {
       defect: String(quarantineQty(product.id, 'defect')),
       reject: String(quarantineQty(product.id, 'reject')),
     })
+    setWasteRemark('')
   }
 
   function closeWaste() {
     setWasteModal(null)
     setWasteDraft({ waste: '', defect: '', reject: '' })
+    setWasteRemark('')
   }
 
   function handleSaveWaste() {
@@ -485,9 +575,41 @@ export default function InventoryPage() {
       defect: Math.max(0, Number(wasteDraft.defect) || 0),
       reject: Math.max(0, Number(wasteDraft.reject) || 0),
     }
-    setWasteTypes(product.id, draft)
+    // setWasteTypes reconciles each type to the requested quantity: it restores
+    // whatever is already quarantined back to sellable stock, then re-records
+    // the new targets. So the real pool available to distribute across waste /
+    // defect / reject is the current sellable on-hand PLUS everything already
+    // quarantined for this product — not just the sellable on-hand. Capping
+    // against on-hand alone was the source of the "editing waste inflates stock
+    // on hand" bug (e.g. 100 -> 25/25/25 -> edit waste to 50 left 75 on hand).
+    const onHand = Number(product.quantity_on_hand ?? 0)
+    const quarantined =
+      quarantineQty(product.id, 'waste') +
+      quarantineQty(product.id, 'defect') +
+      quarantineQty(product.id, 'reject')
+    const available = onHand + quarantined
+    // Hard block: waste + defect + reject can never exceed the physical stock
+    // available (sellable on-hand plus whatever is already quarantined). We must
+    // not proceed (and never silently cap-and-create) when the request is above
+    // stock — that would fabricate phantom inventory. The core reducer also caps
+    // as a safety net, but the UI rejects first so the user gets clear feedback.
+    const requestedTotal = draft.waste + draft.defect + draft.reject
+    if (requestedTotal > available) {
+      notifyError(
+        `Cannot log ${requestedTotal} units — only ${available} available for ${product.name}. Reduce the waste / defect / reject amounts.`
+      )
+      return
+    }
+    setWasteTypes(product.id, draft, wasteRemark.trim() || undefined)
     notifySuccess(`Updated waste / defect / reject for ${product.name}.`)
     closeWaste()
+  }
+
+  function handleReverseWaste(movementId: string) {
+    if (!movementId) return
+    reverseWaste(movementId)
+    setWasteReverseConfirm(null)
+    notifySuccess('Waste / defect / reject entry reversed — stock restored to sellable.')
   }
 
   function openLots(product: (typeof state.products)[number]) {
@@ -500,7 +622,9 @@ export default function InventoryPage() {
 
   function openTransfer(product: (typeof state.products)[number]) {
     setTransferModal(product.id)
-    setTransferFrom(product.location_id ?? product.location?.id ?? '')
+    const requestedSource = product.location_id ?? product.location?.id ?? null
+    const source = resolveStockSourceLocation(state.inventoryLots, product.id, requestedSource)
+    setTransferFrom(source ?? '')
     setTransferTo('')
     setTransferQty('')
     setTransferNotes('')
@@ -516,14 +640,42 @@ export default function InventoryPage() {
   function handleTransfer() {
     if (!transferModal) return
     const product = state.products.find((entry) => entry.id === transferModal)
+    if (!product || !product.is_active) {
+      notifyError('Activate the item before transferring stock.')
+      return
+    }
     const quantity = Number(transferQty) || 0
-    if (!product || quantity <= 0) {
+    if (quantity <= 0) {
       notifyError('Enter a quantity greater than 0.')
       return
     }
-    const sourceLocationId = transferFrom || (product.location_id ?? product.location?.id ?? null)
-    if (!sourceLocationId) {
+    const requestedSource = transferFrom || (product.location_id ?? product.location?.id ?? null)
+    const sourceLocationId = resolveStockSourceLocation(state.inventoryLots, product.id, requestedSource)
+    const lotsAtSource = state.inventoryLots
+      .filter((lot) => lot.product_id === product.id && lot.location_id === sourceLocationId)
+      .reduce((sum, lot) => sum + Number(lot.quantity ?? 0), 0)
+    const onHand = Number(product.quantity_on_hand ?? 0)
+    // A product may carry on-hand stock without location-specific FIFO lots
+    // (stock created directly, imported, or lots left with a null location).
+    // Fall back to the total on-hand and transfer from the product's lots as a
+    // whole so the move still works instead of reporting "0 available".
+    const hasLocationLots = lotsAtSource > 0
+    // Cap at the full movable on-hand so the user can always transfer the exact
+    // total, even when stock is split across several locations. When the request
+    // covers the entire on-hand, pull from every location (null source) so 100%
+    // of the stock actually moves and the on-hand/location update correctly.
+    const availableAtSource = onHand
+    const movingAll = quantity >= onHand
+    if (!sourceLocationId && onHand <= 0) {
       notifyError('Select a source location.')
+      return
+    }
+    if (quantity > availableAtSource) {
+      notifyError(`Cannot transfer ${quantity} units — only ${availableAtSource} available for ${product.name}. Reduce the transfer amount.`)
+      return
+    }
+    if (quantity > onHand) {
+      notifyError(`Cannot transfer ${quantity} units — on-hand stock is only ${onHand} for ${product.name}. Reduce the transfer amount.`)
       return
     }
     if (transferTo && transferTo === sourceLocationId) {
@@ -536,7 +688,7 @@ export default function InventoryPage() {
     }
     transferStock({
       productId: product.id,
-      fromLocationId: sourceLocationId,
+      fromLocationId: movingAll ? null : (hasLocationLots ? sourceLocationId : null),
       toLocationId: transferTo || null,
       quantity,
       notes: transferNotes.trim() || undefined,
@@ -711,7 +863,7 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      <div className="card table-scroll inventory-desktop-table" style={{ overflow: 'hidden' }}>
+      <div className="card table-scroll inventory-desktop-table" style={{ overflowX: 'auto' }}>
         <table className="data-table">
           <thead><tr>
               <th style={{ width: 36 }}>
@@ -723,6 +875,7 @@ export default function InventoryPage() {
                 />
               </th>
               <SortHeader label="Item Code" column="item_code" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
+              <th>Barcode</th>
               <SortHeader label="Product Name" column="name" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
               <SortHeader label="Category" column="categoryName" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
               <th>Supplier</th>
@@ -734,7 +887,7 @@ export default function InventoryPage() {
               <SortHeader label="Location" column="locationName" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
               <SortHeader label="Waste" column="wasteTotal" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} align="right" />
               <SortHeader label="Status" column="status" sortKey={table.sort.key as string} direction={table.sort.direction} onToggle={table.toggleSort} />
-              <th style={{ width: 120, textAlign: 'center' }}>Action</th>
+              <th style={{ width: 104, textAlign: 'center', position: 'sticky', right: 0, background: '#F8FAFC', zIndex: 2 }}>Action</th>
             </tr></thead>
           <tbody>
             {table.paginated.map((row) => {
@@ -750,6 +903,13 @@ export default function InventoryPage() {
                   </td>
                   <td>
                     <code style={{ fontSize: 11, background: '#EFF6FF', padding: '2px 6px', borderRadius: 4, color: '#3B82F6' }}>{product.item_code}</code>
+                  </td>
+                  <td>
+                    {product.barcode ? (
+                      <code style={{ fontSize: 11, background: '#F1F5F9', padding: '2px 6px', borderRadius: 4, color: '#0F172A' }}>{product.barcode}</code>
+                    ) : (
+                      <span style={{ color: '#94A3B8', fontSize: 11 }}>—</span>
+                    )}
                   </td>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -795,15 +955,14 @@ export default function InventoryPage() {
                     })()}
                   </td>
                   <td><span className="badge" style={{ background: `${statusColor}14`, color: statusColor }}>{statusLabel}{!product.is_active ? ' · Inactive' : ''}</span></td>
-                  <td>
-                    <div style={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap', width: 116, margin: '0 auto', rowGap: 4 }}>
-                      <button className="btn btn-ghost btn-sm" onClick={() => setViewId(product.id)} style={{ padding: '4px 6px' }} title="View item details"><Eye size={13} /></button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => openEdit(product)} style={{ padding: '4px 6px' }}><Edit2 size={13} /></button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => openLots(product)} style={{ padding: '4px 6px' }} title="View FIFO lots"><Package size={13} /></button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => openWaste(product)} style={{ padding: '4px 6px', color: '#DC2626' }} title="Log waste / defect / reject"><AlertTriangle size={13} /></button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => openTransfer(product)} style={{ padding: '4px 6px', color: '#0EA5E9' }} title="Transfer stock to another location"><ArrowLeftRight size={13} /></button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => toggleProduct(product.id)} style={{ padding: '4px 6px', color: product.is_active ? '#94A3B8' : '#10B981' }} title={product.is_active ? 'Deactivate item' : 'Activate item'}><Power size={13} /></button>
-                      <button className="btn btn-danger btn-sm" onClick={() => setDeleteConfirm(product.id)} style={{ padding: '4px 6px' }}><Trash2 size={13} /></button>
+                  <td style={{ position: 'sticky', right: 0, background: '#fff', zIndex: 1 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 30px)', gap: 4, justifyContent: 'center' }}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => openEdit(product)} disabled={!product.is_active} style={{ padding: 5, opacity: product.is_active ? 1 : 0.4, cursor: product.is_active ? 'pointer' : 'not-allowed' }} title="Edit"><Edit2 size={13} /></button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => openLots(product)} disabled={!product.is_active} style={{ padding: 5, opacity: product.is_active ? 1 : 0.4, cursor: product.is_active ? 'pointer' : 'not-allowed' }} title="View FIFO lots"><Package size={13} /></button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => openWaste(product)} disabled={!product.is_active} style={{ padding: 5, color: '#DC2626', opacity: product.is_active ? 1 : 0.4, cursor: product.is_active ? 'pointer' : 'not-allowed' }} title="Log waste / defect / reject"><AlertTriangle size={13} /></button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => openTransfer(product)} disabled={!product.is_active} style={{ padding: 5, color: '#0EA5E9', opacity: product.is_active ? 1 : 0.4, cursor: product.is_active ? 'pointer' : 'not-allowed' }} title="Transfer stock"><ArrowLeftRight size={13} /></button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => toggleProduct(product.id)} style={{ padding: 5, color: product.is_active ? '#94A3B8' : '#10B981' }} title={product.is_active ? 'Deactivate item' : 'Activate item'}><Power size={13} /></button>
+                      <button className="btn btn-danger btn-sm" onClick={() => setDeleteConfirm(product.id)} disabled={!product.is_active} style={{ padding: 5, opacity: product.is_active ? 1 : 0.4, cursor: product.is_active ? 'pointer' : 'not-allowed' }} title="Delete"><Trash2 size={13} /></button>
                     </div>
                   </td>
                  </tr>
@@ -811,7 +970,7 @@ export default function InventoryPage() {
             })}
             {table.paginated.length === 0 && (
               <tr>
-                <td colSpan={14} style={{ textAlign: 'center', padding: 48, color: '#94A3B8' }}>
+                <td colSpan={15} style={{ textAlign: 'center', padding: 48, color: '#94A3B8' }}>
                   <Package size={32} style={{ marginBottom: 8, opacity: 0.35 }} />
                   <p>No items found</p>
                 </td>
@@ -909,25 +1068,25 @@ export default function InventoryPage() {
               </div>
 
               <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-                <button className="btn btn-ghost btn-sm" onClick={() => setViewId(product.id)} style={{ flex: 1, justifyContent: 'center' }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => setViewId(product.id)} disabled={!product.is_active} style={{ flex: 1, justifyContent: 'center', opacity: product.is_active ? 1 : 0.4, cursor: product.is_active ? 'pointer' : 'not-allowed' }}>
                   <Eye size={13} /> View
                 </button>
-                <button className="btn btn-ghost btn-sm" onClick={() => openEdit(product)} style={{ flex: 1, justifyContent: 'center' }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => openEdit(product)} disabled={!product.is_active} style={{ flex: 1, justifyContent: 'center', opacity: product.is_active ? 1 : 0.4, cursor: product.is_active ? 'pointer' : 'not-allowed' }}>
                   <Edit2 size={13} /> Edit
                 </button>
-                <button className="btn btn-ghost btn-sm" onClick={() => openLots(product)} style={{ flex: 1, justifyContent: 'center' }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => openLots(product)} disabled={!product.is_active} style={{ flex: 1, justifyContent: 'center', opacity: product.is_active ? 1 : 0.4, cursor: product.is_active ? 'pointer' : 'not-allowed' }}>
                   <Package size={13} /> Lots
                 </button>
-                <button className="btn btn-ghost btn-sm" onClick={() => openWaste(product)} style={{ flex: 1, justifyContent: 'center', color: '#DC2626' }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => openWaste(product)} disabled={!product.is_active} style={{ flex: 1, justifyContent: 'center', color: '#DC2626', opacity: product.is_active ? 1 : 0.4, cursor: product.is_active ? 'pointer' : 'not-allowed' }}>
                   <AlertTriangle size={13} /> Log Waste
                 </button>
-                <button className="btn btn-ghost btn-sm" onClick={() => openTransfer(product)} style={{ flex: 1, justifyContent: 'center', color: '#0EA5E9' }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => openTransfer(product)} disabled={!product.is_active} style={{ flex: 1, justifyContent: 'center', color: '#0EA5E9', opacity: product.is_active ? 1 : 0.4, cursor: product.is_active ? 'pointer' : 'not-allowed' }}>
                   <ArrowLeftRight size={13} /> Transfer
                 </button>
                 <button className="btn btn-ghost btn-sm" onClick={() => toggleProduct(product.id)} style={{ flex: 1, justifyContent: 'center', color: product.is_active ? '#94A3B8' : '#10B981' }}>
                   <Power size={13} /> {product.is_active ? 'Deactivate' : 'Activate'}
                 </button>
-                <button className="btn btn-danger btn-sm" onClick={() => setDeleteConfirm(product.id)} style={{ flex: 1, justifyContent: 'center' }}>
+                <button className="btn btn-danger btn-sm" onClick={() => setDeleteConfirm(product.id)} disabled={!product.is_active} style={{ flex: 1, justifyContent: 'center', opacity: product.is_active ? 1 : 0.4, cursor: product.is_active ? 'pointer' : 'not-allowed' }}>
                   <Trash2 size={13} /> Delete
                 </button>
               </div>
@@ -955,6 +1114,7 @@ export default function InventoryPage() {
               {[
                 { label: 'Item Code', key: 'item_code', placeholder: 'e.g. COF001' },
                 { label: 'Product Name', key: 'name', placeholder: 'e.g. Espresso Beans' },
+                { label: 'Barcode', key: 'barcode', placeholder: 'Scan or type barcode' },
               ].map(({ label, key, placeholder }) => (
                 <div key={key}>
                   <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>{label}</label>
@@ -1155,6 +1315,17 @@ export default function InventoryPage() {
                 ))}
               </div>
 
+              <div style={{ marginBottom: 18 }}>
+                <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>Remarks (optional)</label>
+                <textarea
+                  className="input"
+                  value={wasteRemark}
+                  onChange={(event) => setWasteRemark(event.target.value)}
+                  placeholder="e.g. expired, damaged in transit..."
+                  style={{ height: 64, resize: 'none' }}
+                />
+              </div>
+
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
                 <button className="btn btn-ghost" onClick={closeWaste}>Cancel</button>
                 <button className="btn btn-primary" onClick={handleSaveWaste}><Save size={15} /> Save</button>
@@ -1220,7 +1391,7 @@ export default function InventoryPage() {
             <div className="modal" style={{ maxWidth: 520 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
                 <h2 style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>{title} Items</h2>
-                <button onClick={() => setWasteSummaryModal(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748B' }}><X size={20} /></button>
+                <button onClick={() => { setWasteSummaryModal(null); setWasteReverseConfirm(null) }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748B' }}><X size={20} /></button>
               </div>
 
               <div style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #F1D4D4', marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -1236,20 +1407,39 @@ export default function InventoryPage() {
                     const itemColor = entry.type === 'waste' ? '#EF4444' : entry.type === 'defect' ? '#F59E0B' : '#8B5CF6'
                     return (
                       <div key={entry.id} style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{entry.product?.name ?? 'Unknown item'}</div>
-                            <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>{entry.product?.item_code ?? ''} · {formatTimestamp(entry.created_at)}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{entry.product?.name ?? 'Unknown item'}</div>
+                              <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>{entry.product?.item_code ?? ''} · {formatTimestamp(entry.created_at)}</div>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                              {entry.isReversed ? (
+                                <span className="badge" style={{ background: '#ECFDF5', color: '#059669', fontSize: 10 }}>Reversed</span>
+                              ) : (
+                                <span className="badge" style={{ background: `${itemColor}14`, color: itemColor, fontSize: 10 }}>{entry.type}</span>
+                              )}
+                              {!entry.isReversed && perms.canDeleteRecords !== false && (
+                                <button
+                                  className="btn btn-ghost btn-sm"
+                                  title="Delete / reverse this entry"
+                                  onClick={() => setWasteReverseConfirm(entry.id)}
+                                  style={{ padding: 5, color: '#DC2626', opacity: 0.9, cursor: 'pointer' }}
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              )}
+                            </div>
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                            {entry.isReversed ? (
-                              <span className="badge" style={{ background: '#ECFDF5', color: '#059669', fontSize: 10 }}>Reversed</span>
-                            ) : (
-                              <span className="badge" style={{ background: `${itemColor}14`, color: itemColor, fontSize: 10 }}>{entry.type}</span>
-                            )}
+                          <div style={{ fontSize: 11, color: '#64748B', marginTop: 6 }}>Qty: {entry.quantity}{entry.notes ? ` · ${entry.notes}` : ''}</div>
+                        {wasteReverseConfirm === entry.id && (
+                          <div style={{ marginTop: 8, padding: 8, borderRadius: 8, background: '#FEF2F2', border: '1px solid #FECACA' }}>
+                            <div style={{ fontSize: 11, color: '#B91C1C', marginBottom: 8 }}>Delete this {entry.type} entry? The quarantined stock will be restored to on hand.</div>
+                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                              <button className="btn btn-ghost" style={{ height: 30, fontSize: 12 }} onClick={() => setWasteReverseConfirm(null)}>Cancel</button>
+                              <button className="btn btn-danger" style={{ height: 30, fontSize: 12 }} onClick={() => handleReverseWaste(entry.id)}>Delete</button>
+                            </div>
                           </div>
-                        </div>
-                        <div style={{ fontSize: 11, color: '#64748B', marginTop: 6 }}>Qty: {entry.quantity}{entry.notes ? ` · ${entry.notes}` : ''}</div>
+                        )}
                       </div>
                     )
                   })
@@ -1257,7 +1447,7 @@ export default function InventoryPage() {
               </div>
 
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 18 }}>
-                <button className="btn btn-ghost" onClick={() => setWasteSummaryModal(null)}>Close</button>
+                <button className="btn btn-ghost" onClick={() => { setWasteSummaryModal(null); setWasteReverseConfirm(null) }}>Close</button>
               </div>
             </div>
           </div>
@@ -1267,13 +1457,17 @@ export default function InventoryPage() {
       {transferModal && (() => {
         const target = state.products.find((entry) => entry.id === transferModal)
         if (!target) return null
-         const sourceLocationId = transferFrom || (target.location_id ?? target.location?.id ?? null)
-        const fromLoc = state.locations.find((loc) => loc.id === sourceLocationId)
+         const requestedSource = transferFrom || (target.location_id ?? target.location?.id ?? null)
+         const sourceLocationId = resolveStockSourceLocation(state.inventoryLots, target.id, requestedSource)
+         const fromLoc = state.locations.find((loc) => loc.id === sourceLocationId)
         const qty = Number(transferQty) || 0
-        const availableAtSource = (target.lots ?? [])
-          .filter((lot) => lot.location_id === sourceLocationId)
-          .reduce((sum, lot) => sum + Number(lot.quantity ?? 0), 0)
-        const maxQty = availableAtSource > 0 ? availableAtSource : Number(target.quantity_on_hand ?? 0)
+         const lotsAtSource = state.inventoryLots
+           .filter((lot) => lot.product_id === target.id && lot.location_id === sourceLocationId)
+           .reduce((sum, lot) => sum + Number(lot.quantity ?? 0), 0)
+          const onHandTotal = Number(target.quantity_on_hand ?? 0)
+          const hasLocationLots = lotsAtSource > 0
+          const availableAtSource = onHandTotal
+          const maxQty = availableAtSource
         const transferableLocations = state.locations.filter((loc) => !wasteLocationIds.includes(loc.id))
         return (
           <div className="modal-overlay">
@@ -1335,8 +1529,11 @@ export default function InventoryPage() {
                   value={transferQty}
                   onChange={(event) => setTransferQty(event.target.value)}
                   placeholder="0"
-                  style={{ height: 40, fontSize: 14 }}
+                  style={{ height: 40, fontSize: 14, borderColor: qty > maxQty ? '#EF4444' : undefined }}
                 />
+                {qty > maxQty && (
+                  <div style={{ marginTop: 6, fontSize: 11, color: '#DC2626' }}>Only {maxQty} units available — reduce the quantity to transfer.</div>
+                )}
               </div>
 
               <div style={{ marginBottom: 20 }}>
@@ -1371,7 +1568,7 @@ export default function InventoryPage() {
             </p>
             <div style={{ maxHeight: 320, overflowY: 'auto', borderRadius: 8, border: '1px solid #D8E4F2' }}>
               <table className="data-table">
-                <thead><tr><th>Code</th><th>Name</th><th>Category</th><th>Supplier</th><th>Location</th><th>UOM</th><th>Cost</th><th>Price</th><th>Qty</th><th>Reorder</th></tr></thead>
+                <thead><tr><th>Code</th><th>Name</th><th>Category</th><th>Supplier</th><th>Location</th><th>UOM</th><th>Cost</th><th>Price</th><th>Qty</th><th>Reorder</th><th>Type</th></tr></thead>
                 <tbody>
                   {importRows.slice(0, 20).map((row, index) => (
                     <tr key={index}>
@@ -1385,6 +1582,11 @@ export default function InventoryPage() {
                       <td style={{ color: '#10B981' }}>{formatCurrency(row.selling_price)}</td>
                       <td style={{ fontWeight: 700 }}>{row.quantity_on_hand}</td>
                       <td>{row.reorder_point}</td>
+                      <td>
+                        {row.is_finished_good
+                          ? <span className="badge badge-purple" style={{ fontSize: 9 }}>Finished Good</span>
+                          : <span style={{ fontSize: 11, color: '#94A3B8' }}>Raw</span>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1439,6 +1641,12 @@ export default function InventoryPage() {
                 <div style={{ padding: '10px 12px', borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
                   <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Location</div>
                   <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 4 }}>{target.location?.name ?? 'Unassigned'}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>Barcode</div>
+                  <div style={{ fontWeight: 700, color: '#0F172A', marginTop: 4 }}>
+                    {target.barcode ? <code style={{ background: '#F1F5F9', padding: '2px 6px', borderRadius: 4 }}>{target.barcode}</code> : '—'}
+                  </div>
                 </div>
                 <div style={{ padding: '10px 12px', borderRadius: 12, background: '#fff', border: '1px solid #E2E8F0' }}>
                   <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>On Hand</div>
