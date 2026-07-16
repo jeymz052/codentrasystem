@@ -40,9 +40,8 @@ import {
   remapStateTenantId,
   resolveAlert,
   resolveAllAlerts,
-  toggleProductActive,
-  seedDemoSystem,
   syncAlerts,
+  toggleProductActive,
   toggleUserActive,
   updatePurchaseOrder,
   updateSupplier,
@@ -62,6 +61,8 @@ import {
   requestDeletion,
   approveDeletion,
   rejectDeletion,
+  seedDemoSystem,
+  emptyDemoSystem,
   type DemoSystemState,
   type CategoryDraft,
   type LocationDraft,
@@ -334,24 +335,24 @@ type FeedbackItem = {
 }
 
 function loadCachedState(): DemoSystemState {
-  if (typeof window === 'undefined') return seedDemoSystem()
+  if (typeof window === 'undefined') return emptyDemoSystem()
 
   const raw = window.localStorage.getItem(STORAGE_KEY)
-  if (!raw) return seedDemoSystem()
+  if (!raw) return emptyDemoSystem()
 
   try {
     const parsed = JSON.parse(raw) as DemoSystemState
     return {
-      ...seedDemoSystem(normalizeBusinessType(parsed.tenant?.business_type)),
+      ...emptyDemoSystem(normalizeBusinessType(parsed.tenant?.business_type)),
       ...parsed,
       tenant: {
-        ...seedDemoSystem(normalizeBusinessType(parsed.tenant?.business_type)).tenant,
+        ...emptyDemoSystem(normalizeBusinessType(parsed.tenant?.business_type)).tenant,
         ...parsed.tenant,
         business_type: normalizeBusinessType(parsed.tenant?.business_type),
       },
     }
   } catch {
-    return seedDemoSystem()
+    return emptyDemoSystem()
   }
 }
 
@@ -403,14 +404,19 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         // while this initial load was still in flight (e.g. marking a PO
         // received). Otherwise the late snapshot would reset the record back
         // to its server-side status (e.g. draft) after a few seconds.
-        const hasMutated = requestIdRef.current > 0
-        if (!hasMutated) {
-          // Merge the authoritative server state onto the cached local state
-          // so any locally-optimistic rows are preserved and the user never
-          // sees their data disappear on reload.
+      const hasMutated = requestIdRef.current > 0
+      if (!hasMutated) {
+        // If the active tenant changed (e.g. just onboarded a new workspace,
+        // switched tenants, or the cached state is from a different tenant),
+        // discard the stale local cache entirely so demo data or old tenant
+        // rows cannot bleed into the fresh workspace.
+        if (remote.state.tenant.id !== state.tenant.id) {
+          setState(ensureWasteLocation(remote.state))
+        } else {
           setState((prev) => mergeState(prev, ensureWasteLocation(remote.state)))
-          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(remote.state))
         }
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(remote.state))
+      }
         setAvailableTenants(remote.availableTenants)
         setActiveTenantId(remote.activeTenantId)
         window.localStorage.setItem(ACTIVE_TENANT_KEY, remote.activeTenantId)
@@ -482,7 +488,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     const merged: DemoSystemState = {
       ...remote,
       currentUserId: resolveCurrentUserId(remote),
-      tenant: { ...remote.tenant, ...local.tenant },
+      tenant: { ...local.tenant, ...remote.tenant },
       categories: mergeCategories(local.categories, remote.categories),
       unitsOfMeasure: mergeArray(local.unitsOfMeasure, remote.unitsOfMeasure),
       locations: mergeLocations(local.locations, remote.locations),

@@ -52,6 +52,8 @@ export function OnboardingForm({ initialPlan }: { initialPlan?: string }) {
         throw new Error(await response.text() || 'Failed to create workspace')
       }
 
+      window.localStorage.removeItem('codentra.demo-cache.v3')
+      window.localStorage.removeItem('codentra.active-tenant.v3')
       router.replace('/dashboard')
       router.refresh()
     } catch (requestError) {

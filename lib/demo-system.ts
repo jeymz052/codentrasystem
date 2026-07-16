@@ -312,6 +312,10 @@ function emptyState(businessType: BusinessType): DemoSystemState {
   }
 }
 
+export function emptyDemoSystem(businessType: BusinessType = 'general'): DemoSystemState {
+  return emptyState(businessType)
+}
+
 function addMinutes(iso: string, minutes: number) {
   return new Date(new Date(iso).getTime() + minutes * 60_000).toISOString()
 }
