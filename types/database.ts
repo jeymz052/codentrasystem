@@ -2,7 +2,7 @@
 
 export type SubscriptionPlan = 'starter' | 'professional' | 'enterprise'
 export type SubscriptionStatus = 'active' | 'inactive' | 'suspended' | 'trial'
-export type BusinessType = 'coffee_shop' | 'manufacturing' | 'convenience_store' | 'restaurant' | 'retail' | 'pharmacy' | 'general'
+export type BusinessType = 'retail' | 'manufacturing'
 export type UserRole = 'super_admin' | 'admin' | 'manager' | 'supervisor' | 'inventory_staff' | 'sales_staff' | 'production_staff' | 'purchasing_staff'
 export type MutationAction =
   | 'resetDemo'

@@ -807,7 +807,7 @@ export async function createProvisionedTenant(params: {
   return tenantId
 }
 
-export async function ensureDatabaseState(tenantId?: string | null, businessType: BusinessType = 'coffee_shop') {
+export async function ensureDatabaseState(tenantId?: string | null, businessType: BusinessType = 'retail') {
   const existing = await loadTenantState(tenantId)
   if (existing) return existing
 

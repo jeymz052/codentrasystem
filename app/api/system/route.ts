@@ -15,13 +15,14 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { tenants, activeTenantId: defaultTenantId } = await loadAccessibleTenants(user.id, user.email)
+    const preferredTenantId = request.cookies.get('codentra.active-tenant')?.value ?? null
+    const { tenants, activeTenantId: defaultTenantId } = await loadAccessibleTenants(user.id, user.email, preferredTenantId)
     if (!tenants.length || !defaultTenantId) {
       return NextResponse.json({ error: 'Complete onboarding first' }, { status: 409 })
     }
 
     const { searchParams } = new URL(request.url)
-    const requestedTenantId = searchParams.get('tenantId') ?? request.cookies.get('codentra.active-tenant')?.value ?? defaultTenantId
+    const requestedTenantId = searchParams.get('tenantId') ?? preferredTenantId ?? defaultTenantId
     const activeTenant = tenants.find((tenant) => tenant.id === requestedTenantId) ?? tenants.find((tenant) => tenant.id === defaultTenantId) ?? tenants[0]
     let state: Awaited<ReturnType<typeof ensureDatabaseState>>
     try {
@@ -71,8 +72,9 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json()
-    const { tenants, activeTenantId: defaultTenantId } = await loadAccessibleTenants(user.id, user.email)
-    const requestedTenantId = String(body.tenantId ?? request.cookies.get('codentra.active-tenant')?.value ?? defaultTenantId ?? '')
+    const preferredTenantId = request.cookies.get('codentra.active-tenant')?.value ?? null
+    const { tenants, activeTenantId: defaultTenantId } = await loadAccessibleTenants(user.id, user.email, preferredTenantId)
+    const requestedTenantId = String(body.tenantId ?? preferredTenantId ?? defaultTenantId ?? '')
     const activeTenant = tenants.find((tenant) => tenant.id === requestedTenantId) ?? tenants.find((tenant) => tenant.id === defaultTenantId)
 
     if (!activeTenant) {

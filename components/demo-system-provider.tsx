@@ -93,7 +93,6 @@ type DemoSystemContextValue = {
   authUserEmail: string | null
   isSuperAdminIdentity: boolean
   stats: ReturnType<typeof computeDashboardStats>
-  resetDemo: (businessType?: BusinessType) => void
   updateTenant: (patch: Partial<DemoSystemState['tenant']> & { business_type?: BusinessType }) => void
   addCategory: (draft: CategoryDraft) => void
   editCategory: (categoryId: string, draft: CategoryDraft) => void
@@ -150,6 +149,7 @@ type DemoSystemContextValue = {
   formatCurrency: (amount: number) => string
   notifySuccess: (message: string) => void
   notifyError: (message: string) => void
+  resetDemo: (businessType?: BusinessType) => void
 }
 
 const DemoSystemContext = createContext<DemoSystemContextValue | null>(null)
@@ -404,36 +404,45 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         // while this initial load was still in flight (e.g. marking a PO
         // received). Otherwise the late snapshot would reset the record back
         // to its server-side status (e.g. draft) after a few seconds.
-      const hasMutated = requestIdRef.current > 0
-      if (!hasMutated) {
-        // If the active tenant changed (e.g. just onboarded a new workspace,
-        // switched tenants, or the cached state is from a different tenant),
-        // discard the stale local cache entirely so demo data or old tenant
-        // rows cannot bleed into the fresh workspace.
-        if (remote.state.tenant.id !== state.tenant.id) {
-          setState(ensureWasteLocation(remote.state))
-        } else {
-          setState((prev) => mergeState(prev, ensureWasteLocation(remote.state)))
+        const hasMutated = requestIdRef.current > 0
+        if (!hasMutated) {
+          // If the active tenant changed (e.g. just onboarded a new workspace,
+          // switched tenants, or the cached state is from a different tenant),
+          // discard the stale local cache entirely so demo data or old tenant
+          // rows cannot bleed into the fresh workspace.
+          if (remote.state.tenant.id !== state.tenant.id) {
+            setState(ensureWasteLocation(remote.state))
+          } else {
+            setState((prev) => mergeState(prev, ensureWasteLocation(remote.state)))
+          }
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(remote.state))
         }
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(remote.state))
-      }
         setAvailableTenants(remote.availableTenants)
         setActiveTenantId(remote.activeTenantId)
         window.localStorage.setItem(ACTIVE_TENANT_KEY, remote.activeTenantId)
       } catch {
         if (!mounted) return
+        // The initial load failed (e.g. onboarding not complete, network down,
+        // or the cached tenant no longer exists). Do NOT fall back to a stale
+        // demo seed ("Untitled Workspace") — that would mask the real tenant.
+        // Only reuse the cache if it actually belongs to the requested tenant.
         const cached = loadCachedState()
-        setState(ensureWasteLocation(cached))
-        setAvailableTenants([{
-          id: cached.tenant.id,
-          name: cached.tenant.name,
-          business_type: cached.tenant.business_type,
-          plan: cached.tenant.plan,
-          subscription_status: cached.tenant.subscription_status,
-          role: isSuperAdminIdentity ? 'super_admin' : 'admin',
-          is_default: true,
-        }])
-        setActiveTenantId(cached.tenant.id)
+        const cachedId = window.localStorage.getItem(ACTIVE_TENANT_KEY)
+        const matchesRequest =
+          initialTenantId && (cached.tenant.id === initialTenantId || cachedId === initialTenantId)
+        if (matchesRequest) {
+          setState(ensureWasteLocation(cached))
+          setAvailableTenants([{
+            id: cached.tenant.id,
+            name: cached.tenant.name,
+            business_type: cached.tenant.business_type,
+            plan: cached.tenant.plan,
+            subscription_status: cached.tenant.subscription_status,
+            role: isSuperAdminIdentity ? 'super_admin' : 'admin',
+            is_default: true,
+          }])
+          setActiveTenantId(cached.tenant.id)
+        }
       } finally {
         if (mounted) setHydrated(true)
       }
@@ -442,7 +451,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     return () => {
       mounted = false
     }
-  }, [])
+  }, [initialTenantId, authUserEmail])
 
   useEffect(() => {
     if (!hydrated) return

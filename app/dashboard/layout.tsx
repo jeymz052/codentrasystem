@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation'
+import { cookies } from 'next/headers'
 import { DashboardAccessGate } from '@/components/layout/DashboardAccessGate'
 import { DashboardShell } from '@/components/layout/DashboardShell'
 import { createSupabaseServerClient } from '@/lib/supabase-server'
@@ -13,7 +14,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
   }
 
   const isSuperAdminIdentity = isConfiguredSuperAdminEmail(user.email)
-  const { tenants, activeTenantId } = await loadAccessibleTenants(user.id, user.email)
+  const cookieStore = await cookies()
+  const preferredTenantId = cookieStore.get('codentra.active-tenant')?.value ?? null
+  const { tenants, activeTenantId } = await loadAccessibleTenants(user.id, user.email, preferredTenantId)
   if (!tenants.length) {
     redirect('/onboarding')
   }

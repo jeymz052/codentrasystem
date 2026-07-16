@@ -9,14 +9,19 @@ export function isConfiguredSuperAdminEmail(email?: string | null) {
   return String(email ?? '').trim().toLowerCase() === SUPERADMIN_EMAIL.toLowerCase()
 }
 
-export async function loadAccessibleTenants(authUserId: string, authUserEmail?: string | null): Promise<{ tenants: AccessibleTenant[]; activeTenantId: string | null }> {
+export async function loadAccessibleTenants(authUserId: string, authUserEmail?: string | null, preferredTenantId?: string | null): Promise<{ tenants: AccessibleTenant[]; activeTenantId: string | null }> {
   const client = getSupabaseServiceClient()
 
+  // A super admin can see every tenant, but "active" should still follow the
+  // workspace the user last selected (the cookie set on onboarding / tenant
+  // switch) rather than blindly defaulting to the OLDEST tenant. Otherwise a
+  // freshly onboarded workspace is ignored and the header/selector keeps
+  // showing a stale "Untitled Workspace" tenant.
   if (isConfiguredSuperAdminEmail(authUserEmail)) {
     const { data: tenantRows, error: tenantError } = await client
       .from('tenants')
       .select('id, name, business_type, plan, subscription_status, created_at')
-      .order('created_at', { ascending: true })
+      .order('created_at', { ascending: false })
 
     if (tenantError) {
       throw tenantError
@@ -32,7 +37,12 @@ export async function loadAccessibleTenants(authUserId: string, authUserEmail?: 
       is_default: false,
     }))
 
-    return { tenants, activeTenantId: tenants[0]?.id ?? null }
+    const byId = new Map(tenants.map((tenant) => [tenant.id, tenant]))
+    const activeTenantId = (preferredTenantId && byId.has(preferredTenantId))
+      ? preferredTenantId
+      : (tenants[0]?.id ?? null)
+
+    return { tenants, activeTenantId }
   }
 
   const { data, error } = await client
@@ -69,7 +79,12 @@ export async function loadAccessibleTenants(authUserId: string, authUserEmail?: 
       is_default: false,
     }))
 
-    return { tenants, activeTenantId: tenants[0]?.id ?? null }
+    const byId = new Map(tenants.map((tenant) => [tenant.id, tenant]))
+    const activeTenantId = (preferredTenantId && byId.has(preferredTenantId))
+      ? preferredTenantId
+      : (tenants[0]?.id ?? null)
+
+    return { tenants, activeTenantId }
   }
 
   const uniqueMemberships = Array.from(

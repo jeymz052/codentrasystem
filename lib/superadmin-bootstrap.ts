@@ -4,7 +4,6 @@ import { getSupabaseAdminClient } from '@/lib/supabase-admin'
 const SUPERADMIN_EMAIL = process.env.SUPERADMIN_EMAIL ?? 'superadmin@codentra.local'
 const SUPERADMIN_PASSWORD = process.env.SUPERADMIN_PASSWORD ?? 'SuperAdmin123!'
 const SUPERADMIN_NAME = process.env.SUPERADMIN_NAME ?? 'Super Admin'
-const SUPERADMIN_TENANT_NAME = process.env.SUPERADMIN_TENANT_NAME ?? 'Codentra HQ'
 
 let bootstrapPromise: Promise<void> | null = null
 
@@ -30,6 +29,7 @@ async function seedSuperadmin() {
       email: SUPERADMIN_EMAIL,
       password: SUPERADMIN_PASSWORD,
       email_confirm: true,
+      user_metadata: { full_name: SUPERADMIN_NAME },
     })
 
     if (error) {
@@ -50,92 +50,14 @@ async function seedSuperadmin() {
     const { error } = await client.auth.admin.updateUserById(existingUser.id, {
       password: SUPERADMIN_PASSWORD,
       email_confirm: true,
+      user_metadata: { full_name: SUPERADMIN_NAME },
     })
     if (error) throw new Error(`updateUserById failed: ${error.message}`)
+    userId = existingUser.id
   }
 
   if (!userId) {
     throw new Error('Could not resolve superadmin auth user')
-  }
-
-  const { data: existingTenant, error: tenantLookupError } = await client
-    .from('tenants')
-    .select('id')
-    .eq('name', SUPERADMIN_TENANT_NAME)
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle()
-
-  if (tenantLookupError) {
-    throw new Error(`tenant lookup failed: ${tenantLookupError.message}`)
-  }
-
-  if (existingTenant?.id) {
-    const { error: membershipUpsertError } = await client
-      .from('tenant_memberships')
-      .upsert({
-        id: randomUUID(),
-        tenant_id: existingTenant.id,
-        auth_user_id: userId,
-        role: 'super_admin',
-        is_default: true,
-      }, {
-        onConflict: 'tenant_id,auth_user_id',
-      })
-
-    if (membershipUpsertError && !isDuplicateKeyError(membershipUpsertError)) {
-      throw new Error(`membership upsert failed: ${membershipUpsertError.message}`)
-    }
-
-    return
-  }
-
-  const { data: membershipRows, error: membershipError } = await client
-    .from('tenant_memberships')
-    .select('tenant_id, role')
-    .eq('auth_user_id', userId)
-    .eq('role', 'super_admin')
-    .limit(1)
-
-  if (membershipError) {
-    throw new Error(`membership lookup failed: ${membershipError.message}`)
-  }
-
-  const existingMembershipTenantId = membershipRows?.[0]?.tenant_id ?? null
-
-  if (!existingMembershipTenantId) {
-    const tenantId = randomUUID()
-    const { error: tenantError } = await client.from('tenants').insert({
-      id: tenantId,
-      name: SUPERADMIN_TENANT_NAME,
-      business_type: 'general',
-      billing_email: SUPERADMIN_EMAIL,
-      email: SUPERADMIN_EMAIL,
-      plan: 'enterprise',
-      subscription_status: 'active',
-      trial_ends_at: null,
-      subscription_ends_at: null,
-      max_users: 999,
-      max_products: 9999,
-      max_locations: 99,
-      is_active: true,
-    })
-
-    if (tenantError && !isDuplicateKeyError(tenantError)) {
-      throw new Error(`tenant insert failed: ${tenantError.message}`)
-    }
-
-    const { error: insertError } = await client.from('tenant_memberships').insert({
-      id: randomUUID(),
-      tenant_id: tenantId,
-      auth_user_id: userId,
-      role: 'super_admin',
-      is_default: true,
-    })
-
-    if (insertError && !isDuplicateKeyError(insertError)) {
-      throw new Error(`membership insert failed: ${insertError.message}`)
-    }
   }
 }
 

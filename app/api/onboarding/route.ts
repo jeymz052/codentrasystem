@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json()
   const business_name = String(body.business_name ?? '').trim()
-  const business_type = String(body.business_type ?? 'general') as BusinessType
+  const business_type = String(body.business_type ?? 'retail') as BusinessType
   const billing_email = String(body.billing_email ?? user.email ?? '').trim()
   const plan = String(body.plan ?? 'starter') as SubscriptionPlan
   const timezone = String(body.timezone ?? 'Asia/Manila')

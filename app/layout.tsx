@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { cookies } from 'next/headers'
 import { Inter } from 'next/font/google'
 import { DemoSystemProvider } from '@/components/demo-system-provider'
 import { createSupabaseServerClient } from '@/lib/supabase-server'
@@ -26,7 +27,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   if (user) {
     authUserEmail = user.email ?? null
     isSuperAdminIdentity = isConfiguredSuperAdminEmail(user.email)
-    const { tenants, activeTenantId } = await loadAccessibleTenants(user.id, user.email)
+    const cookieStore = await cookies()
+    const preferredTenantId = cookieStore.get('codentra.active-tenant')?.value ?? null
+    const { tenants, activeTenantId } = await loadAccessibleTenants(user.id, user.email, preferredTenantId)
     initialTenantId = activeTenantId ?? tenants[0]?.id ?? ''
   }
 

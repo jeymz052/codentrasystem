@@ -87,7 +87,7 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
           <Building2 size={13} color="#3B82F6" style={{ flexShrink: 0 }} />
           <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
             <span style={{ fontSize: 12, color: '#475569', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{state.tenant.name}</span>
-            <span style={{ fontSize: 11, color: '#94A3B8' }}>{state.tenant.business_type.replaceAll('_', ' ')}</span>
+            <span style={{ fontSize: 11, color: '#94A3B8' }}>{state.tenant.business_type === 'manufacturing' ? 'Production' : 'Buy & Sell'}</span>
           </div>
         </div>
 

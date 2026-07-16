@@ -18,7 +18,10 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     redirect('/dashboard')
   }
 
-  const { tenants } = await loadAccessibleTenants(user.id, user.email)
+  const { cookies } = await import('next/headers')
+  const cookieStore = await cookies()
+  const preferredTenantId = cookieStore.get('codentra.active-tenant')?.value ?? null
+  const { tenants } = await loadAccessibleTenants(user.id, user.email, preferredTenantId)
   if (!tenants.length) {
     redirect('/onboarding')
   }

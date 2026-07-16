@@ -226,11 +226,11 @@ export function migratePaymentAccounts(tenant: Tenant): PaymentAccount[] {
 }
 
 function isValidBusinessType(value: string): value is BusinessType {
-  return ['coffee_shop', 'manufacturing', 'convenience_store', 'restaurant', 'retail', 'pharmacy', 'general'].includes(value)
+  return ['retail', 'manufacturing'].includes(value)
 }
 
 export function normalizeBusinessType(value?: string | null): BusinessType {
-  return isValidBusinessType(String(value ?? '').trim()) ? String(value).trim() as BusinessType : 'general'
+  return isValidBusinessType(String(value ?? '').trim()) ? String(value).trim() as BusinessType : 'retail'
 }
 
 function baseTenant(businessType: BusinessType): Tenant {
@@ -312,7 +312,7 @@ function emptyState(businessType: BusinessType): DemoSystemState {
   }
 }
 
-export function emptyDemoSystem(businessType: BusinessType = 'general'): DemoSystemState {
+export function emptyDemoSystem(businessType: BusinessType = 'retail'): DemoSystemState {
   return emptyState(businessType)
 }
 
@@ -320,7 +320,7 @@ function addMinutes(iso: string, minutes: number) {
   return new Date(new Date(iso).getTime() + minutes * 60_000).toISOString()
 }
 
-export function seedDemoSystem(businessType: BusinessType = 'general'): DemoSystemState {
+export function seedDemoSystem(businessType: BusinessType = 'retail'): DemoSystemState {
   const tenant = baseTenant(normalizeBusinessType(businessType))
   const baseTime = '2026-07-07T08:00:00.000Z'
 

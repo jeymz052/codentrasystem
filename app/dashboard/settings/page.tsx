@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { Building2, Coins, Factory, Landmark, Layers3, MapPin, Pencil, Plus, RotateCcw, Save, Settings as SettingsIcon, Sparkles, Tag, Trash2, Users, Wallet, Warehouse, X } from 'lucide-react'
+import { Building2, Coins, Factory, Landmark, Layers3, MapPin, Pencil, Plus, Save, Settings as SettingsIcon, Sparkles, Tag, Trash2, Users, Wallet, Warehouse, X } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { getRolePermissions } from '@/lib/access-control'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
@@ -10,6 +10,8 @@ import { TIMEZONES, DEFAULT_TIMEZONE } from '@/lib/timezones'
 import type { BusinessType, PaymentAccount, SubscriptionPlan, SubscriptionStatus } from '@/types/database'
 
 function humanize(value: string) {
+  if (value === 'retail') return 'Buy & Sell'
+  if (value === 'manufacturing') return 'Production'
   return value.replaceAll('_', ' ')
 }
 
@@ -18,7 +20,7 @@ function paymentAccountId() {
 }
 
 export default function SettingsPage() {
-  const { state, availableTenants, activeTenantId, updateTenant, resetDemo, addCategory, editCategory, deleteCategory, addUnitOfMeasure, editUnitOfMeasure, deleteUnitOfMeasure, addLocation, editLocation, removeLocation, requestDeletion, notifySuccess, notifyError, isSuperAdminIdentity, hydrated } = useDemoSystem()
+  const { state, availableTenants, activeTenantId, updateTenant, addCategory, editCategory, deleteCategory, addUnitOfMeasure, editUnitOfMeasure, deleteUnitOfMeasure, addLocation, editLocation, removeLocation, requestDeletion, notifySuccess, notifyError, isSuperAdminIdentity, hydrated } = useDemoSystem()
   const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
   const role = activeTenant?.role ?? 'admin'
   const perms = getRolePermissions(role)
@@ -98,11 +100,6 @@ export default function SettingsPage() {
         : {}),
     })
     notifySuccess('Settings saved successfully.')
-  }
-
-  function handleResetDemo() {
-    resetDemo(form.business_type as BusinessType)
-    notifySuccess('Demo data reset successfully.')
   }
 
   function handleAddCategory() {
@@ -376,9 +373,6 @@ export default function SettingsPage() {
           </div>
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button className="btn btn-ghost" onClick={handleResetDemo}>
-              <RotateCcw size={15} /> Reset demo data
-            </button>
             <button className="btn btn-primary" onClick={() => void handleBilling()} disabled={billingLoading}>
               <SettingsIcon size={15} /> {billingLoading ? 'Opening billing...' : 'Manage billing'}
             </button>
@@ -474,13 +468,8 @@ export default function SettingsPage() {
                 value={form.business_type}
                 onChange={(value) => setForm((current) => ({ ...current, business_type: value as BusinessType }))}
                 options={[
-                  { value: 'coffee_shop', label: 'Coffee shop' },
-                  { value: 'convenience_store', label: 'Convenience store' },
-                  { value: 'manufacturing', label: 'Manufacturing' },
-                  { value: 'restaurant', label: 'Restaurant' },
-                  { value: 'retail', label: 'Retail' },
-                  { value: 'pharmacy', label: 'Pharmacy' },
-                  { value: 'general', label: 'General' },
+                  { value: 'retail', label: 'Buy & Sell' },
+                  { value: 'manufacturing', label: 'Production' },
                 ]}
               />
             </label>
