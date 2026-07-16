@@ -1937,7 +1937,12 @@ export default function POSPage() {
                 onChange={(event) => shiftAction === 'open' ? setOpeningFloat(event.target.value) : setCountedCash(event.target.value)}
                 style={{ height: 44, fontSize: 18, fontWeight: 700, borderRadius: 12, marginBottom: 12 }}
               />
-              {currentShift && shiftAction === 'close' && (
+              {currentShift && shiftAction === 'close' && (() => {
+                const movementDelta = state.cashMovements
+                  .filter((m) => m.shift_id === currentShift.id)
+                  .reduce((sum, m) => sum + (m.kind === 'cash_out' ? -Number(m.amount ?? 0) : Number(m.amount ?? 0)), 0)
+                const expectedCash = Number(currentShift.opening_float) + Number(currentShift.cash_sales_total || 0) + movementDelta
+                return (
                 <div style={{ padding: '10px 12px', borderRadius: 10, background: '#F8FBFF', border: '1px solid #D8E4F2', marginBottom: 12 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
                     <span style={{ color: '#475569' }}>Opening float</span>
@@ -1945,11 +1950,12 @@ export default function POSPage() {
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
                     <span style={{ color: '#475569' }}>Expected cash</span>
-                    <span style={{ fontWeight: 700 }}>{formatCurrency(Number(currentShift.opening_float) + Number(currentShift.total_sales || 0))}</span>
+                    <span style={{ fontWeight: 700 }}>{formatCurrency(expectedCash)}</span>
                   </div>
                   <div style={{ fontSize: 11, color: '#64748B' }}>Shift: {currentShift.shift_code}</div>
                 </div>
-              )}
+                )
+              })()}
               {shiftAction === 'open' && (
                 <div style={{ marginBottom: 12 }}>
                   <label style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 6 }}>Store Location</label>

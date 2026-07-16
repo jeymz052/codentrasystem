@@ -8,7 +8,11 @@ export type MutationAction =
   | 'resetDemo'
   | 'updateTenant'
   | 'addCategory'
+  | 'editCategory'
+  | 'deleteCategory'
   | 'addUnitOfMeasure'
+  | 'editUnitOfMeasure'
+  | 'deleteUnitOfMeasure'
   | 'addLocation'
   | 'updateLocation'
   | 'deleteLocation'
@@ -42,6 +46,8 @@ export type MutationAction =
   | 'recordCashMovement'
   | 'acknowledge'
   | 'resolve'
+  | 'reorderAlert'
+  | 'reorderAllAlerts'
   | 'recordWaste'
   | 'setWasteTypes'
   | 'transferStock'
@@ -147,6 +153,7 @@ export interface UnitOfMeasure {
   abbreviation: string
   is_active: boolean
   created_at: string
+  updated_at?: string
 }
 
 export interface Category {
@@ -157,6 +164,7 @@ export interface Category {
   color: string
   is_active: boolean
   created_at: string
+  updated_at?: string
 }
 
 export interface Supplier {
@@ -183,6 +191,7 @@ export interface Location {
   is_active: boolean
   is_waste_location: boolean
   created_at: string
+  updated_at?: string
 }
 
 export interface Product {
@@ -328,6 +337,8 @@ export interface SalesTransaction {
   refund_reason: string | null
   parent_transaction_id: string | null
   split_payments?: Array<{ payment_method: PaymentMethod; amount: number; reference?: string | null }>
+  cash_sales_total: number
+  qr_sales_total: number
   created_at: string
   cashier?: User
   items?: SalesTransactionItem[]
@@ -396,6 +407,7 @@ export interface Alert {
   message: string
   threshold: number | null
   current_qty: number | null
+  purchase_order_id: string | null
   acknowledged_by: string | null
   acknowledged_at: string | null
   resolved_at: string | null

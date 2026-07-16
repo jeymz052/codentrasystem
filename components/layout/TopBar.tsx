@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bell, Building2, CheckCircle2, Check, AlertTriangle, Menu } from 'lucide-react'
-import { usePathname } from 'next/navigation'
+import { Bell, Building2, AlertTriangle, Menu, ShoppingCart } from 'lucide-react'
+import { usePathname, useRouter } from 'next/navigation'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
 
@@ -35,8 +35,10 @@ function formatNotificationDateTime(value: string) {
 
 export function TopBar({ onToggleSidebar }: TopBarProps) {
   const path = usePathname()
-  const { state, stats, availableTenants, activeTenantId, isSuperAdminIdentity, switchTenant, acknowledge, resolve, acknowledgeAll, resolveAll } = useDemoSystem()
+  const router = useRouter()
+  const { state, stats, availableTenants, activeTenantId, isSuperAdminIdentity, switchTenant } = useDemoSystem()
   const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [selectedAlerts, setSelectedAlerts] = useState<string[]>([])
   const menuRef = useRef<HTMLDivElement>(null)
   const title = TITLES[path] ?? 'Codentra'
   const notifications = useMemo(
@@ -157,22 +159,47 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm"
-                      onClick={() => acknowledgeAll()}
+                      onClick={() => setSelectedAlerts((current) => {
+                        const openIds = notifications.filter((a) => a.status === 'open').map((a) => a.id)
+                        const allSelected = openIds.every((id) => current.includes(id))
+                        return allSelected ? [] : openIds
+                      })}
                       style={{ fontSize: 11, padding: '5px 8px' }}
                     >
-                      <Check size={13} /> Acknowledge all
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm"
-                      onClick={() => resolveAll()}
-                      style={{ fontSize: 11, padding: '5px 8px' }}
-                    >
-                      <CheckCircle2 size={13} /> Resolve all
+                      {notifications.filter((a) => a.status === 'open').every((a) => selectedAlerts.includes(a.id)) ? 'Clear' : 'Select'} all
                     </button>
                   </div>
                 )}
               </div>
+
+              {stats.open_alerts > 0 && selectedAlerts.length > 0 && (
+                <div style={{ padding: '10px 16px', display: 'flex', gap: 8, borderBottom: '1px solid #E2E8F0', background: '#F8FBFF' }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => {
+                      const ids = selectedAlerts
+                      setSelectedAlerts([])
+                      router.push(`/dashboard/orders?restock=${ids.join(',')}`)
+                    }}
+                    style={{ fontSize: 11, padding: '5px 8px' }}
+                  >
+                    <ShoppingCart size={13} /> Restock raw → PO ({selectedAlerts.length})
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => {
+                      const ids = selectedAlerts
+                      setSelectedAlerts([])
+                      router.push(`/dashboard/production?restock=${ids.join(',')}`)
+                    }}
+                    style={{ fontSize: 11, padding: '5px 8px' }}
+                  >
+                    <ShoppingCart size={13} /> Restock finished → Production ({selectedAlerts.length})
+                  </button>
+                </div>
+              )}
 
               <div style={{ maxHeight: 360, overflowY: 'auto' }}>
                 {notifications.length === 0 ? (
@@ -182,48 +209,51 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
                 ) : notifications.map((alert) => {
                   const color = alert.alert_type === 'out_of_stock' ? '#EF4444' : '#F59E0B'
                   const isResolved = alert.status === 'resolved'
+                  const product = state.products.find((entry) => entry.id === alert.product_id)
+                  const isFinished = product?.is_finished_good
+                  const checked = selectedAlerts.includes(alert.id)
                   return (
-                    <div key={alert.id} style={{ padding: '14px 16px', borderBottom: '1px solid #F1F5F9' }}>
-                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                            <AlertTriangle size={13} color={color} />
-                            <span style={{ fontSize: 12, fontWeight: 700, color: '#0F172A' }}>
-                              {state.products.find((product) => product.id === alert.product_id)?.name ?? 'Unknown item'}
-                            </span>
-                          </div>
-                          <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.45 }}>{alert.message}</div>
-                          <div style={{ marginTop: 5, fontSize: 10, color: '#94A3B8' }}>
-                            {formatNotificationDateTime(alert.created_at)}
-                          </div>
-                          <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                            <span className="badge" style={{ background: `${color}14`, color, fontSize: 10 }}>{alert.alert_type}</span>
-                            <span className="badge badge-blue" style={{ fontSize: 10 }}>{alert.status}</span>
-                          </div>
+                    <div key={alert.id} style={{ padding: '14px 16px', borderBottom: '1px solid #F1F5F9', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                      {alert.status === 'open' && (
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(event) => setSelectedAlerts((current) => event.target.checked ? [...new Set([...current, alert.id])] : current.filter((id) => id !== alert.id))}
+                          style={{ marginTop: 2, width: 16, height: 16, flexShrink: 0, cursor: 'pointer' }}
+                          aria-label={`Select ${product?.name ?? 'alert'}`}
+                        />
+                      )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                          <AlertTriangle size={13} color={color} />
+                          <span style={{ fontSize: 12, fontWeight: 700, color: '#0F172A' }}>
+                            {product?.name ?? 'Unknown item'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.45 }}>{alert.message}</div>
+                        <div style={{ marginTop: 5, fontSize: 10, color: '#94A3B8' }}>
+                          {formatNotificationDateTime(alert.created_at)}
+                        </div>
+                        <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <span className="badge" style={{ background: `${color}14`, color, fontSize: 10 }}>{alert.alert_type}</span>
+                          <span className="badge badge-blue" style={{ fontSize: 10 }}>{alert.status}</span>
+                          {isFinished && <span className="badge" style={{ background: '#8B5CF614', color: '#8B5CF6', fontSize: 10 }}>finished good</span>}
                         </div>
                       </div>
 
-                      {!isResolved && (
-                        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                          {alert.status !== 'acknowledged' && (
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              onClick={() => acknowledge(alert.id)}
-                              style={{ fontSize: 11, padding: '5px 8px' }}
-                            >
-                              Acknowledge
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            className="btn btn-primary btn-sm"
-                            onClick={() => resolve(alert.id)}
-                            style={{ fontSize: 11, padding: '5px 8px' }}
-                          >
-                            <CheckCircle2 size={13} /> Resolve
-                          </button>
-                        </div>
+                      {!isResolved && alert.status === 'open' && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => {
+                            if (isFinished) router.push('/dashboard/production')
+                            else router.push(`/dashboard/orders?restock=${alert.product_id}`)
+                          }}
+                          style={{ fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                          title={isFinished ? 'Restock via production' : 'Restock via purchase order'}
+                        >
+                          Restock
+                        </button>
                       )}
                     </div>
                   )

@@ -1,6 +1,7 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { Ban, CalendarDays, CheckCircle2, Clock3, DollarSign, Edit2, Eye, Package, Plus, ShoppingCart, Truck, X } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import type { PurchaseOrderDraft } from '@/lib/demo-system'
@@ -123,6 +124,31 @@ export default function OrdersPage() {
       { label: 'PO Value', value: formatCurrency(orderValue), hint: 'Estimated total spend', icon: DollarSign, color: '#0F172A', tint: '#E2E8F0' },
     ]
   }, [state.purchaseOrders, state.purchaseOrderItems, formatCurrency])
+
+  // When arriving from an alert "Restock" action (?restock=id1,id2,...),
+  // pre-fill the new-PO form with the first product so the user can place the
+  // restock order manually. We only prefill (no auto-open) — the user opens the form.
+  const searchParams = useSearchParams()
+  useEffect(() => {
+    const restockRaw = searchParams?.get('restock')
+    if (!restockRaw) return
+    const ids = restockRaw.split(',').map((value) => value.trim()).filter(Boolean)
+    const product = state.products.find((entry) => ids.includes(entry.id))
+    if (!product) return
+    const reorder = Number(product.reorder_quantity ?? 0) > 0
+      ? Number(product.reorder_quantity)
+      : Math.max(Math.round(Number(product.reorder_point ?? 0) * 2), 1)
+    const count = ids.length > 1 ? ` (${ids.length} items selected)` : ''
+    setForm({
+      supplierId: product.supplier_id ?? state.suppliers[0]?.id ?? '',
+      productId: product.id,
+      quantity: String(reorder),
+      unitCost: String(Number(product.unit_cost ?? 0)),
+      expectedDate: TODAY,
+      notes: `Restock ${product.name}${count} (low / out of stock).`,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, state.products])
 
   function resetForm() {
     setForm({

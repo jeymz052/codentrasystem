@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { Bookmark, Copy, Factory, Layers, Package, Plus, Save, Trash2, X, Zap } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { canPerformMutation, getRolePermissions } from '@/lib/access-control'
@@ -139,6 +140,26 @@ export default function ProductionPage() {
     setTemplateNotes('')
     setModalOpen(true)
   }
+
+  // When arriving from an alert "Restock finished → Production" action
+  // (?restock=id1,id2,...), open the produce modal for the first finished good
+  // and prefill the quantity with its reorder amount so the user can produce it.
+  const searchParams = useSearchParams()
+  useEffect(() => {
+    const restockRaw = searchParams?.get('restock')
+    if (!restockRaw) return
+    const ids = restockRaw.split(',').map((value) => value.trim()).filter(Boolean)
+    const product = state.products.find((entry) => ids.includes(entry.id) && entry.is_finished_good)
+    if (!product) return
+    const reorder = Number(product.reorder_quantity ?? 0) > 0
+      ? Number(product.reorder_quantity)
+      : Math.max(Math.round(Number(product.reorder_point ?? 0) * 2), 1)
+    setActiveFinishedGoodId(product.id)
+    setProduceQty(String(reorder))
+    setProduceLocation(product.location_id ?? '')
+    setModalOpen(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, state.products])
 
   function closeModal() {
     setModalOpen(false)

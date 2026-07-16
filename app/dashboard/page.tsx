@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useMemo } from 'react'
+import { useRouter } from 'next/navigation'
 import { AlertTriangle, ArrowRight, ArrowUpDown, BarChart3, CheckCircle2, CreditCard, DollarSign, LayoutDashboard, Package, PieChart, ShoppingCart, TrendingDown, Users, X } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { formatRoleLabel } from '@/lib/access-control'
@@ -19,7 +20,8 @@ function getGreeting(hour: number) {
 }
 
 export default function DashboardPage() {
-  const { state, stats, formatCurrency, acknowledge, resolve } = useDemoSystem()
+  const { state, stats, formatCurrency } = useDemoSystem()
+  const router = useRouter()
   const visibleUsers = state.users
   const plan = SUBSCRIPTION_PLANS.find((entry) => entry.plan === state.tenant.plan) ?? SUBSCRIPTION_PLANS[0]
   const greeting = getGreeting(new Date().getHours())
@@ -50,8 +52,8 @@ export default function DashboardPage() {
   const lowStock = state.products
     .filter((product) => product.is_active && product.quantity_on_hand <= product.reorder_point)
     .slice(0, 4)
-  const outOfStockCount = state.products.filter((product) => product.is_active && product.quantity_on_hand === 0).length
-  const lowStockCount = state.products.filter((product) => product.is_active && product.quantity_on_hand > 0 && product.quantity_on_hand <= product.reorder_point).length
+  const outOfStockCount = state.alerts.filter((alert) => alert.status === 'open' && alert.alert_type === 'out_of_stock').length
+  const lowStockCount = state.alerts.filter((alert) => alert.status === 'open' && alert.alert_type === 'low_stock').length
 
   const recentMovements = [...state.stockMovements]
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
@@ -259,17 +261,21 @@ export default function DashboardPage() {
       </div>
 
       {(lowStockCount > 0 || outOfStockCount > 0) && (
-        <Link href="/dashboard/inventory?filter=low" style={{ textDecoration: 'none', display: 'block', marginBottom: 18 }}>
-          <div className="card" style={{ padding: '14px 16px', borderRadius: 16, border: '1px solid #FECACA', background: 'linear-gradient(135deg, #FEF2F2 0%, #FFF7ED 100%)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, boxShadow: '0 12px 30px rgba(239, 68, 68, 0.10)' }}>
+        <div className="card" style={{ padding: '14px 16px', borderRadius: 16, border: '1px solid #FECACA', background: 'linear-gradient(135deg, #FEF2F2 0%, #FFF7ED 100%)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, boxShadow: '0 12px 30px rgba(239, 68, 68, 0.10)', marginBottom: 18 }}>
+          <Link href="/dashboard/inventory?filter=low" style={{ textDecoration: 'none', flex: 1, minWidth: 0 }}>
             <div>
               <div style={{ fontSize: 12, fontWeight: 800, color: '#B91C1C', letterSpacing: '0.04em', textTransform: 'uppercase' }}>Attention needed</div>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A', marginTop: 3 }}>
                 {lowStockCount} low-stock item{lowStockCount === 1 ? '' : 's'} and {outOfStockCount} out-of-stock item{outOfStockCount === 1 ? '' : 's'} need attention.
               </div>
             </div>
-            <span className="badge" style={{ background: '#DC262614', color: '#DC2626', fontSize: 10 }}>View low stock</span>
+          </Link>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            <button className="btn btn-primary btn-sm" onClick={() => router.push('/dashboard/orders')}>
+              <ShoppingCart size={13} /> Restock all
+            </button>
           </div>
-        </Link>
+        </div>
       )}
 
       <div style={{ marginBottom: 24 }}>
@@ -387,12 +393,17 @@ export default function DashboardPage() {
                        <div style={{ fontSize: 10, color: '#94A3B8', marginTop: 4 }}>{formatTimestamp(alert.created_at)}</div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                      <span className="badge" style={{ background: `${color}14`, color, fontSize: 10 }}>{alert.status}</span>
+                      {alert.purchase_order_id ? (
+                        <span className="badge" style={{ background: '#10B98114', color: '#059669', fontSize: 10 }}>ordered</span>
+                      ) : (
+                        <span className="badge" style={{ background: `${color}14`, color, fontSize: 10 }}>{alert.status}</span>
+                      )}
                       {alert.status === 'open' && (
-                        <>
-                          <button className="btn btn-ghost btn-sm" onClick={() => acknowledge(alert.id)} title="Acknowledge"><CheckCircle2 size={13} /></button>
-                          <button className="btn btn-ghost btn-sm" onClick={() => resolve(alert.id)} title="Resolve"><X size={13} /></button>
-                        </>
+                        <button className="btn btn-ghost btn-sm" onClick={() => {
+                          const p = state.products.find((item) => item.id === alert.product_id)
+                          if (p?.is_finished_good) router.push('/dashboard/production')
+                          else router.push(`/dashboard/orders?restock=${alert.product_id}`)
+                        }} title="Restock"><ShoppingCart size={13} /></button>
                       )}
                     </div>
                   </div>

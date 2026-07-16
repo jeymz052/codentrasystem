@@ -2,13 +2,19 @@ import { randomUUID } from 'crypto'
 import type { DemoSystemState } from '@/lib/demo-system'
 import {
   addOrUpdateProduct,
-  acknowledgeAlert,
+  reorderFromAlert,
+  reorderAllAlerts,
+  syncAlerts,
   closeShift,
   createCategory,
+  updateCategory,
+  deleteCategory,
   createPurchaseOrder,
   cancelPurchaseOrder,
   createUser,
   createUnitOfMeasure,
+  updateUnitOfMeasure,
+  deleteUnitOfMeasure,
   createLocation,
   createSupplier,
   deleteLocation,
@@ -66,7 +72,11 @@ type MutationPayload =
   | { action: 'resetDemo'; businessType?: BusinessType }
   | { action: 'updateTenant'; patch: Partial<DemoSystemState['tenant']> & { business_type?: BusinessType } }
   | { action: 'addCategory'; draft: CategoryDraft }
+  | { action: 'editCategory'; categoryId: string; draft: CategoryDraft }
+  | { action: 'deleteCategory'; categoryId: string }
   | { action: 'addUnitOfMeasure'; draft: UnitOfMeasureDraft }
+  | { action: 'editUnitOfMeasure'; uomId: string; draft: UnitOfMeasureDraft }
+  | { action: 'deleteUnitOfMeasure'; uomId: string }
   | { action: 'addLocation'; draft: LocationDraft }
   | { action: 'updateLocation'; locationId: string; draft: LocationDraft }
   | { action: 'deleteLocation'; locationId: string }
@@ -98,6 +108,8 @@ type MutationPayload =
   | { action: 'recordCashMovement'; payload: { shiftId: string; kind: CashMovementKind; amount: number; note?: string | null; denominations?: Record<string, number> | null } }
   | { action: 'acknowledge'; alertId: string }
   | { action: 'resolve'; alertId: string }
+  | { action: 'reorderAlert'; alertId: string }
+  | { action: 'reorderAllAlerts' }
   | { action: 'recordWaste'; productId: string; wasteType: 'waste' | 'defect' | 'reject'; quantity: number; reason?: string }
   | { action: 'setWasteTypes'; productId: string; waste: number; defect: number; reject: number; reason?: string }
   | { action: 'reverseWaste'; movementId: string }
@@ -309,7 +321,7 @@ export async function loadTenantState(tenantId?: string | null) {
     product: row.product_id ? productById.get(row.product_id) ?? undefined : undefined,
   }))
 
-  return {
+  const built = {
     tenant,
     currentUserId: users.find((user) => user.role === 'super_admin')?.id ?? users.find((user) => user.role === 'admin')?.id ?? users[0]?.id ?? '',
     categories,
@@ -343,6 +355,12 @@ export async function loadTenantState(tenantId?: string | null) {
     })) as DemoSystemState['deletionRequests'],
     inventoryLots: inventoryLots as DemoSystemState['inventoryLots'],
   } satisfies DemoSystemState
+  // Reconcile alerts against current product stock on every load so stale
+  // out_of_stock / low_stock rows (left over from when an item was at zero
+  // but has since been restocked) are never shown, and resolved alerts don't
+  // reappear for items that are actually fine.
+  const state = built
+  return syncAlerts(state)
 }
 
 export async function upsertTenantState(state: DemoSystemState) {
@@ -356,6 +374,12 @@ export async function upsertTenantState(state: DemoSystemState) {
   }
 
   const prune = async (table: string, keepIds: string[]) => {
+    // Safety guard: never mass-delete a table. If the in-memory state ever
+    // loses its rows (merge bug, stale snapshot, empty list), an unguarded
+    // prune would delete EVERY row for the tenant and make all data vanish on
+    // the next reload. Only prune when we actually have a non-empty keep-set.
+    if (!keepIds.length) return
+
     const { data, error } = await client.from(table).select('id').eq('tenant_id', tenantId)
     if (error) throw error
 
@@ -396,10 +420,10 @@ export async function upsertTenantState(state: DemoSystemState) {
 
   const productRows = state.products.map(({ category, supplier, location, uom, ...row }) => row)
   const purchaseOrderRows = state.purchaseOrders.map(({ supplier, items, ...row }) => row)
-  const salesTransactionRows = state.salesTransactions.map(({ cashier, items, split_payments, ...row }) => row)
+  const salesTransactionRows = state.salesTransactions.map(({ cashier, items, split_payments, cash_sales_total, qr_sales_total, ...row }) => row)
   const purchaseOrderItemRows = state.purchaseOrderItems.map(({ product, ...row }) => row)
   const salesTransactionItemRows = state.salesTransactionItems.map(({ product, ...row }) => row)
-  const alertRows = state.alerts.map(({ product, ...row }) => row)
+  const alertRows = state.alerts.map(({ product, purchase_order_id, ...row }) => row)
   const auditLogRows = state.auditLogs.map(({ performed_by, ...row }) => row)
   const recipeRows = state.productRecipes.map((row) => row)
   const stockMovementRows = state.stockMovements.map(({ product, ...row }) => row)
@@ -811,8 +835,20 @@ export async function applyDatabaseMutation(
     case 'addCategory':
       state = createCategory(state, mutation.draft)
       break
+    case 'editCategory':
+      state = updateCategory(state, mutation.categoryId, mutation.draft)
+      break
+    case 'deleteCategory':
+      state = deleteCategory(state, mutation.categoryId)
+      break
     case 'addUnitOfMeasure':
       state = createUnitOfMeasure(state, mutation.draft)
+      break
+    case 'editUnitOfMeasure':
+      state = updateUnitOfMeasure(state, mutation.uomId, mutation.draft)
+      break
+    case 'deleteUnitOfMeasure':
+      state = deleteUnitOfMeasure(state, mutation.uomId)
       break
     case 'addLocation':
       state = createLocation(state, mutation.draft)
@@ -906,10 +942,16 @@ export async function applyDatabaseMutation(
       state = recordCashMovement(state, mutation.payload)
       break
     case 'acknowledge':
-      state = acknowledgeAlert(state, mutation.alertId)
+      state = resolveAlert(state, mutation.alertId)
       break
     case 'resolve':
       state = resolveAlert(state, mutation.alertId)
+      break
+    case 'reorderAlert':
+      state = reorderFromAlert(state, mutation.alertId)
+      break
+    case 'reorderAllAlerts':
+      state = reorderAllAlerts(state)
       break
     case 'recordWaste':
       state = recordWaste(state, { productId: mutation.productId, wasteType: mutation.wasteType, quantity: mutation.quantity, reason: mutation.reason })

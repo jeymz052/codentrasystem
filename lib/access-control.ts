@@ -17,7 +17,11 @@ export type MutationAction =
   | 'resetDemo'
   | 'updateTenant'
   | 'addCategory'
+  | 'editCategory'
+  | 'deleteCategory'
   | 'addUnitOfMeasure'
+  | 'editUnitOfMeasure'
+  | 'deleteUnitOfMeasure'
   | 'addLocation'
   | 'updateLocation'
   | 'deleteLocation'
@@ -50,6 +54,8 @@ export type MutationAction =
   | 'recordCashMovement'
   | 'acknowledge'
   | 'resolve'
+  | 'reorderAlert'
+  | 'reorderAllAlerts'
   | 'recordWaste'
   | 'setWasteTypes'
   | 'transferStock'
@@ -63,6 +69,8 @@ const DELETION_ACTIONS: MutationAction[] = [
   'deleteRecipe',
   'deleteProductionTemplate',
   'deleteLocation',
+  'deleteCategory',
+  'deleteUnitOfMeasure',
 ]
 
 const APPROVAL_ACTIONS: MutationAction[] = [
@@ -217,12 +225,18 @@ export function canPerformMutation(role: UserRole, action: MutationAction) {
       'removeProduct',
       'importProductRows',
       'addCategory',
+      'editCategory',
+      'deleteCategory',
       'addUnitOfMeasure',
+      'editUnitOfMeasure',
+      'deleteUnitOfMeasure',
       'addLocation',
       'updateLocation',
       'deleteLocation',
       'acknowledge',
       'resolve',
+      'reorderAlert',
+      'reorderAllAlerts',
       'transferStock',
       'recordWaste',
       'setWasteTypes',

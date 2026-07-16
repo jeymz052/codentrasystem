@@ -11,8 +11,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const { stats } = useDemoSystem()
   const [dismissedKey, setDismissedKey] = useState<string | null>(null)
-  const bannerKey = useMemo(() => `${stats.low_stock_count}:${stats.out_of_stock_count}`, [stats.low_stock_count, stats.out_of_stock_count])
-  const shouldShowBanner = (stats.low_stock_count > 0 || stats.out_of_stock_count > 0) && dismissedKey !== bannerKey
+  const bannerKey = useMemo(() => String(stats.open_alerts), [stats.open_alerts])
+  const shouldShowBanner = stats.open_alerts > 0 && dismissedKey !== bannerKey
 
   useEffect(() => {
     const stored = window.sessionStorage.getItem('codentra.dashboard-stock-banner')
@@ -100,7 +100,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                   Stock warning
                 </div>
                 <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginTop: 2, lineHeight: 1.3, whiteSpace: 'nowrap' }}>
-                  {stats.low_stock_count} low, {stats.out_of_stock_count} out
+                  {stats.open_alerts} open alert{stats.open_alerts === 1 ? '' : 's'}
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginLeft: 2 }}>

@@ -194,7 +194,7 @@ export function SearchableSelect({
                 const isActive = index === activeIndex
                 return (
                   <li
-                    key={option.value}
+                    key={`${option.value}-${index}`}
                     role="option"
                     aria-selected={isSelected}
                     onMouseEnter={() => setActiveIndex(index)}

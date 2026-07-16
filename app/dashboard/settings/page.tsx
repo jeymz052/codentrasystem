@@ -5,6 +5,7 @@ import { Building2, Coins, Factory, Landmark, Layers3, MapPin, Pencil, Plus, Rot
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { getRolePermissions } from '@/lib/access-control'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { TIMEZONES, DEFAULT_TIMEZONE } from '@/lib/timezones'
 import type { BusinessType, PaymentAccount, SubscriptionPlan, SubscriptionStatus } from '@/types/database'
 
@@ -17,7 +18,7 @@ function paymentAccountId() {
 }
 
 export default function SettingsPage() {
-  const { state, availableTenants, activeTenantId, updateTenant, resetDemo, addCategory, addUnitOfMeasure, addLocation, editLocation, removeLocation, requestDeletion, notifySuccess, notifyError, isSuperAdminIdentity, hydrated } = useDemoSystem()
+  const { state, availableTenants, activeTenantId, updateTenant, resetDemo, addCategory, editCategory, deleteCategory, addUnitOfMeasure, editUnitOfMeasure, deleteUnitOfMeasure, addLocation, editLocation, removeLocation, requestDeletion, notifySuccess, notifyError, isSuperAdminIdentity, hydrated } = useDemoSystem()
   const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
   const role = activeTenant?.role ?? 'admin'
   const perms = getRolePermissions(role)
@@ -25,9 +26,12 @@ export default function SettingsPage() {
   const [billingLoading, setBillingLoading] = useState(false)
   const [catalogTab, setCatalogTab] = useState<'categories' | 'uom' | 'locations'>('categories')
   const [categoryForm, setCategoryForm] = useState({ name: '', color: '#3B82F6', description: '' })
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null)
   const [uomForm, setUomForm] = useState({ name: '', abbreviation: '' })
+  const [editingUomId, setEditingUomId] = useState<string | null>(null)
   const [locationForm, setLocationForm] = useState({ code: '', name: '', zone: '' })
   const [editingLocationId, setEditingLocationId] = useState<string | null>(null)
+  const [confirmDialog, setConfirmDialog] = useState<{ open: boolean; title: string; message: string; tone: 'danger' | 'warning' | 'info'; onConfirm: () => void }>({ open: false, title: '', message: '', tone: 'danger', onConfirm: () => {} })
   const [paymentAccounts, setPaymentAccounts] = useState<PaymentAccount[]>(
     () => state.tenant.payment_accounts ?? []
   )
@@ -112,6 +116,50 @@ export default function SettingsPage() {
     setCategoryForm({ name: '', color: '#3B82F6', description: '' })
   }
 
+  function handleSaveCategory() {
+    if (!categoryForm.name.trim() || !editingCategoryId) return
+    editCategory(editingCategoryId, {
+      name: categoryForm.name,
+      color: categoryForm.color,
+      description: categoryForm.description,
+    })
+    notifySuccess('Category updated successfully.')
+    setCategoryForm({ name: '', color: '#3B82F6', description: '' })
+    setEditingCategoryId(null)
+  }
+
+  function handleEditCategory(categoryId: string) {
+    const category = state.categories.find((entry) => entry.id === categoryId)
+    if (!category) return
+    setCategoryForm({ name: category.name, color: category.color, description: category.description || '' })
+    setEditingCategoryId(categoryId)
+  }
+
+  function handleCancelEditCategory() {
+    setCategoryForm({ name: '', color: '#3B82F6', description: '' })
+    setEditingCategoryId(null)
+  }
+
+  function handleDeleteCategory(categoryId: string, categoryName: string) {
+    setConfirmDialog({
+      open: true,
+      title: 'Delete category',
+      message: `Delete "${categoryName}"? Products using this category will be unassigned. This cannot be undone.`,
+      tone: 'danger',
+      onConfirm: () => {
+        if (!perms.canDeleteRecords) {
+          requestDeletion('deleteCategory', 'category', categoryId, { name: categoryName })
+          notifySuccess('Deletion request sent to manager for approval.')
+          if (editingCategoryId === categoryId) handleCancelEditCategory()
+        } else {
+          deleteCategory(categoryId)
+          if (editingCategoryId === categoryId) handleCancelEditCategory()
+          notifySuccess('Category deleted successfully.')
+        }
+      },
+    })
+  }
+
   function handleAddUom() {
     if (!uomForm.name.trim() || !uomForm.abbreviation.trim()) return
     addUnitOfMeasure({
@@ -120,6 +168,49 @@ export default function SettingsPage() {
     })
     notifySuccess('Unit of measure added successfully.')
     setUomForm({ name: '', abbreviation: '' })
+  }
+
+  function handleSaveUom() {
+    if (!uomForm.name.trim() || !uomForm.abbreviation.trim() || !editingUomId) return
+    editUnitOfMeasure(editingUomId, {
+      name: uomForm.name,
+      abbreviation: uomForm.abbreviation,
+    })
+    notifySuccess('Unit updated successfully.')
+    setUomForm({ name: '', abbreviation: '' })
+    setEditingUomId(null)
+  }
+
+  function handleEditUom(uomId: string) {
+    const uom = state.unitsOfMeasure.find((entry) => entry.id === uomId)
+    if (!uom) return
+    setUomForm({ name: uom.name, abbreviation: uom.abbreviation })
+    setEditingUomId(uomId)
+  }
+
+  function handleCancelEditUom() {
+    setUomForm({ name: '', abbreviation: '' })
+    setEditingUomId(null)
+  }
+
+  function handleDeleteUom(uomId: string, uomName: string) {
+    setConfirmDialog({
+      open: true,
+      title: 'Delete unit',
+      message: `Delete "${uomName}"? Products using this unit will be unassigned. This cannot be undone.`,
+      tone: 'danger',
+      onConfirm: () => {
+        if (!perms.canDeleteRecords) {
+          requestDeletion('deleteUnitOfMeasure', 'unit_of_measure', uomId, { name: uomName })
+          notifySuccess('Deletion request sent to manager for approval.')
+          if (editingUomId === uomId) handleCancelEditUom()
+        } else {
+          deleteUnitOfMeasure(uomId)
+          if (editingUomId === uomId) handleCancelEditUom()
+          notifySuccess('Unit deleted successfully.')
+        }
+      },
+    })
   }
 
   function handleSaveLocation() {
@@ -155,16 +246,23 @@ export default function SettingsPage() {
   }
 
   function handleDeleteLocation(locationId: string, locationName: string) {
-    if (!window.confirm(`Delete "${locationName}"? Stock tied to it will be unassigned. This cannot be undone.`)) return
-    if (!perms.canDeleteRecords) {
-      requestDeletion('deleteLocation', 'location', locationId, { name: locationName })
-      notifySuccess('Deletion request sent to manager for approval.')
-      if (editingLocationId === locationId) handleCancelEditLocation()
-      return
-    }
-    removeLocation(locationId)
-    if (editingLocationId === locationId) handleCancelEditLocation()
-    notifySuccess('Location deleted successfully.')
+    setConfirmDialog({
+      open: true,
+      title: 'Delete location',
+      message: `Delete "${locationName}"? Stock tied to it will be unassigned. This cannot be undone.`,
+      tone: 'danger',
+      onConfirm: () => {
+        if (!perms.canDeleteRecords) {
+          requestDeletion('deleteLocation', 'location', locationId, { name: locationName })
+          notifySuccess('Deletion request sent to manager for approval.')
+          if (editingLocationId === locationId) handleCancelEditLocation()
+        } else {
+          removeLocation(locationId)
+          if (editingLocationId === locationId) handleCancelEditLocation()
+          notifySuccess('Location deleted successfully.')
+        }
+      },
+    })
   }
 
   function handleSavePayments() {
@@ -889,9 +987,16 @@ export default function SettingsPage() {
                     <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>{categoryForm.description || 'No description yet'}</div>
                   </div>
                 </div>
-                <button className="btn btn-primary" onClick={handleAddCategory}>
-                  <Plus size={15} /> Add Category
-                </button>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  <button className="btn btn-primary" onClick={editingCategoryId ? handleSaveCategory : handleAddCategory}>
+                    {editingCategoryId ? <><Save size={15} /> Save Changes</> : <><Plus size={15} /> Add Category</>}
+                  </button>
+                  {editingCategoryId && (
+                    <button className="btn btn-ghost" onClick={handleCancelEditCategory}>
+                      <X size={15} /> Cancel
+                    </button>
+                  )}
+                </div>
               </div>
             )}
 
@@ -923,9 +1028,16 @@ export default function SettingsPage() {
                   </div>
                   <div style={{ fontSize: 11, fontWeight: 800, color: '#3B82F6', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Unit</div>
                 </div>
-                <button className="btn btn-primary" onClick={handleAddUom}>
-                  <Plus size={15} /> Add UOM
-                </button>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  <button className="btn btn-primary" onClick={editingUomId ? handleSaveUom : handleAddUom}>
+                    {editingUomId ? <><Save size={15} /> Save Changes</> : <><Plus size={15} /> Add UOM</>}
+                  </button>
+                  {editingUomId && (
+                    <button className="btn btn-ghost" onClick={handleCancelEditUom}>
+                      <X size={15} /> Cancel
+                    </button>
+                  )}
+                </div>
               </div>
             )}
 
@@ -1018,6 +1130,22 @@ export default function SettingsPage() {
                       </div>
                       <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>{category.description || 'No description'}</div>
                     </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        onClick={() => handleEditCategory(category.id)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: '#0F172A', background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: 10, padding: '6px 10px', cursor: 'pointer' }}
+                      >
+                        <Pencil size={13} /> Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteCategory(category.id, category.name)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: '#DC2626', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '6px 10px', cursor: 'pointer' }}
+                      >
+                        <Trash2 size={13} /> Delete
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
@@ -1033,8 +1161,24 @@ export default function SettingsPage() {
                       <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A' }}>{unit.name}</div>
                       <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>Used for product variants and stock counts.</div>
                     </div>
-                    <div style={{ fontSize: 11, fontWeight: 800, color: '#3B82F6', textTransform: 'uppercase', letterSpacing: '0.08em', background: '#EAF1FF', padding: '5px 8px', borderRadius: 999 }}>
-                      {unit.abbreviation}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: '#3B82F6', textTransform: 'uppercase', letterSpacing: '0.08em', background: '#EAF1FF', padding: '5px 8px', borderRadius: 999 }}>
+                        {unit.abbreviation}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleEditUom(unit.id)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: '#0F172A', background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: 10, padding: '6px 10px', cursor: 'pointer' }}
+                      >
+                        <Pencil size={13} /> Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteUom(unit.id, unit.name)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: '#DC2626', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '6px 10px', cursor: 'pointer' }}
+                      >
+                        <Trash2 size={13} /> Delete
+                      </button>
                     </div>
                   </div>
                 ))
@@ -1084,6 +1228,17 @@ export default function SettingsPage() {
           </div>
         </div>
       </section>
+      <ConfirmDialog
+        open={confirmDialog.open}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        tone={confirmDialog.tone}
+        onConfirm={() => {
+          confirmDialog.onConfirm()
+          setConfirmDialog((current) => ({ ...current, open: false }))
+        }}
+        onCancel={() => setConfirmDialog((current) => ({ ...current, open: false }))}
+      />
     </div>
   )
 }

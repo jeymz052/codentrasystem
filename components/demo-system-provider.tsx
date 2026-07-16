@@ -4,14 +4,18 @@ import { createContext, useContext, useEffect, useRef, useState, type PropsWithC
 import { CheckCircle2, X, AlertTriangle } from 'lucide-react'
 import {
   addOrUpdateProduct,
-  acknowledgeAlert,
-  acknowledgeAllAlerts,
+  reorderFromAlert,
+  reorderAllAlerts,
   closeShift,
   computeDashboardStats,
   createCategory,
+  updateCategory,
+  deleteCategory,
   createPurchaseOrder,
   createLocation,
   createUnitOfMeasure,
+  updateUnitOfMeasure,
+  deleteUnitOfMeasure,
   deleteLocation,
   updateLocation,
   createSupplier,
@@ -38,6 +42,7 @@ import {
   resolveAllAlerts,
   toggleProductActive,
   seedDemoSystem,
+  syncAlerts,
   toggleUserActive,
   updatePurchaseOrder,
   updateSupplier,
@@ -48,6 +53,7 @@ import {
   refundTransaction,
   createRecipe,
   updateRecipe,
+  buildSaleTransactionId,
   deleteRecipe,
   createProductionTemplate,
   deleteProductionTemplate,
@@ -89,7 +95,11 @@ type DemoSystemContextValue = {
   resetDemo: (businessType?: BusinessType) => void
   updateTenant: (patch: Partial<DemoSystemState['tenant']> & { business_type?: BusinessType }) => void
   addCategory: (draft: CategoryDraft) => void
+  editCategory: (categoryId: string, draft: CategoryDraft) => void
+  deleteCategory: (categoryId: string) => void
   addUnitOfMeasure: (draft: UnitOfMeasureDraft) => void
+  editUnitOfMeasure: (uomId: string, draft: UnitOfMeasureDraft) => void
+  deleteUnitOfMeasure: (uomId: string) => void
   addLocation: (draft: LocationDraft) => void
   editLocation: (locationId: string, draft: LocationDraft) => void
   removeLocation: (locationId: string) => void
@@ -124,7 +134,8 @@ type DemoSystemContextValue = {
   recordCashMovement: (shiftId: string, kind: 'cash_in' | 'cash_out' | 'denomination_adjustment', amount: number, note?: string | null, denominations?: Record<string, number> | null) => void
   acknowledge: (alertId: string) => void
   resolve: (alertId: string) => void
-  acknowledgeAll: () => void
+  reorderAlert: (alertId: string) => void
+  reorderAllAlerts: () => void
   resolveAll: () => void
   recordWaste: (productId: string, wasteType: 'waste' | 'defect' | 'reject', quantity: number, reason?: string) => void
   reverseWaste: (movementId: string) => void
@@ -177,17 +188,26 @@ function mergeDeletionRequests(localItems: DemoSystemState['deletionRequests'], 
 // because the ids differ, which double-counts Sales / Void / Refund history.
 // Collapse to one per logical movement using a stable natural key so the
 // movement ledger shows each event exactly once.
+//
+// IMPORTANT: the key must NOT include quantity_before / quantity_after. Those
+// values are derived from the on-hand snapshot at compute time, and when two
+// near-simultaneous sales are each applied against slightly different snapshots
+// (optimistic client state vs. server DB snapshot) they can legitimately differ
+// for the *same* logical event. Keying on them would let the server's stale
+// recomputation survive the merge as a phantom movement with the wrong
+// before/after (e.g. "before 3, after 3" while the real stock did decrement).
+// Key on the immutable logical identity instead and keep the local record,
+// which already reflects every prior local mutation.
 type StockMovementLike = {
+  id?: string
   reference_id?: string | null
   product_id?: string | null
   movement_type?: string | null
   quantity?: number | null
-  quantity_before?: number | null
-  quantity_after?: number | null
 }
 function mergeStockMovements<T extends StockMovementLike>(localItems: T[], remoteItems: T[]): T[] {
   const keyFor = (item: StockMovementLike) =>
-    `${item.reference_id ?? ''}|${item.product_id ?? ''}|${item.movement_type ?? ''}|${item.quantity ?? 0}|${item.quantity_before ?? 0}|${item.quantity_after ?? 0}`
+    `${item.reference_id ?? ''}|${item.product_id ?? ''}|${item.movement_type ?? ''}|${item.quantity ?? 0}`
   const seen = new Set(localItems.map(keyFor))
   const merged = [...localItems]
   for (const remoteItem of remoteItems) {
@@ -246,6 +266,38 @@ function mergeUsers<T extends { id: string; email: string }>(localItems: T[], re
   const localOnly = localItems.filter(
     (item) => !remoteIds.has(item.id) && !remoteEmails.has(item.email.trim().toLowerCase())
   )
+  return [...remoteItems, ...localOnly]
+}
+
+// Categories are deduplicated by name (the real business key), not just id.
+// A client optimistic category and its server-persisted twin can carry different
+// random ids, which would otherwise both survive a plain id merge. The server
+// is authoritative, so prefer remote rows and only keep local rows that have
+// no remote match by id OR name.
+function mergeCategories<T extends { id: string; name: string }>(localItems: T[], remoteItems: T[]): T[] {
+  const remoteIds = new Set(remoteItems.map((item) => item.id))
+  const remoteNames = new Set(remoteItems.map((item) => item.name.trim().toLowerCase()))
+  const localOnly = localItems.filter(
+    (item) => !remoteIds.has(item.id) && !remoteNames.has(item.name.trim().toLowerCase())
+  )
+  return [...remoteItems, ...localOnly]
+}
+
+// Locations are deduplicated by id OR (code + name), the real business key.
+// A client optimistic location and its server-persisted twin can carry different
+// random ids, which would otherwise both survive a plain id merge and appear as
+// a duplicate entry in the settings catalog. The server is authoritative, so
+// prefer remote rows and only keep local rows that have no remote match by id or
+// by code + name.
+function mergeLocations<T extends { id: string; code: string; name: string }>(localItems: T[], remoteItems: T[]): T[] {
+  const remoteIds = new Set(remoteItems.map((item) => item.id))
+  const remoteKeys = new Set(
+    remoteItems.map((item) => `${String(item.code).trim().toLowerCase()}|${String(item.name).trim().toLowerCase()}`)
+  )
+  const localOnly = localItems.filter((item) => {
+    const key = `${String(item.code).trim().toLowerCase()}|${String(item.name).trim().toLowerCase()}`
+    return !remoteIds.has(item.id) && !remoteKeys.has(key)
+  })
   return [...remoteItems, ...localOnly]
 }
 
@@ -328,7 +380,10 @@ async function postMutation(tenantId: string, body: Record<string, unknown>) {
 }
 
 export function DemoSystemProvider({ children, initialTenantId, authUserEmail = null, isSuperAdminIdentity = false }: PropsWithChildren<{ initialTenantId?: string; authUserEmail?: string | null; isSuperAdminIdentity?: boolean }>) {
-  const [state, setState] = useState<DemoSystemState>(() => seedDemoSystem())
+  // Start from the last-known cached state (if any) so a page reload shows the
+  // user's data immediately instead of flashing an empty seed and appearing to
+  // "lose everything" while the server fetch is in flight or if it fails.
+  const [state, setState] = useState<DemoSystemState>(() => loadCachedState())
   const [availableTenants, setAvailableTenants] = useState<AccessibleTenant[]>([])
   const [activeTenantId, setActiveTenantId] = useState<string>('')
   const [hydrated, setHydrated] = useState(false)
@@ -350,10 +405,10 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         // to its server-side status (e.g. draft) after a few seconds.
         const hasMutated = requestIdRef.current > 0
         if (!hasMutated) {
-          setState((prev) => ({
-            ...ensureWasteLocation(remote.state),
-            currentUserId: resolveCurrentUserId(remote.state),
-          }))
+          // Merge the authoritative server state onto the cached local state
+          // so any locally-optimistic rows are preserved and the user never
+          // sees their data disappear on reload.
+          setState((prev) => mergeState(prev, ensureWasteLocation(remote.state)))
           window.localStorage.setItem(STORAGE_KEY, JSON.stringify(remote.state))
         }
         setAvailableTenants(remote.availableTenants)
@@ -424,13 +479,13 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
   }
 
   function mergeState(local: DemoSystemState, remote: DemoSystemState): DemoSystemState {
-    return {
+    const merged: DemoSystemState = {
       ...remote,
       currentUserId: resolveCurrentUserId(remote),
       tenant: { ...remote.tenant, ...local.tenant },
-      categories: mergeArray(local.categories, remote.categories),
+      categories: mergeCategories(local.categories, remote.categories),
       unitsOfMeasure: mergeArray(local.unitsOfMeasure, remote.unitsOfMeasure),
-      locations: mergeArray(local.locations, remote.locations),
+      locations: mergeLocations(local.locations, remote.locations),
       suppliers: mergeArray(local.suppliers, remote.suppliers),
       users: mergeUsers(local.users, remote.users),
       products: mergeProducts(local.products, remote.products),
@@ -448,6 +503,11 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       inventoryLots: mergeArray(local.inventoryLots, remote.inventoryLots ?? []),
       deletionRequests: mergeDeletionRequests(local.deletionRequests, remote.deletionRequests ?? []),
     }
+
+    // Always reconcile alerts against the merged product stock so stale
+    // notifications (e.g. an out_of_stock row for an item that now has 10 on
+    // hand) never display, regardless of cache or prior mutations.
+    return syncAlerts(merged)
   }
 
   function sync<T>(optimistic: (current: DemoSystemState) => DemoSystemState, mutation: Record<string, unknown>, options?: { successMessage?: string; errorLabel?: string }) {
@@ -509,9 +569,25 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       (current) => createCategory(current, draft),
       { action: 'addCategory', draft }
     ),
+    editCategory: (categoryId, draft) => sync(
+      (current) => updateCategory(current, categoryId, draft),
+      { action: 'editCategory', categoryId, draft }
+    ),
+    deleteCategory: (categoryId) => sync(
+      (current) => deleteCategory(current, categoryId),
+      { action: 'deleteCategory', categoryId }
+    ),
     addUnitOfMeasure: (draft) => sync(
       (current) => createUnitOfMeasure(current, draft),
       { action: 'addUnitOfMeasure', draft }
+    ),
+    editUnitOfMeasure: (uomId, draft) => sync(
+      (current) => updateUnitOfMeasure(current, uomId, draft),
+      { action: 'editUnitOfMeasure', uomId, draft }
+    ),
+    deleteUnitOfMeasure: (uomId) => sync(
+      (current) => deleteUnitOfMeasure(current, uomId),
+      { action: 'deleteUnitOfMeasure', uomId }
     ),
     addLocation: (draft) => sync(
       (current) => createLocation(current, draft),
@@ -632,18 +708,41 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     { action: 'cancelPurchaseOrder', purchaseOrderId }
   ),
     completeSale: (payload) => {
-      const local = recordSale(state, payload)
+      // Generate the receipt/transaction ids up front so the optimistic local
+      // state and the reducer (applied once inside sync) stay in lockstep.
+      // IMPORTANT: do NOT call recordSale here — sync applies it exactly once.
+      // Calling it both places double-deducts stock (duplicate outbound).
+      const receiptNumber = buildSaleTransactionId(state)
+      const transactionId = id()
+      const itemIds = payload.items.map(() => id())
+      const movementIds = payload.items.map(() => id())
+      const auditLogId = id()
+      const local = recordSale(state, {
+        ...payload,
+        receiptNumber,
+        transactionId,
+        itemIds,
+        movementIds,
+        auditLogId,
+      })
       sync(
-        () => local.state,
+        (current) => recordSale(current, {
+          ...payload,
+          receiptNumber,
+          transactionId,
+          itemIds,
+          movementIds,
+          auditLogId,
+        }).state,
         {
           action: 'completeSale',
           payload: {
             ...payload,
-            receiptNumber: local.receiptNumber,
-            transactionId: local.transactionId,
-            itemIds: local.itemIds,
-            movementIds: local.movementIds,
-            auditLogId: local.auditLogId,
+            receiptNumber,
+            transactionId,
+            itemIds,
+            movementIds,
+            auditLogId,
           },
         }
       )
@@ -679,17 +778,22 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         { action: 'recordCashMovement', payload: { shiftId, kind, amount, note, denominations } }
       ),
     acknowledge: (alertId) => sync(
-      (current) => acknowledgeAlert(current, alertId),
+      (current) => resolveAlert(current, alertId),
       { action: 'acknowledge', alertId }
     ),
     resolve: (alertId) => sync(
       (current) => resolveAlert(current, alertId),
       { action: 'resolve', alertId }
     ),
-    acknowledgeAll: () => sync(
-      (current) => acknowledgeAllAlerts(current),
-      { action: 'acknowledgeAll' },
-      { successMessage: 'All open alerts acknowledged.' }
+    reorderAlert: (alertId) => sync(
+      (current) => reorderFromAlert(current, alertId),
+      { action: 'reorderAlert', alertId },
+      { successMessage: 'Restock triggered.' }
+    ),
+    reorderAllAlerts: () => sync(
+      (current) => reorderAllAlerts(current),
+      { action: 'reorderAllAlerts' },
+      { successMessage: 'Restock orders created.' }
     ),
     resolveAll: () => sync(
       (current) => resolveAllAlerts(current),

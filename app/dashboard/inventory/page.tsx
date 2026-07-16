@@ -1,7 +1,8 @@
 'use client'
 
 import { useMemo, useRef, useState, type ChangeEvent } from 'react'
-import { AlertTriangle, ArrowLeftRight, Edit2, Eye, Package, Plus, Power, RotateCcw, Save, Search, Trash2, Upload, X } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { AlertTriangle, ArrowLeftRight, Edit2, Eye, Package, Plus, Power, RotateCcw, Save, Search, ShoppingCart, Trash2, Upload, X } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { getRolePermissions } from '@/lib/access-control'
@@ -245,6 +246,7 @@ function normalizeImportRow(row: Record<string, unknown> | unknown[]): ProductDr
 
 export default function InventoryPage() {
   const { state, availableTenants, activeTenantId, saveProduct, removeProduct, removeProducts, importProductRows, setWasteTypes, reverseWaste, transferStock, toggleProduct, requestDeletion, formatCurrency, notifySuccess, notifyError } = useDemoSystem()
+  const router = useRouter()
   const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
   const role = activeTenant?.role ?? 'admin'
   const perms = getRolePermissions(role)
@@ -365,8 +367,8 @@ export default function InventoryPage() {
   }, [state.stockMovements, state.products])
 
   const products = state.products
-  const lowStockCount = products.filter((product) => product.is_active && product.quantity_on_hand > 0 && product.quantity_on_hand <= product.reorder_point).length
-  const outOfStockCount = products.filter((product) => product.is_active && product.quantity_on_hand === 0).length
+  const lowStockCount = state.alerts.filter((alert) => alert.status === 'open' && alert.alert_type === 'low_stock').length
+  const outOfStockCount = state.alerts.filter((alert) => alert.status === 'open' && alert.alert_type === 'out_of_stock').length
   const lowStockItems = products.filter((product) => product.is_active && product.quantity_on_hand > 0 && product.quantity_on_hand <= product.reorder_point)
   const outOfStockItems = products.filter((product) => product.is_active && product.quantity_on_hand === 0)
   const categoryNames = useMemo(() => ['all', ...state.categories.map((category) => category.name)], [state.categories])
@@ -660,11 +662,7 @@ export default function InventoryPage() {
     // Fall back to the total on-hand and transfer from the product's lots as a
     // whole so the move still works instead of reporting "0 available".
     const hasLocationLots = lotsAtSource > 0
-    // Cap at the full movable on-hand so the user can always transfer the exact
-    // total, even when stock is split across several locations. When the request
-    // covers the entire on-hand, pull from every location (null source) so 100%
-    // of the stock actually moves and the on-hand/location update correctly.
-    const availableAtSource = onHand
+    const availableAtSource = hasLocationLots ? lotsAtSource : onHand
     const movingAll = quantity >= onHand
     if (!sourceLocationId && onHand <= 0) {
       notifyError('Select a source location.')
@@ -1179,7 +1177,7 @@ export default function InventoryPage() {
                     searchPlaceholder="Search locations..."
                     value={form.location}
                     onChange={(value) => setForm((current) => ({ ...current, location: value }))}
-                    options={state.locations.map((location) => ({ value: location.name, label: location.name }))}
+                    options={state.locations.map((location) => ({ value: location.id, label: location.name }))}
                   />
                 ) : (
                   <input className="input" value={form.location} onChange={(event) => setForm((current) => ({ ...current, location: event.target.value }))} placeholder="Type a location name" />
@@ -1357,7 +1355,10 @@ export default function InventoryPage() {
             <div style={{ display: 'grid', gap: 10, maxHeight: 320, overflowY: 'auto' }}>
               {(warningsFilter === 'out' ? outOfStockItems : lowStockItems).length === 0 ? (
                 <p style={{ color: '#94A3B8', fontSize: 13, textAlign: 'center' }}>No items in this category.</p>
-              ) : (warningsFilter === 'out' ? outOfStockItems : lowStockItems).map((product) => (
+              ) : (warningsFilter === 'out' ? outOfStockItems : lowStockItems).map((product) => {
+                const alert = state.alerts.find((a) => a.product_id === product.id && a.status === 'open' && (a.alert_type === 'out_of_stock' || a.alert_type === 'low_stock'))
+                const isFinished = product.is_finished_good
+                return (
                 <div key={product.id} style={{ padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: `1px solid ${warningsFilter === 'out' ? '#FECACA' : '#FEF3C7'}` }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                     <div style={{ minWidth: 0 }}>
@@ -1371,8 +1372,23 @@ export default function InventoryPage() {
                   <div style={{ fontSize: 11, color: '#64748B', marginTop: 6 }}>
                     On hand: {warningsFilter === 'out' ? 0 : product.quantity_on_hand} · Reorder point: {product.reorder_point}
                   </div>
+                  {alert && (
+                    <div style={{ marginTop: 8 }}>
+                      {alert.purchase_order_id ? (
+                        <span className="badge" style={{ background: '#10B98114', color: '#059669', fontSize: 10 }}>Ordered — pending receipt</span>
+                      ) : (
+                        <button className="btn btn-primary btn-sm" onClick={() => {
+                          if (isFinished) router.push('/dashboard/production')
+                          else router.push(`/dashboard/orders?restock=${alert.product_id}`)
+                        }}>
+                          <ShoppingCart size={13} /> {isFinished ? 'Produce' : 'Order'} restock
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
-              ))}
+                )
+              })}
             </div>
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 18 }}>
@@ -1461,12 +1477,12 @@ export default function InventoryPage() {
          const sourceLocationId = resolveStockSourceLocation(state.inventoryLots, target.id, requestedSource)
          const fromLoc = state.locations.find((loc) => loc.id === sourceLocationId)
         const qty = Number(transferQty) || 0
-         const lotsAtSource = state.inventoryLots
-           .filter((lot) => lot.product_id === target.id && lot.location_id === sourceLocationId)
-           .reduce((sum, lot) => sum + Number(lot.quantity ?? 0), 0)
+          const lotsAtSource = state.inventoryLots
+            .filter((lot) => lot.product_id === target.id && lot.location_id === sourceLocationId)
+            .reduce((sum, lot) => sum + Number(lot.quantity ?? 0), 0)
           const onHandTotal = Number(target.quantity_on_hand ?? 0)
           const hasLocationLots = lotsAtSource > 0
-          const availableAtSource = onHandTotal
+          const availableAtSource = hasLocationLots ? lotsAtSource : onHandTotal
           const maxQty = availableAtSource
         const transferableLocations = state.locations.filter((loc) => !wasteLocationIds.includes(loc.id))
         return (

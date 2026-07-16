@@ -956,7 +956,8 @@ function findSupplier(state: DemoSystemState, name: string) {
 }
 
 function findLocation(state: DemoSystemState, name: string) {
-  return state.locations.find((row) => lower(row.name) === lower(name))
+  const normalized = lower(name)
+  return state.locations.find((row) => row.id === name || lower(row.name) === normalized)
 }
 
 function findUom(state: DemoSystemState, value: string) {
@@ -988,20 +989,61 @@ function deriveAlertMeta(product: Product): { alert_type: AlertType; status: Ale
   return null
 }
 
-function syncAlerts(state: DemoSystemState): DemoSystemState {
+export function syncAlerts(state: DemoSystemState): DemoSystemState {
   const seenOpenProductIds = new Set<string>()
+  // History (past acknowledged / resolved alerts) is preserved so the ledger
+  // keeps an audit trail. We never drop them, but a resolved alert must NOT
+  // block a fresh alert from being raised again if the product is low / out of
+  // stock once more — that is what made "resolve" silently kill notifications
+  // for that product forever.
+  const historyAlerts: DemoSystemState['alerts'] = []
   const nextAlerts: DemoSystemState['alerts'] = []
 
-  for (const alert of state.alerts) {
-    // Non-open alerts (acknowledged / resolved) are history — always keep them.
-    if (alert.status !== 'open') {
-      nextAlerts.push(alert)
-      continue
+  // Products that already have an alert record AND are STILL low / out of
+  // stock. A manual resolve must stick while the item is short, so we don't
+  // regenerate a fresh open alert for it. Once the item is restocked (healthy),
+  // it drops out of this set and a future shortage can re-alert normally.
+  const alertedProductIds = new Set(
+    state.alerts
+      .filter((alert) => {
+        const product = state.products.find((item) => item.id === alert.product_id)
+        return product ? Boolean(deriveAlertMeta(product)) : false
+      })
+      .map((alert) => alert.product_id)
+  )
+
+  // A product with a purchase order that is still incoming (anything except
+  // received / cancelled) is being replenished. Its low / out-of-stock alert
+  // must stay resolved so it does not keep reappearing until the stock
+  // actually arrives. Once the PO is received the product's real quantity
+  // decides whether a fresh alert is raised.
+  const pendingPoProductIds = new Set<string>()
+  for (const item of state.purchaseOrderItems) {
+    const order = state.purchaseOrders.find((order) => order.id === item.po_id)
+    if (order && order.status !== 'received' && order.status !== 'cancelled') {
+      pendingPoProductIds.add(item.product_id)
     }
+  }
+
+  for (const alert of state.alerts) {
     const product = state.products.find((item) => item.id === alert.product_id)
     const meta = product ? deriveAlertMeta(product) : null
-    // Drop open alerts whose product no longer needs one (restocked / removed).
-    if (!meta) continue
+
+    if (alert.status !== 'open') {
+      // A previously resolved / acknowledged alert: keep it only while the
+      // item is STILL short (manual resolve sticks). If the item is now healthy
+      // (restocked), the shortage episode is over — drop the record so a future
+      // genuine shortage can raise a brand-new alert.
+      if (meta && !pendingPoProductIds.has(alert.product_id)) historyAlerts.push(alert)
+      continue
+    }
+
+    // Open alert: the product has been restocked (or removed), or a PO is on
+    // the way — the alert is satisfied. End the episode (drop it) rather than
+    // keeping a stale open row. A fresh alert is raised later only if the
+    // product goes short again from a healthy state.
+    if (!meta || pendingPoProductIds.has(alert.product_id)) continue
+
     // Collapse duplicate open alerts for the same product into a single row.
     if (alert.product_id && seenOpenProductIds.has(alert.product_id)) continue
     if (alert.product_id) seenOpenProductIds.add(alert.product_id)
@@ -1018,18 +1060,27 @@ function syncAlerts(state: DemoSystemState): DemoSystemState {
   for (const product of state.products) {
     const meta = deriveAlertMeta(product)
     if (!meta) continue
+    // Already have a live open alert for this product — keep it.
     if (seenOpenProductIds.has(product.id)) continue
+    // Stock is low / out, but a purchase order is already on the way. Don't
+    // raise a duplicate notification; it will reappear only if the product is
+    // still short after the PO is received.
+    if (pendingPoProductIds.has(product.id)) continue
+    // The product already has an alert record (open or previously resolved /
+    // acknowledged). A manual resolve must stick — do not regenerate a fresh
+    // open alert for the same item while it is still low / out. It only clears
+    // (and can re-raise) once the stock is actually replenished via a PO
+    // receipt or production, which flips deriveAlertMeta to null first.
+    if (alertedProductIds.has(product.id)) continue
 
-    // Deterministic id so the client's optimistic alert and the server's
-    // persisted alert for the same product collapse into one during merge —
-    // a random id() here produced two ids for the same alert (duplicate).
-    const alertId = deterministicUuid(state.tenant.id, 'alert', product.id)
-    // Don't recreate an alert whose row already exists (e.g. acknowledged).
-    if (nextAlerts.some((alert) => alert.id === alertId)) continue
-
+    // A product that is low / out of stock again raises a BRAND-NEW open alert,
+    // even if it was resolved/acknowledged before. The id is timestamped so it
+    // is distinct from any historical alert (a deterministic per-product id
+    // would collide and get de-duplicated on merge). The old resolved alert is
+    // kept in history.
     seenOpenProductIds.add(product.id)
     nextAlerts.push({
-      id: alertId,
+      id: deterministicUuid(state.tenant.id, 'alert', product.id, meta.alert_type, nowIso()),
       tenant_id: state.tenant.id,
       product_id: product.id,
       alert_type: meta.alert_type,
@@ -1037,6 +1088,7 @@ function syncAlerts(state: DemoSystemState): DemoSystemState {
       message: meta.message,
       threshold: meta.threshold,
       current_qty: meta.current_qty,
+      purchase_order_id: null,
       acknowledged_by: null,
       acknowledged_at: null,
       resolved_at: null,
@@ -1044,9 +1096,13 @@ function syncAlerts(state: DemoSystemState): DemoSystemState {
     })
   }
 
+  // Live alerts first (newest first), then history (newest first).
+  const sortedLive = [...nextAlerts].sort((a, b) => b.created_at.localeCompare(a.created_at))
+  const sortedHistory = [...historyAlerts].sort((a, b) => b.created_at.localeCompare(a.created_at))
+
   return {
     ...state,
-    alerts: nextAlerts,
+    alerts: [...sortedLive, ...sortedHistory],
   }
 }
 
@@ -1168,14 +1224,13 @@ function consumeFifo(
     }
   }
 
-  // Only rebuild the lots we actually pulled from (the FIFO pool we consumed),
-  // leaving other lots of the same product (e.g. stock quarantined in a waste
-  // location) untouched.
-  const consumedIds = new Set(lots.map((lot) => lot.id))
+  // Rebuild the lots we touched. A partially-consumed lot keeps its original id
+  // but with the reduced quantity (we replace it with `kept`, never append a
+  // second copy). Fully-consumed lots are dropped. Lots we never touched (e.g.
+  // stock quarantined in a waste location) are left exactly as-is.
+  const touchedIds = new Set(lots.map((lot) => lot.id))
   const nextLots = [
-    ...state.inventoryLots.filter(
-      (lot) => !(lot.product_id === productId && consumedIds.has(lot.id))
-    ),
+    ...state.inventoryLots.filter((lot) => !touchedIds.has(lot.id)),
     ...kept,
   ]
   let nextState: DemoSystemState = { ...state, inventoryLots: nextLots }
@@ -1538,6 +1593,45 @@ export function createCategory(state: DemoSystemState, draft: CategoryDraft): De
   return { ...state, categories: [...state.categories, category] }
 }
 
+export function updateCategory(state: DemoSystemState, categoryId: string, draft: CategoryDraft): DemoSystemState {
+  const name = normalizeName(draft.name)
+  if (!name) return state
+
+  const existing = state.categories.find((category) => category.id === categoryId)
+  if (!existing) return state
+
+  const nameCollision = state.categories.find((category) => category.id !== categoryId && lower(category.name) === lower(name))
+  if (nameCollision) {
+    return {
+      ...state,
+      categories: state.categories.map((category) =>
+        category.id === categoryId
+          ? { ...category, color: draft.color?.trim() || category.color, description: draft.description?.trim() || category.description }
+          : category
+      ),
+    }
+  }
+
+  return {
+    ...state,
+    categories: state.categories.map((category) =>
+      category.id === categoryId
+        ? { ...category, name, color: draft.color?.trim() || category.color, description: draft.description?.trim() || category.description, updated_at: nowIso() }
+        : category
+    ),
+  }
+}
+
+export function deleteCategory(state: DemoSystemState, categoryId: string): DemoSystemState {
+  return {
+    ...state,
+    categories: state.categories.filter((category) => category.id !== categoryId),
+    products: state.products.map((product) =>
+      product.category_id === categoryId ? { ...product, category_id: null, updated_at: nowIso() } : product
+    ),
+  }
+}
+
 export function createUnitOfMeasure(state: DemoSystemState, draft: UnitOfMeasureDraft): DemoSystemState {
   const name = normalizeName(draft.name)
   const abbreviation = normalizeName(draft.abbreviation)
@@ -1565,6 +1659,42 @@ export function createUnitOfMeasure(state: DemoSystemState, draft: UnitOfMeasure
   }
 
   return { ...state, unitsOfMeasure: [...state.unitsOfMeasure, uom] }
+}
+
+export function updateUnitOfMeasure(state: DemoSystemState, uomId: string, draft: UnitOfMeasureDraft): DemoSystemState {
+  const name = normalizeName(draft.name)
+  const abbreviation = normalizeName(draft.abbreviation)
+  if (!name || !abbreviation) return state
+
+  const existing = state.unitsOfMeasure.find((uom) => uom.id === uomId)
+  if (!existing) return state
+
+  const nameCollision = state.unitsOfMeasure.find((uom) => uom.id !== uomId && (lower(uom.abbreviation) === lower(abbreviation) || lower(uom.name) === lower(name)))
+  if (nameCollision) {
+    return {
+      ...state,
+      unitsOfMeasure: state.unitsOfMeasure.map((uom) =>
+        uom.id === uomId ? { ...uom, name, abbreviation, is_active: true } : uom
+      ),
+    }
+  }
+
+  return {
+    ...state,
+    unitsOfMeasure: state.unitsOfMeasure.map((uom) =>
+      uom.id === uomId ? { ...uom, name, abbreviation, is_active: true, updated_at: nowIso() } : uom
+    ),
+  }
+}
+
+export function deleteUnitOfMeasure(state: DemoSystemState, uomId: string): DemoSystemState {
+  return {
+    ...state,
+    unitsOfMeasure: state.unitsOfMeasure.filter((uom) => uom.id !== uomId),
+    products: state.products.map((product) =>
+      product.uom_id === uomId ? { ...product, uom_id: null, updated_at: nowIso() } : product
+    ),
+  }
 }
 
 export function createLocation(state: DemoSystemState, draft: LocationDraft): DemoSystemState {
@@ -2173,10 +2303,10 @@ export function produceFinishedGood(state: DemoSystemState, finishedGoodId: stri
     })
   }
 
-  return {
+  return syncAlerts({
     ...nextState,
     stockMovements: [...nextState.stockMovements, ...newMovements],
-  }
+  })
 }
 
 export function createPurchaseOrder(state: DemoSystemState, draft: PurchaseOrderDraft, orderId?: string, _status?: OrderStatus): DemoSystemState {
@@ -2237,7 +2367,7 @@ export function createPurchaseOrder(state: DemoSystemState, draft: PurchaseOrder
     })
   }
 
-  return next
+  return syncAlerts(next)
 }
 
 export function updatePurchaseOrder(
@@ -2375,7 +2505,7 @@ export function receivePurchaseOrder(state: DemoSystemState, purchaseOrderId: st
     })
   })
 
-  return syncAlerts({
+  const receivedState = {
     ...nextState,
     purchaseOrders: nextState.purchaseOrders.map((row) =>
       row.id === purchaseOrderId
@@ -2392,10 +2522,23 @@ export function receivePurchaseOrder(state: DemoSystemState, purchaseOrderId: st
       row.po_id === purchaseOrderId ? { ...row, quantity_received: Number(row.quantity_ordered ?? 0) } : row
     ),
     stockMovements: [...nextState.stockMovements, ...movements],
-  })
+  }
+
+  // Receiving the PO fulfils any low / out-of-stock alerts that were raised
+  // against it. Mark them resolved so the notification clears automatically.
+  const withResolvedAlerts = {
+    ...receivedState,
+    alerts: receivedState.alerts.map((alert) =>
+      alert.purchase_order_id === purchaseOrderId && alert.status === 'open'
+        ? { ...alert, status: 'resolved' as AlertStatus, resolved_at: nowIso() }
+        : alert
+    ),
+  }
+
+  return syncAlerts(withResolvedAlerts)
 }
 
-function buildSaleTransactionId(state: DemoSystemState) {
+export function buildSaleTransactionId(state: DemoSystemState) {
   return nextCode('RCP', state.salesTransactions.length)
 }
 
@@ -2526,6 +2669,8 @@ export function recordSale(
     amount_tendered: amountTendered,
     change_amount: changeAmount,
     split_payments: usingSplits ? splitPayments : undefined,
+    cash_sales_total: usingSplits ? cashSplitTotal : (payload.payment_method === 'cash' ? totalAmount : 0),
+    qr_sales_total: usingSplits ? nonCashSplitTotal : (payload.payment_method === 'cash' ? 0 : totalAmount),
     notes: payload.notes?.trim() || null,
     voided_by: null,
     voided_at: null,
@@ -2559,13 +2704,35 @@ export function recordSale(
     performed_at: now,
   }))
 
+  // Roll the sale up into the open shift's cash/QR/total sales totals so that
+  // expected cash (opening float + cash sales) reconciles against the drawer.
+  let shiftState = nextState
+  if (openShiftId) {
+    const cashPortion = usingSplits ? cashSplitTotal : (payload.payment_method === 'cash' ? totalAmount : 0)
+    const qrPortion = usingSplits ? nonCashSplitTotal : (payload.payment_method === 'cash' ? 0 : totalAmount)
+    shiftState = {
+      ...nextState,
+      cashShifts: nextState.cashShifts.map((row) =>
+        row.id === openShiftId
+          ? {
+              ...row,
+              total_sales: Number(row.total_sales ?? 0) + totalAmount,
+              cash_sales_total: Number(row.cash_sales_total ?? 0) + cashPortion,
+              qr_sales_total: Number(row.qr_sales_total ?? 0) + qrPortion,
+              updated_at: now,
+            }
+          : row
+      ),
+    }
+  }
+
   const finalState = syncAlerts({
-    ...nextState,
-    salesTransactions: [...nextState.salesTransactions, ...allTransactions],
-    salesTransactionItems: [...nextState.salesTransactionItems, ...items],
-    stockMovements: [...nextState.stockMovements, ...movements],
+    ...shiftState,
+    salesTransactions: [...shiftState.salesTransactions, ...allTransactions],
+    salesTransactionItems: [...shiftState.salesTransactionItems, ...items],
+    stockMovements: [...shiftState.stockMovements, ...movements],
     auditLogs: [
-      ...nextState.auditLogs,
+      ...shiftState.auditLogs,
       ...auditLogEntries,
     ],
   })
@@ -2858,7 +3025,15 @@ export function closeShift(
   if (!shift || shift.status !== 'open') return null
 
   const now = nowIso()
-  const expected = shift.opening_float + shift.total_sales
+  // Expected cash in the drawer = opening float + cash sales + cash_in − cash_out.
+  // QR / non-cash sales never enter the drawer, so including them in total_sales
+  // would overstate expected cash (the original bug). Cash movements are tracked
+  // separately via the cashMovements table.
+  const movementDelta = (state.cashMovements ?? [])
+    .filter((m) => m.shift_id === shift.id)
+    .reduce((sum, m) => sum + (m.kind === 'cash_out' ? -Number(m.amount ?? 0) : Number(m.amount ?? 0)), 0)
+  const expected =
+    Number(shift.opening_float ?? 0) + Number(shift.cash_sales_total ?? 0) + movementDelta
   const variance = Number(payload.countedCash) - expected
 
   const updatedShift: CashShift = {
@@ -2925,17 +3100,8 @@ export function recordCashMovement(
     created_at: now,
   }
 
-  let nextTotal = Number(shift.total_sales ?? 0)
-
-  if (payload.kind === 'cash_in') {
-    nextTotal += Number(payload.amount ?? 0)
-  } else if (payload.kind === 'cash_out') {
-    nextTotal -= Number(payload.amount ?? 0)
-  }
-
   const updatedShift: CashShift = {
     ...shift,
-    total_sales: nextTotal,
     updated_at: now,
   }
 
@@ -3094,9 +3260,15 @@ export function refundTransaction(
   if (transaction.shift_id) {
     const shift = nextState.cashShifts.find((s) => s.id === transaction.shift_id)
     if (shift) {
+      // Refund reverses the cash/QR split that was recorded at sale time so the
+      // shift totals stay consistent with this transaction.
+      const cashPart = Number(transaction.cash_sales_total ?? 0) || 0
+      const qrPart = Number(transaction.qr_sales_total ?? 0) || 0
       const updatedShift: CashShift = {
         ...shift,
         total_sales: Number(shift.total_sales ?? 0) - refundAmount,
+        cash_sales_total: Number(shift.cash_sales_total ?? 0) - cashPart,
+        qr_sales_total: Number(shift.qr_sales_total ?? 0) - qrPart,
         updated_at: now,
       }
       nextState = {
@@ -3199,10 +3371,20 @@ export function reverseSaleCancellation(
     const shift = next.cashShifts.find((row) => row.id === transaction.shift_id)
     if (shift) {
       const refundAmount = Number(transaction.total_amount ?? 0)
+      const cashPart = Number(transaction.cash_sales_total ?? 0)
+      const qrPart = Number(transaction.qr_sales_total ?? 0)
       next = {
         ...next,
         cashShifts: next.cashShifts.map((row) =>
-          row.id === transaction.shift_id ? { ...row, total_sales: Number(row.total_sales ?? 0) + refundAmount, updated_at: now } : row
+          row.id === transaction.shift_id
+            ? {
+                ...row,
+                total_sales: Number(row.total_sales ?? 0) + refundAmount,
+                cash_sales_total: Number(row.cash_sales_total ?? 0) + cashPart,
+                qr_sales_total: Number(row.qr_sales_total ?? 0) + qrPart,
+                updated_at: now,
+              }
+            : row
         ),
       }
     }
@@ -3375,17 +3557,130 @@ export function createTransfer(
   }
 }
 
-export function acknowledgeAlert(state: DemoSystemState, alertId: string): DemoSystemState {
+// How many units to reorder for a given product: its reorder_quantity when set,
+// otherwise enough to clear the reorder point with some headroom.
+function reorderQuantityFor(product: Product): number {
+  const reorder = Number(product.reorder_quantity ?? 0)
+  if (reorder > 0) return reorder
+  const point = Number(product.reorder_point ?? 0)
+  return Math.max(Math.round(point * 2), 1)
+}
+
+// Resolve a low / out-of-stock alert by restocking the product: a finished
+// good is produced via its recipe, everything else becomes a purchase order.
+// The alert is linked to the resulting PO (or kept as in-production) and stays
+// OPEN until the stock actually arrives — at which point syncAlerts / PO
+// receipt resolves it. This replaces the old "acknowledge / resolve" actions
+// that simply hid the notification without fixing the shortage.
+export function reorderFromAlert(state: DemoSystemState, alertId: string): DemoSystemState {
+  const alert = state.alerts.find((row) => row.id === alertId)
+  if (!alert || alert.status !== 'open') return state
+  const product = state.products.find((row) => row.id === alert.product_id)
+  if (!product) return state
+
+  // Finished goods are replenished by producing a batch, not by buying.
+  if (product.is_finished_good) {
+    const qty = reorderQuantityFor(product)
+    const produced = produceFinishedGood(state, product.id, qty)
+    return {
+      ...produced,
+      alerts: produced.alerts.map((row) =>
+        row.id === alertId ? { ...row, message: `${product.name} production started (${qty} units).` } : row
+      ),
+    }
+  }
+
+  const supplier = state.suppliers.find((row) => row.id === product.supplier_id) ?? state.suppliers[0]
+  if (!supplier) return syncAlerts(state)
+
+  const qty = reorderQuantityFor(product)
+  const po = createPurchaseOrder(
+    state,
+    {
+      supplier_id: supplier.id,
+      expected_date: '',
+      notes: `Auto-ordered to restock ${product.name} (alert).`,
+      items: [{ product_id: product.id, quantity_ordered: qty, unit_cost: Number(product.unit_cost ?? 0) }],
+    }
+  )
+
   return {
-    ...state,
-    alerts: state.alerts.map((alert) =>
-      alert.id === alertId && alert.status === 'open'
-        ? { ...alert, status: 'acknowledged', acknowledged_by: state.currentUserId || null, acknowledged_at: nowIso() }
-        : alert
+    ...po,
+    alerts: po.alerts.map((row) =>
+      row.id === alertId
+        ? { ...row, purchase_order_id: po.purchaseOrders[po.purchaseOrders.length - 1]?.id ?? null, message: `${product.name} ordered (${qty} units) — PO pending receipt.` }
+        : row
     ),
   }
 }
 
+// Resolve every open low / out-of-stock alert at once. Buyable items are
+// combined into a single purchase order (per supplier); finished goods are
+// produced individually.
+export function reorderAllAlerts(state: DemoSystemState): DemoSystemState {
+  const open = state.alerts.filter((alert) => alert.status === 'open' && (alert.alert_type === 'low_stock' || alert.alert_type === 'out_of_stock'))
+  if (!open.length) return state
+
+  let next = state
+  const poBySupplier = new Map<string, Array<{ product_id: string; quantity_ordered: number; unit_cost: number }>>()
+  const finishedGoods: string[] = []
+  const alertToPo = new Map<string, string>()
+
+  for (const alert of open) {
+    const product = next.products.find((row) => row.id === alert.product_id)
+    if (!product) continue
+    if (product.is_finished_good) {
+      finishedGoods.push(product.id)
+      continue
+    }
+    const supplier = next.suppliers.find((row) => row.id === product.supplier_id) ?? next.suppliers[0]
+    if (!supplier) continue
+    const qty = reorderQuantityFor(product)
+    const list = poBySupplier.get(supplier.id) ?? []
+    list.push({ product_id: product.id, quantity_ordered: qty, unit_cost: Number(product.unit_cost ?? 0) })
+    poBySupplier.set(supplier.id, list)
+  }
+
+  for (const [supplierId, items] of poBySupplier) {
+    const before = next.purchaseOrders.length
+    next = createPurchaseOrder(next, {
+      supplier_id: supplierId,
+      expected_date: '',
+      notes: 'Auto-ordered to restock low / out-of-stock items.',
+      items,
+    })
+    const createdPo = next.purchaseOrders[next.purchaseOrders.length - 1]
+    if (createdPo) {
+      for (const item of items) {
+        const alert = open.find((a) => {
+          const p = next.products.find((row) => row.id === a.product_id)
+          return p?.id === item.product_id
+        })
+        if (alert) alertToPo.set(alert.id, createdPo.id)
+      }
+    }
+    void before
+  }
+
+  for (const productId of finishedGoods) {
+    const product = next.products.find((row) => row.id === productId)
+    if (!product) continue
+    next = produceFinishedGood(next, productId, reorderQuantityFor(product))
+  }
+
+  return {
+    ...next,
+    alerts: next.alerts.map((row) => {
+      if (alertToPo.has(row.id)) {
+        return { ...row, purchase_order_id: alertToPo.get(row.id) ?? null, message: `${row.message} Ordered — PO pending receipt.` }
+      }
+      return row
+    }),
+  }
+}
+
+// Manual resolve kept for completeness (e.g. user wants to clear a stale
+// alert even though the item is still low). The primary flow is reorder.
 export function resolveAlert(state: DemoSystemState, alertId: string): DemoSystemState {
   return {
     ...state,
@@ -3397,28 +3692,17 @@ export function resolveAlert(state: DemoSystemState, alertId: string): DemoSyste
   }
 }
 
-export function acknowledgeAllAlerts(state: DemoSystemState): DemoSystemState {
-  return {
-    ...state,
-    alerts: state.alerts.map((alert) =>
-      alert.status === 'open'
-        ? { ...alert, status: 'acknowledged', acknowledged_by: state.currentUserId || null, acknowledged_at: nowIso() }
-        : alert
-    ),
-  }
-}
-
 export function resolveAllAlerts(state: DemoSystemState): DemoSystemState {
   return {
     ...state,
-    alerts: state.alerts.map((alert) => ({ ...alert, status: 'resolved', resolved_at: nowIso() })),
+    alerts: state.alerts.map((alert) => (alert.status === 'open' ? { ...alert, status: 'resolved', resolved_at: nowIso() } : alert)),
   }
 }
 
 export function computeDashboardStats(state: DemoSystemState): DashboardStats {
   const today = new Date().toDateString()
-  const lowStock = state.products.filter((product) => product.quantity_on_hand > 0 && product.quantity_on_hand <= product.reorder_point)
-  const outOfStock = state.products.filter((product) => product.quantity_on_hand <= 0)
+  const lowStock = state.alerts.filter((alert) => alert.status === 'open' && alert.alert_type === 'low_stock')
+  const outOfStock = state.alerts.filter((alert) => alert.status === 'open' && alert.alert_type === 'out_of_stock')
 
   return {
     total_products: state.products.filter((product) => product.is_active !== false).length,
