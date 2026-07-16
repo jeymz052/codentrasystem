@@ -3,7 +3,6 @@ import { Inter } from 'next/font/google'
 import { DemoSystemProvider } from '@/components/demo-system-provider'
 import { createSupabaseServerClient } from '@/lib/supabase-server'
 import { isConfiguredSuperAdminEmail, loadAccessibleTenants } from '@/lib/tenant-access'
-import { redirect } from 'next/navigation'
 import './globals.css'
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' })
@@ -20,22 +19,23 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  if (!user) {
-    redirect('/sign-in')
-  }
+  let initialTenantId = ''
+  let authUserEmail: string | null = null
+  let isSuperAdminIdentity = false
 
-  const isSuperAdminIdentity = isConfiguredSuperAdminEmail(user.email)
-  const { tenants, activeTenantId } = await loadAccessibleTenants(user.id, user.email)
-  if (!tenants.length) {
-    redirect('/onboarding')
+  if (user) {
+    authUserEmail = user.email ?? null
+    isSuperAdminIdentity = isConfiguredSuperAdminEmail(user.email)
+    const { tenants, activeTenantId } = await loadAccessibleTenants(user.id, user.email)
+    initialTenantId = activeTenantId ?? tenants[0]?.id ?? ''
   }
 
   return (
     <html lang="en" className={inter.variable}>
       <body suppressHydrationWarning>
         <DemoSystemProvider
-          initialTenantId={activeTenantId ?? tenants[0]?.id ?? ''}
-          authUserEmail={user.email ?? null}
+          initialTenantId={initialTenantId}
+          authUserEmail={authUserEmail}
           isSuperAdminIdentity={isSuperAdminIdentity}
         >
           {children}
