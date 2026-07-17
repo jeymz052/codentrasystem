@@ -440,6 +440,15 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
   const [feedback, setFeedback] = useState<FeedbackItem[]>([])
   const supabase = createClient()
   const requestIdRef = useRef(0)
+  // Tracks how many mutations are currently in flight. Used to skip the polling
+  // refresh only while a local mutation is awaiting its server response, so we
+  // never clobber optimistic state. This is separate from requestIdRef (a
+  // monotonic "latest request" token) which must NEVER be used as an "in flight"
+  // flag — requestIdRef only ever increments, so `requestIdRef.current > 0` is
+  // permanently true after the first mutation and would disable all refreshes,
+  // leaving a client (e.g. sales staff) stuck on stale state and never receiving
+  // an approval made by another role.
+  const inFlightRef = useRef(0)
   const feedbackIdRef = useRef(0)
   const broadcastInvalidateRef = useRef<(() => void) | null>(null)
 
@@ -454,7 +463,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         // while this initial load was still in flight (e.g. marking a PO
         // received). Otherwise the late snapshot would reset the record back
         // to its server-side status (e.g. draft) after a few seconds.
-        const hasMutated = requestIdRef.current > 0
+        const hasMutated = inFlightRef.current > 0
         if (!hasMutated) {
           const resolvedRemote = resolveCurrentUser(ensureWasteLocation(remote.state))
           if (resolvedRemote.tenant.id !== state.tenant.id) {
@@ -523,10 +532,10 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     let cancelled = false
 
     const refresh = async () => {
-      if (cancelled || requestIdRef.current > 0) return
+      if (cancelled || inFlightRef.current > 0) return
       try {
         const remote = await fetchRemoteState(activeTenantId || state.tenant.id)
-        if (cancelled || requestIdRef.current > 0) return
+        if (cancelled || inFlightRef.current > 0) return
         const resolved = resolveCurrentUser(ensureWasteLocation(remote.state))
         setState((prev) => mergeState(prev, resolved))
         setAvailableTenants(remote.availableTenants)
@@ -536,7 +545,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       }
     }
 
-    const intervalId = window.setInterval(refresh, 15000)
+    const intervalId = window.setInterval(refresh, 5000)
     let channel: BroadcastChannel | null = null
     if (typeof BroadcastChannel !== 'undefined') {
       channel = new BroadcastChannel('codentra.state')
@@ -660,6 +669,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
   function sync<T>(optimistic: (current: DemoSystemState) => DemoSystemState, mutation: Record<string, unknown>, options?: { successMessage?: string; errorLabel?: string }) {
     requestIdRef.current += 1
     const currentRequest = requestIdRef.current
+    inFlightRef.current += 1
     const tenantId = state.tenant.id
 
     // The optimistic updater (e.g. addOrUpdateProduct) can throw when it
@@ -683,6 +693,9 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         })
         .catch(() => {
           // Keep current state if the network is unavailable.
+        })
+        .finally(() => {
+          inFlightRef.current = Math.max(0, inFlightRef.current - 1)
         })
       return
     }
@@ -721,6 +734,9 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
           .catch(() => {
             // Keep optimistic state if the network is unavailable.
           })
+      })
+      .finally(() => {
+        inFlightRef.current = Math.max(0, inFlightRef.current - 1)
       })
   }
 

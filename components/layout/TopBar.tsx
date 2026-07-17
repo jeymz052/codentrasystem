@@ -43,15 +43,14 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
   const menuRef = useRef<HTMLDivElement>(null)
   const title = TITLES[path] ?? 'Codentra'
 
-  // Superior roles (supervisor, manager, admin, superadmin) are the ones who
-  // review approval requests. Sales staff only ever raise requests, so they
-  // don't get the approval notification badge.
+  // Only superior roles (supervisor, manager, admin, superadmin) receive
+  // approval notifications. Data changes (stock, sales, POs) still reflect to
+  // every role via the shared tenant state. A supervisor cannot act on their
+  // own deletion request, so it is excluded from their view.
   const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
   const role = activeTenant?.role ?? (isSuperAdminIdentity ? 'super_admin' : 'admin')
   const canApprove = getRolePermissions(role).canApproveRequests
 
-  // Pending approval requests the current superior needs to act on. A
-  // supervisor cannot act on their own deletion request, so it is excluded.
   const pendingApprovals = useMemo(
     () => (canApprove ? state.deletionRequests.filter((req) => req.status === 'pending' && canActOnApprovalRequest(role, req, state.currentUserId)) : []),
     [canApprove, state.deletionRequests, role, state.currentUserId]
