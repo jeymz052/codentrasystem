@@ -2057,7 +2057,19 @@ export function approveDeletion(state: DemoSystemState, requestId: string): Demo
       }
       break
     case 'voidSale':
+      // Actually apply the void now that a superior has approved it, and keep
+      // the deletion request marked approved so the POS no longer shows
+      // "PENDING APPROVAL" for the transaction.
+      next = voidTransaction(next, { transactionId: request.target_id, reason: String(request.details?.reason ?? '') })
+      next = {
+        ...next,
+        deletionRequests: next.deletionRequests.map((row) =>
+          row.id === requestId ? { ...row, status: 'approved' as const, reviewed_by: state.currentUserId, reviewed_at: nowIso(), updated_at: nowIso() } : row
+        ),
+      }
+      break
     case 'refundSale':
+      next = refundTransaction(next, { transactionId: request.target_id, reason: String(request.details?.reason ?? '') })
       next = {
         ...next,
         deletionRequests: next.deletionRequests.map((row) =>

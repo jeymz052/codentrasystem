@@ -19,7 +19,7 @@ const NAV = [
   { href: '/dashboard/movements',  icon: ArrowLeftRight,   label: 'Stock Movements',  roles: ['admin','manager','supervisor','inventory_staff','production_staff'] },
   { href: '/dashboard/orders',     icon: ShoppingCart,     label: 'Purchase Orders',  roles: ['admin','manager','supervisor','purchasing_staff'] },
   { href: '/dashboard/suppliers',  icon: Truck,            label: 'Suppliers',        roles: ['admin','manager','supervisor','purchasing_staff'] },
-  { href: '/dashboard/approvals',  icon: CheckCircle2,     label: 'Approvals',        roles: ['admin','manager'] },
+  { href: '/dashboard/approvals',  icon: CheckCircle2,     label: 'Approvals',        roles: ['admin','manager','supervisor'] },
   { href: '/dashboard/reports',    icon: BarChart3,        label: 'Reports',          roles: ['admin','manager','supervisor'] },
   { href: '/dashboard/users',      icon: Users,            label: 'Users',            roles: ['admin'] },
   { href: '/dashboard/settings',   icon: Settings,         label: 'Settings',         roles: ['admin'] },

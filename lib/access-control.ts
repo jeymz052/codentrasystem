@@ -159,6 +159,7 @@ const SUPERVISOR_PATHS = new Set<DashboardPath>([
   '/dashboard/movements',
   '/dashboard/orders',
   '/dashboard/suppliers',
+  '/dashboard/approvals',
   '/dashboard/reports',
 ])
 
@@ -340,7 +341,7 @@ export function getRolePermissions(role: UserRole) {
     canRefundSales: canPOS,
     canOpenCloseShift: canPOS,
     canAdjustCash: canPOS,
-    canApproveRequests: role === 'super_admin' || role === 'admin' || role === 'manager',
+    canApproveRequests: role === 'super_admin' || role === 'admin' || role === 'manager' || role === 'supervisor',
     canUseAllPaymentMethods: isManagerial,
     canChangePrices: isManagerial,
     canDeleteRecords: isManagerial && role !== 'supervisor',
