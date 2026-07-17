@@ -73,7 +73,7 @@ import {
   type UnitOfMeasureDraft,
   type UserDraft,
 } from '@/lib/demo-system'
-import type { AccessibleTenant, BusinessType, PaymentMethod, User, UserRole } from '@/types/database'
+import type { AccessibleTenant, BusinessType, DeletionRequest, PaymentMethod, User, UserRole } from '@/types/database'
 import { createClient } from '@/lib/supabase'
 
 const STORAGE_KEY = 'codentra.demo-cache.v3'
@@ -187,6 +187,30 @@ function mergeByIdRemoteWins<T extends { id: string }>(localItems: T[], remoteIt
     }
   }
   return merged
+}
+
+// Collapse deletion requests that describe the same logical approval (same
+// tenant + action + target) into a single record. Historically a request could
+// be duplicated — once optimistically on the client and again when replayed on
+// the server — producing two separate ids for the same void/refund/delete. When
+// only one of those duplicates was later approved, the other orphaned "pending"
+// copy survived and made the sales staff POS show "VOIDED · PENDING APPROVAL"
+// while a superior (who only ever saw one copy) correctly showed "VOIDED".
+// Keeping the resolved copy (approved/rejected) over a lingering pending one
+// makes both views consistent.
+function dedupeDeletionRequests(requests: DeletionRequest[]): DeletionRequest[] {
+  const byKey = new Map<string, DeletionRequest>()
+  for (const req of requests) {
+    const key = `${req.tenant_id}:${req.action}:${req.target_type}:${req.target_id}`
+    const existing = byKey.get(key)
+    if (!existing) {
+      byKey.set(key, req)
+      continue
+    }
+    const rank = (status: string) => (status === 'pending' ? 0 : 1)
+    byKey.set(key, rank(req.status) >= rank(existing.status) ? req : existing)
+  }
+  return [...byKey.values()]
 }
 
 // Stock movements are generated twice for the same logical event: once
@@ -614,7 +638,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       cashShifts: mergeArray(local.cashShifts, remote.cashShifts),
       cashMovements: mergeArray(local.cashMovements, remote.cashMovements),
       inventoryLots: mergeArray(local.inventoryLots, remote.inventoryLots ?? []),
-      deletionRequests: mergeByIdRemoteWins(local.deletionRequests, remote.deletionRequests ?? []),
+      deletionRequests: dedupeDeletionRequests(mergeByIdRemoteWins(local.deletionRequests, remote.deletionRequests ?? [])),
     }
 
     // Always reconcile alerts against the merged product stock so stale

@@ -1765,7 +1765,11 @@ export default function POSPage() {
                 const isCompleted = tx.status === 'completed'
                 const isVoided = tx.status === 'voided'
                 const isRefunded = tx.status === 'refunded'
-                const pendingApproval = state.deletionRequests.some(
+                // Only flag as pending when the sale is still awaiting action. Once a
+                // superior approves the request the sale flips to voided/refunded and
+                // this flag must clear — an orphaned pending request must not keep the
+                // "PENDING APPROVAL" badge on an already-resolved sale.
+                const pendingApproval = isCompleted && state.deletionRequests.some(
                   (req) => req.target_id === tx.id && (req.action === 'voidSale' || req.action === 'refundSale') && req.status === 'pending'
                 )
                 return (
