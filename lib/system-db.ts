@@ -650,6 +650,31 @@ export async function provisionTenantUserAccess(tenantId: string, draft: UserDra
     throw new Error(`membership upsert failed: ${membershipError.message}`)
   }
 
+  // Mirror the membership into the app `users` table (keyed by the auth user
+  // id, matching the convention used by addUser). Without this row, the tenant
+  // admin exists in tenant_memberships but is absent from `users`, so the
+  // tenant monitor's user count shows 0 even though the member is real.
+  const now = new Date().toISOString()
+  const { error: userError } = await client.from('users').upsert({
+    id: authUserId,
+    tenant_id: tenantId,
+    role: draft.role,
+    full_name: draft.full_name?.trim() || draft.email.split('@')[0] || 'User',
+    email: email,
+    avatar_url: null,
+    is_active: true,
+    last_login: null,
+    created_at: now,
+    updated_at: now,
+  }, {
+    onConflict: 'id',
+  })
+
+  if (userError) {
+    // A missing users row should not block the invitation itself.
+    console.error('[provisionTenantUserAccess] users upsert failed:', userError.message)
+  }
+
   return authUserId
 }
 
