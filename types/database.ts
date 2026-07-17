@@ -434,7 +434,7 @@ export interface DeletionRequest {
   id: string
   tenant_id: string
   requested_by: string
-  action: MutationAction
+  action: string
   target_type: 'product' | 'supplier' | 'recipe' | 'production_template' | 'location' | 'sale' | 'purchase_order'
   target_id: string
   details: Record<string, unknown>

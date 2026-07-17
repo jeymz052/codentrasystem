@@ -318,6 +318,26 @@ export function formatRoleLabel(role: UserRole) {
   }
 }
 
+// Determines whether the given role can act (approve/reject) on a specific
+// approval request. All superior roles (supervisor, manager, admin, super_admin)
+// can approve void, refund, purchase-order and deletion requests. A supervisor,
+// however, cannot approve their *own* deletion request — a supervisor's own
+// deletion must be approved by a manager, tenant admin, or super admin.
+export function canActOnApprovalRequest(
+  role: UserRole | undefined,
+  request: { action: string; requested_by?: string | null },
+  currentUserId: string | undefined,
+): boolean {
+  const isSuperior = role === 'super_admin' || role === 'admin' || role === 'manager' || role === 'supervisor'
+  if (!isSuperior) return false
+  if (role === 'supervisor' && request.action !== 'voidSale' && request.action !== 'refundSale' && request.action !== 'approvePurchaseOrder') {
+    // Only deletion-type requests are restricted for supervisors; they cannot
+    // approve their own deletion (it requires a higher role).
+    if (request.requested_by && request.requested_by === currentUserId) return false
+  }
+  return true
+}
+
 export function getRolePermissions(role: UserRole) {
   const isPlatform = role === 'super_admin' || role === 'admin'
   const isManagerial = isPlatform || role === 'manager' || role === 'supervisor'

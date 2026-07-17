@@ -2039,6 +2039,20 @@ export function approveDeletion(state: DemoSystemState, requestId: string): Demo
     case 'removeSupplier':
       next = deleteSupplier(next, request.target_id)
       break
+    case 'removeProducts': {
+      const productIds = Array.isArray(request.details?.product_ids)
+        ? (request.details.product_ids as string[])
+        : [request.target_id]
+      next = deleteProducts(next, productIds, Array.isArray(request.details?.item_codes) ? (request.details.item_codes as string[]) : [])
+      break
+    }
+    case 'removeSuppliers': {
+      const supplierIds = Array.isArray(request.details?.supplier_ids)
+        ? (request.details.supplier_ids as string[])
+        : [request.target_id]
+      next = deleteSuppliers(next, supplierIds)
+      break
+    }
     case 'deleteRecipe':
       next = deleteRecipe(next, request.target_id)
       break

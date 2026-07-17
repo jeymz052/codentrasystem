@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bell, Building2, AlertTriangle, Menu, ShoppingCart, CheckCircle2, Receipt } from 'lucide-react'
 import { usePathname, useRouter } from 'next/navigation'
 import { useDemoSystem } from '@/components/demo-system-provider'
-import { getRolePermissions } from '@/lib/access-control'
+import { getRolePermissions, canActOnApprovalRequest } from '@/lib/access-control'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
 
 const TITLES: Record<string, string> = {
@@ -50,10 +50,11 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
   const role = activeTenant?.role ?? (isSuperAdminIdentity ? 'super_admin' : 'admin')
   const canApprove = getRolePermissions(role).canApproveRequests
 
-  // Pending approval requests the current superior needs to act on.
+  // Pending approval requests the current superior needs to act on. A
+  // supervisor cannot act on their own deletion request, so it is excluded.
   const pendingApprovals = useMemo(
-    () => (canApprove ? state.deletionRequests.filter((req) => req.status === 'pending') : []),
-    [canApprove, state.deletionRequests]
+    () => (canApprove ? state.deletionRequests.filter((req) => req.status === 'pending' && canActOnApprovalRequest(role, req, state.currentUserId)) : []),
+    [canApprove, state.deletionRequests, role, state.currentUserId]
   )
 
   // Total items shown in the bell: live stock alerts + pending approvals.

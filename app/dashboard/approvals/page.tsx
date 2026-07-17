@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react'
 import { CheckCircle2, Clock3, Package, Receipt, Trash2, XCircle } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
-import { getRolePermissions } from '@/lib/access-control'
+import { getRolePermissions, canActOnApprovalRequest } from '@/lib/access-control'
 import type { DeletionRequest } from '@/types/database'
 
 const BADGE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
@@ -18,6 +18,8 @@ const ACTION_LABELS: Record<string, string> = {
   approvePurchaseOrder: 'PO Approval',
   removeProduct: 'Delete Product',
   removeSupplier: 'Delete Supplier',
+  removeProducts: 'Delete Products',
+  removeSuppliers: 'Delete Suppliers',
   deleteRecipe: 'Delete Recipe',
   deleteProductionTemplate: 'Delete Template',
   deleteLocation: 'Delete Location',
@@ -35,10 +37,8 @@ export default function ApprovalsPage() {
   const { state, availableTenants, activeTenantId, approveDeletion, rejectDeletion, formatCurrency, notifySuccess, notifyError } = useDemoSystem()
   const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
   const role = activeTenant?.role ?? 'admin'
-  const perms = getRolePermissions(role)
-  const canApprove = perms.canApproveRequests
 
-  const pending = state.deletionRequests.filter((req) => req.status === 'pending')
+  const pending = state.deletionRequests.filter((req) => req.status === 'pending' && canActOnApprovalRequest(role, req, state.currentUserId))
   const history = state.deletionRequests.filter((req) => req.status !== 'pending')
 
   const [tab, setTab] = useState<Tab>('pending')
@@ -131,7 +131,13 @@ export default function ApprovalsPage() {
   }
 
   function renderDeletionDetails(req: DeletionRequest) {
-    const targetName = String(req.details.item_code ?? req.details.name ?? req.target_id)
+    const itemCodes = Array.isArray(req.details.item_codes) ? (req.details.item_codes as string[]) : null
+    const supplierIds = Array.isArray(req.details.supplier_ids) ? (req.details.supplier_ids as string[]) : null
+    const targetName = itemCodes
+      ? `${itemCodes.length} product${itemCodes.length === 1 ? '' : 's'}`
+      : supplierIds
+        ? `${supplierIds.length} supplier${supplierIds.length === 1 ? '' : 's'}`
+        : String(req.details.item_code ?? req.details.name ?? req.target_id)
     return (
       <div style={{ fontSize: 12, color: '#475569', marginTop: 6, display: 'flex', gap: 12, alignItems: 'center' }}>
         <span><strong>Type:</strong> {req.target_type}</span>
@@ -147,8 +153,8 @@ export default function ApprovalsPage() {
   }
 
   function handleApprove(requestId: string, req: DeletionRequest) {
-    if (!canApprove) {
-      notifyError('Only a supervisor or manager can approve requests.')
+    if (!canActOnApprovalRequest(role, req, state.currentUserId)) {
+      notifyError('You are not allowed to approve this request.')
       return
     }
     approveDeletion(requestId)
@@ -159,8 +165,8 @@ export default function ApprovalsPage() {
   }
 
   function handleReject(requestId: string, req: DeletionRequest) {
-    if (!canApprove) {
-      notifyError('Only a supervisor or manager can reject requests.')
+    if (!canActOnApprovalRequest(role, req, state.currentUserId)) {
+      notifyError('You are not allowed to reject this request.')
       return
     }
     rejectDeletion(requestId)
@@ -339,7 +345,11 @@ export default function ApprovalsPage() {
                             ? `${getActionLabel(req.action)} ${String(req.details.receipt_number ?? req.target_id)}`
                             : req.action === 'approvePurchaseOrder'
                               ? `PO ${String(req.details.po_number ?? req.target_id)}`
-                              : String(req.details.item_code ?? req.details.name ?? req.target_id)}
+                              : Array.isArray(req.details.item_codes)
+                                ? `${req.details.item_codes.length} product${req.details.item_codes.length === 1 ? '' : 's'}`
+                                : Array.isArray(req.details.supplier_ids)
+                                  ? `${req.details.supplier_ids.length} supplier${req.details.supplier_ids.length === 1 ? '' : 's'}`
+                                  : String(req.details.item_code ?? req.details.name ?? req.target_id)}
                         </span>
                         <span className="badge" style={{ background: `${badge.bg}`, color: `${badge.text}`, padding: '2px 10px', borderRadius: 999, fontSize: 10, fontWeight: 800, textTransform: 'uppercase', border: `1px solid ${badge.border}` }}>
                           {getActionLabel(req.action)}
@@ -365,7 +375,7 @@ export default function ApprovalsPage() {
                     </div>
                   </div>
                   {renderRequestDetails(req)}
-                  {canApprove ? (
+                  {canActOnApprovalRequest(role, req, state.currentUserId) ? (
                     <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                       <button
                         className="btn btn-primary btn-sm"
@@ -383,7 +393,7 @@ export default function ApprovalsPage() {
                       </button>
                     </div>
                   ) : (
-                    <div style={{ fontSize: 12, color: '#94A3B8', marginTop: 4, textAlign: 'center', padding: '6px 0' }}>Awaiting supervisor review</div>
+                    <div style={{ fontSize: 12, color: '#94A3B8', marginTop: 4, textAlign: 'center', padding: '6px 0' }}>Awaiting higher approval</div>
                   )}
                 </div>
               )
@@ -421,7 +431,11 @@ export default function ApprovalsPage() {
                         ? String(req.details.receipt_number ?? req.target_id)
                         : req.action === 'approvePurchaseOrder'
                           ? String(req.details.po_number ?? req.target_id)
-                          : String(req.details.item_code ?? req.details.name ?? req.target_id)}
+                          : Array.isArray(req.details.item_codes)
+                            ? `${req.details.item_codes.length} product${req.details.item_codes.length === 1 ? '' : 's'}`
+                            : Array.isArray(req.details.supplier_ids)
+                              ? `${req.details.supplier_ids.length} supplier${req.details.supplier_ids.length === 1 ? '' : 's'}`
+                              : String(req.details.item_code ?? req.details.name ?? req.target_id)}
                     </div>
                     <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 2 }}>
                       by {getUserName(req.requested_by)} · reviewed by {getUserName(req.reviewed_by ?? undefined)}

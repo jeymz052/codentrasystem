@@ -813,23 +813,25 @@ export default function POSPage() {
       return
     }
     const needsApproval = role === 'sales_staff'
-    if (needsApproval) {
-      const alreadyPending = state.deletionRequests.some(
-        (req) => req.target_id === targetTx.id && req.action === 'voidSale' && req.status === 'pending'
-      )
-      if (alreadyPending) {
-        notifyError('A void request for this transaction is already pending approval.')
-        return
-      }
+    const alreadyPending = state.deletionRequests.some(
+      (req) => req.target_id === targetTx.id && req.action === 'voidSale' && req.status === 'pending'
+    )
+    if (alreadyPending) {
+      notifyError('A void request for this transaction is already pending approval.')
+      return
     }
     setVoidBusy(true)
-    voidSale(targetTx.id, voidReason.trim())
     if (needsApproval) {
+      // Raise a void request for a superior to approve; the sale stays
+      // 'completed' until the request is approved/rejected so the POS reflects
+      // the real status instead of showing "VOIDED · PENDING APPROVAL".
       requestDeletion('voidSale', 'sale', targetTx.id, {
         receipt_number: targetTx.receipt_number,
         total_amount: Number(targetTx.total_amount ?? 0),
         reason: voidReason.trim(),
       })
+    } else {
+      voidSale(targetTx.id, voidReason.trim())
     }
     setShowVoidModal(false)
     setTargetTx(null)
@@ -854,23 +856,24 @@ export default function POSPage() {
       return
     }
     const needsApproval = role === 'sales_staff'
-    if (needsApproval) {
-      const alreadyPending = state.deletionRequests.some(
-        (req) => req.target_id === targetTx.id && req.action === 'refundSale' && req.status === 'pending'
-      )
-      if (alreadyPending) {
-        notifyError('A refund request for this transaction is already pending approval.')
-        return
-      }
+    const alreadyPending = state.deletionRequests.some(
+      (req) => req.target_id === targetTx.id && req.action === 'refundSale' && req.status === 'pending'
+    )
+    if (alreadyPending) {
+      notifyError('A refund request for this transaction is already pending approval.')
+      return
     }
     setRefundBusy(true)
-    refundSale(targetTx.id, refundReason.trim())
     if (needsApproval) {
+      // Raise a refund request for a superior to approve; the sale stays
+      // 'completed' until the request is approved/rejected.
       requestDeletion('refundSale', 'sale', targetTx.id, {
         receipt_number: targetTx.receipt_number,
         total_amount: Number(targetTx.total_amount ?? 0),
         reason: refundReason.trim(),
       })
+    } else {
+      refundSale(targetTx.id, refundReason.trim())
     }
     setShowRefundModal(false)
     setTargetTx(null)
