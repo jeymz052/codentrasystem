@@ -168,16 +168,22 @@ function mergeArray<T extends { id: string }>(localItems: T[], remoteItems: T[])
   return merged
 }
 
-function mergeDeletionRequests(localItems: DemoSystemState['deletionRequests'], remoteItems: DemoSystemState['deletionRequests']): DemoSystemState['deletionRequests'] {
-  const keyFor = (item: DemoSystemState['deletionRequests'][number]) =>
-    `${item.action}|${item.target_type}|${item.target_id}|${item.status}`
-  const seen = new Set(localItems.map(keyFor))
-  const merged = [...localItems]
+// Id-keyed merge where the SERVER wins on id match. Used for records whose
+// authoritative status can change on another client (e.g. a sale flips to
+// voided/refunded after a superior approves it, or a deletion request flips to
+// approved/rejected). mergeArray is local-wins and would otherwise keep a
+// stale cached "completed"/"pending" record forever — even after a full reload
+// — so the POS never clears the "PENDING APPROVAL" banner. Genuinely local-only
+// rows (no server twin) are still preserved.
+function mergeByIdRemoteWins<T extends { id: string }>(localItems: T[], remoteItems: T[]): T[] {
+  const remoteById = new Map(remoteItems.map((item) => [item.id, item]))
+  const merged: T[] = []
+  for (const localItem of localItems) {
+    merged.push(remoteById.get(localItem.id) ?? localItem)
+  }
   for (const remoteItem of remoteItems) {
-    const key = keyFor(remoteItem)
-    if (!seen.has(key)) {
+    if (!localItems.some((item) => item.id === remoteItem.id)) {
       merged.push(remoteItem)
-      seen.add(key)
     }
   }
   return merged
@@ -401,6 +407,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
   const supabase = createClient()
   const requestIdRef = useRef(0)
   const feedbackIdRef = useRef(0)
+  const broadcastInvalidateRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -468,6 +475,57 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
     window.localStorage.setItem(ACTIVE_TENANT_KEY, activeTenantId || state.tenant.id)
   }, [hydrated, state, activeTenantId])
+
+  // Keep every signed-in client in sync with the server so that an approval
+  // performed by a superior (on another device or tab) is reflected in the
+  // sales staff's POS — e.g. a void/refund flips from "PENDING APPROVAL" to
+  // VOIDED/REFUNDED instead of staying stuck. We re-fetch on a quiet interval
+  // (cross-device) and immediately when another tab of the same tenant signals
+  // a change via BroadcastChannel (same-browser, instant). The refresh is
+  // skipped while the user has a local mutation in flight so we never clobber
+  // optimistic state, and mergeState reconciles without dropping local records.
+  useEffect(() => {
+    if (!hydrated) return
+    let cancelled = false
+
+    const refresh = async () => {
+      if (cancelled || requestIdRef.current > 0) return
+      try {
+        const remote = await fetchRemoteState(activeTenantId || state.tenant.id)
+        if (cancelled || requestIdRef.current > 0) return
+        const resolved = resolveCurrentUser(ensureWasteLocation(remote.state))
+        setState((prev) => mergeState(prev, resolved))
+        setAvailableTenants(remote.availableTenants)
+        setActiveTenantId(remote.activeTenantId)
+      } catch {
+        // Keep current state if the network is unavailable.
+      }
+    }
+
+    const intervalId = window.setInterval(refresh, 15000)
+    let channel: BroadcastChannel | null = null
+    if (typeof BroadcastChannel !== 'undefined') {
+      channel = new BroadcastChannel('codentra.state')
+      channel.onmessage = (event) => {
+        if (event.data === 'invalidate') void refresh()
+      }
+    }
+    // Expose the invalidation broadcaster so mutations can ping other tabs.
+    broadcastInvalidateRef.current = () => {
+      try {
+        channel?.postMessage('invalidate')
+      } catch {
+        // ignore
+      }
+    }
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+      channel?.close()
+      broadcastInvalidateRef.current = null
+    }
+  }, [hydrated, activeTenantId, state.tenant.id])
 
   useEffect(() => {
     if (!feedback.length) return
@@ -546,7 +604,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       products: mergeProducts(local.products, remote.products),
       purchaseOrders: mergeArray(local.purchaseOrders, remote.purchaseOrders),
       purchaseOrderItems: mergeArray(local.purchaseOrderItems, remote.purchaseOrderItems),
-      salesTransactions: mergeArray(local.salesTransactions, remote.salesTransactions),
+      salesTransactions: mergeByIdRemoteWins(local.salesTransactions, remote.salesTransactions),
       salesTransactionItems: mergeArray(local.salesTransactionItems, remote.salesTransactionItems),
       stockMovements: mergeStockMovements(local.stockMovements, remote.stockMovements ?? []),
       alerts: mergeAlerts(local.alerts, remote.alerts),
@@ -556,7 +614,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       cashShifts: mergeArray(local.cashShifts, remote.cashShifts),
       cashMovements: mergeArray(local.cashMovements, remote.cashMovements),
       inventoryLots: mergeArray(local.inventoryLots, remote.inventoryLots ?? []),
-      deletionRequests: mergeDeletionRequests(local.deletionRequests, remote.deletionRequests ?? []),
+      deletionRequests: mergeByIdRemoteWins(local.deletionRequests, remote.deletionRequests ?? []),
     }
 
     // Always reconcile alerts against the merged product stock so stale
@@ -603,6 +661,9 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
           setAvailableTenants(remote.availableTenants)
           setActiveTenantId(remote.activeTenantId)
         }
+        // Ping other open tabs/clients so an approval (e.g. void/refund) made
+        // here is reflected immediately in the sales staff's POS.
+        broadcastInvalidateRef.current?.()
         if (options?.successMessage) {
           pushFeedback('success', options.successMessage)
         }

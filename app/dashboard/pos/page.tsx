@@ -243,6 +243,7 @@ export default function POSPage() {
   const [search, setSearch] = useState('')
   const [cat, setCat] = useState('All')
   const [txPaymentFilter, setTxPaymentFilter] = useState('all')
+  const [txStatusFilter, setTxStatusFilter] = useState('all')
   const [cart, setCart] = useState<CartItem[]>([])
   const [payMethod, setPayMethod] = useState<PayMethod>('cash')
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null)
@@ -325,8 +326,17 @@ export default function POSPage() {
       .slice()
       .reverse()
       .filter((tx) => transactionMatchesPayment(tx, txPaymentFilter))
+      .filter((tx) => {
+        if (txStatusFilter === 'all') return true
+        if (txStatusFilter === 'pending') {
+          return state.deletionRequests.some(
+            (req) => req.target_id === tx.id && (req.action === 'voidSale' || req.action === 'refundSale') && req.status === 'pending'
+          )
+        }
+        return tx.status === txStatusFilter
+      })
       .slice(0, 8)
-  }, [state.salesTransactions, txPaymentFilter])
+  }, [state.salesTransactions, state.deletionRequests, txPaymentFilter, txStatusFilter])
   const categoryOptions = useMemo(() => ['All', ...state.categories.map((category) => category.name)], [state.categories])
 
   const products = state.products.filter((product) => {
@@ -1695,6 +1705,27 @@ export default function POSPage() {
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <select
+                  value={txStatusFilter}
+                  onChange={(e) => setTxStatusFilter(e.target.value)}
+                  aria-label="Filter transactions by status"
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: '#0F172A',
+                    border: '1px solid #E2E8F0',
+                    borderRadius: 10,
+                    padding: '6px 10px',
+                    background: '#FFFFFF',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <option value="all">All</option>
+                  <option value="completed">Completed</option>
+                  <option value="voided">Void</option>
+                  <option value="refunded">Refund</option>
+                  <option value="pending">Pending approval</option>
+                </select>
+                <select
                   value={txPaymentFilter}
                   onChange={(e) => setTxPaymentFilter(e.target.value)}
                   aria-label="Filter transactions by payment method"
@@ -1721,7 +1752,7 @@ export default function POSPage() {
               {recentTx.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '26px 10px', color: '#94A3B8' }}>
                   <ReceiptText size={28} style={{ marginBottom: 8, opacity: 0.35 }} />
-                  <p style={{ fontSize: 12 }}>{txPaymentFilter === 'all' ? 'No transactions yet' : 'No transactions match this filter'}</p>
+                  <p style={{ fontSize: 12 }}>{(txPaymentFilter === 'all' && txStatusFilter === 'all') ? 'No transactions yet' : 'No transactions match this filter'}</p>
                 </div>
               ) : recentTx.map((tx) => {
                 const cashier = tx.cashier?.full_name ?? 'Sales Staff'
