@@ -279,17 +279,19 @@ function mergeProducts<T extends ProductLike>(localItems: T[], remoteItems: T[])
   const remoteByKey = new Map<string, T>()
   for (const item of remoteItems) remoteByKey.set(keyFor(item), item)
   const result = new Map<string, T>()
-  // Server metadata wins for de-duplication / shared item_code.
+  // The server is the authoritative source for stock levels. A sale made by any
+  // user (e.g. sales staff) updates the server quantity, and every other role
+  // (supervisor, manager, admin, superadmin) must see that updated count on the
+  // next refresh. Previously the LOCAL cached quantity_on_hand was re-applied on
+  // top of the server value, so a superior whose cache still said 20 would keep
+  // showing 20 even after the server dropped to 0 — and the matching low/out-of
+  // stock alert never appeared for them. We keep all other product metadata from
+  // the server and only fall back to the local row when there is no server twin
+  // (a purely client-only, not-yet-persisted product).
   for (const item of remoteItems) result.set(keyFor(item), item)
-  // Re-apply locally-optimistic stock counters and keep any client-only product.
   for (const item of localItems) {
     const key = keyFor(item)
-    const remote = remoteByKey.get(key)
-    if (!remote) {
-      if (!result.has(key)) result.set(key, item)
-    } else {
-      result.set(key, { ...remote, quantity_on_hand: item.quantity_on_hand, quantity_reserved: item.quantity_reserved, is_active: item.is_active } as T)
-    }
+    if (!remoteByKey.has(key) && !result.has(key)) result.set(key, item)
   }
   return Array.from(result.values())
 }
@@ -629,12 +631,12 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       currentUserId: resolveCurrentUser(remote).currentUserId,
       tenant: { ...local.tenant, ...remote.tenant },
       categories: mergeCategories(local.categories, remote.categories),
-      unitsOfMeasure: mergeArray(local.unitsOfMeasure, remote.unitsOfMeasure),
+      unitsOfMeasure: mergeByIdRemoteWins(local.unitsOfMeasure, remote.unitsOfMeasure),
       locations: mergeLocations(local.locations, remote.locations),
-      suppliers: mergeArray(local.suppliers, remote.suppliers),
+      suppliers: mergeByIdRemoteWins(local.suppliers, remote.suppliers),
       users: mergeUsers(local.users, remote.users),
       products: mergeProducts(local.products, remote.products),
-      purchaseOrders: mergeArray(local.purchaseOrders, remote.purchaseOrders),
+      purchaseOrders: mergeByIdRemoteWins(local.purchaseOrders, remote.purchaseOrders),
       purchaseOrderItems: mergeArray(local.purchaseOrderItems, remote.purchaseOrderItems),
       salesTransactions: mergeByIdRemoteWins(local.salesTransactions, remote.salesTransactions),
       salesTransactionItems: mergeArray(local.salesTransactionItems, remote.salesTransactionItems),
@@ -643,7 +645,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       auditLogs: mergeArray(local.auditLogs, remote.auditLogs),
       productRecipes: mergeArray(local.productRecipes, remote.productRecipes),
       productionTemplates: mergeArray(local.productionTemplates, remote.productionTemplates),
-      cashShifts: mergeArray(local.cashShifts, remote.cashShifts),
+      cashShifts: mergeByIdRemoteWins(local.cashShifts, remote.cashShifts),
       cashMovements: mergeArray(local.cashMovements, remote.cashMovements),
       inventoryLots: mergeArray(local.inventoryLots, remote.inventoryLots ?? []),
       deletionRequests: dedupeDeletionRequests(mergeByIdRemoteWins(local.deletionRequests, remote.deletionRequests ?? [])),
