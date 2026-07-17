@@ -73,7 +73,7 @@ import {
   type UnitOfMeasureDraft,
   type UserDraft,
 } from '@/lib/demo-system'
-import type { AccessibleTenant, BusinessType, PaymentMethod, UserRole } from '@/types/database'
+import type { AccessibleTenant, BusinessType, PaymentMethod, User, UserRole } from '@/types/database'
 import { createClient } from '@/lib/supabase'
 
 const STORAGE_KEY = 'codentra.demo-cache.v3'
@@ -497,19 +497,49 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
   // superadmin/admin seed, so we re-point it at the matching user row. This
   // makes the POS show the actual cashier (not "superadmin") and attribute
   // sales/actions to the right person.
-  function resolveCurrentUserId(next: DemoSystemState): string {
-    if (authUserEmail) {
-      const normalized = authUserEmail.trim().toLowerCase()
-      const match = next.users.find((u) => (u.email ?? '').trim().toLowerCase() === normalized)
-      if (match) return match.id
+  //
+  // If the signed-in user has no row in state.users (e.g. they were invited but
+  // their users record is missing, or their email casing differs), we synthesize
+  // a user entry from their auth identity so the POS always shows the real
+  // logged-in person's name and email instead of falling back to the seed
+  // superadmin.
+  function resolveCurrentUser(next: DemoSystemState): DemoSystemState {
+    if (!authUserEmail) return next
+    const normalized = authUserEmail.trim().toLowerCase()
+    const existing = next.users.find((u) => (u.email ?? '').trim().toLowerCase() === normalized)
+    if (existing) {
+      return { ...next, currentUserId: existing.id }
     }
-    return next.currentUserId
+
+    const activeTenantRole = availableTenants.find((t) => t.id === (activeTenantId || next.tenant.id))?.role
+    const authUserId = `auth:${normalized}`
+    const displayName = (authUserEmail.split('@')[0] || 'User')
+      .split(/[._-]/)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ')
+    const syntheticUser: User = {
+      id: authUserId,
+      tenant_id: next.tenant.id,
+      role: (activeTenantRole || next.users[0]?.role || 'sales_staff') as User['role'],
+      full_name: displayName,
+      email: authUserEmail,
+      avatar_url: null,
+      is_active: true,
+      last_login: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }
+    return {
+      ...next,
+      currentUserId: authUserId,
+      users: [...next.users, syntheticUser],
+    }
   }
 
   function mergeState(local: DemoSystemState, remote: DemoSystemState): DemoSystemState {
     const merged: DemoSystemState = {
       ...remote,
-      currentUserId: resolveCurrentUserId(remote),
+      currentUserId: resolveCurrentUser(remote).currentUserId,
       tenant: { ...local.tenant, ...remote.tenant },
       categories: mergeCategories(local.categories, remote.categories),
       unitsOfMeasure: mergeArray(local.unitsOfMeasure, remote.unitsOfMeasure),

@@ -4,67 +4,32 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 import { ArrowRight, CheckCircle2, Eye, EyeOff, LockKeyhole } from 'lucide-react'
-import { createBrowserClient, type CookieOptions } from '@supabase/ssr'
+import { createBrowserClient } from '@supabase/ssr'
 import type { EmailOtpType, User } from '@supabase/supabase-js'
 import { formatRoleLabel } from '@/lib/access-control'
 import type { UserRole } from '@/types/database'
 
 export function SetPasswordForm() {
-  // A dedicated client that does NOT auto-consume the URL. We process the invite
-  // token manually so we can force the invited user's session even if someone
-  // (e.g. an admin/superadmin) is already logged in on this browser.
+  // Use the SAME default @supabase/ssr browser client the rest of the app uses
+  // (createBrowserClient with NO custom cookies handler). Its built-in storage
+  // + cookie sync is identical to @/lib/supabase's createClient(), so the
+  // session we establish here is exactly what the dashboard, middleware, and
+  // server components read afterwards.
   //
-  // IMPORTANT: this client also syncs the session to cookies, not just
-  // localStorage. Without cookie sync the Next.js middleware/server components
-  // cannot see the authenticated session after password setup, so the invited
-  // user would be bounced back to sign-in or onboarding instead of being taken
-  // straight to the tenant they were invited to.
+  // Previously this form used a hand-rolled document.cookie writer that
+  // bypassed @supabase/ssr's storage. The session it produced was invisible to
+  // the default client the dashboard mounts, so the first load after setup
+  // resolved as the wrong (superadmin) identity until a fresh sign-out/sign-in
+  // rewrote the shared session. Leaving cookies at the default fixes that.
   const supabase = useMemo(
     () =>
       createBrowserClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        {
-          cookies: {
-            getAll() {
-              if (typeof document === 'undefined') return []
-              return document.cookie.split(';').map((cookie) => {
-                const [name, ...rest] = cookie.trim().split('=')
-                return { name, value: rest.join('=') }
-              })
-            },
-            setAll(cookiesToSet: Array<{ name: string; value: string; options?: CookieOptions }>) {
-              if (typeof document === 'undefined') return
-              cookiesToSet.forEach(({ name, value, options }) => {
-                const parts = [`${name}=${encodeURIComponent(value)}`]
-                const normalized = normalizeCookieOptions(options)
-                if (normalized.path) parts.push(`path=${normalized.path}`)
-                if (normalized.maxAge != null) parts.push(`max-age=${normalized.maxAge}`)
-                if (normalized.domain) parts.push(`domain=${normalized.domain}`)
-                if (normalized.secure) parts.push('secure')
-                if (normalized.httpOnly) parts.push('httponly')
-                if (normalized.sameSite) parts.push(`samesite=${normalized.sameSite}`)
-                document.cookie = parts.join('; ')
-              })
-            },
-          },
-          auth: {
-            detectSessionInUrl: false,
-            flowType: 'implicit',
-            persistSession: true,
-            autoRefreshToken: true,
-          },
-        }
+        { auth: { detectSessionInUrl: false } }
       ),
     []
   )
-
-  function normalizeCookieOptions(options: CookieOptions = {}) {
-    return {
-      ...options,
-      path: options.path ?? '/',
-    }
-  }
   const router = useRouter()
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
