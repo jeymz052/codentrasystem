@@ -1985,16 +1985,8 @@ export function requestDeletion(
   )
   if (alreadyPending) return state
 
-  // Use a deterministic id derived from the tenant + action + target so that the
-  // optimistic local request and the server-replayed request (which both run
-  // requestDeletion with the same inputs) collapse into a single record instead
-  // of creating two pending requests for the same transaction. Without this, one
-  // of the duplicate pendings would survive approval and the POS would keep
-  // showing "VOIDED · PENDING APPROVAL" even after the request was resolved.
-  const requestId = `${state.tenant.id}:${requestedAction}:${targetType}:${targetId}`
-
   const request: DeletionRequest = {
-    id: requestId,
+    id: id(),
     tenant_id: state.tenant.id,
     requested_by: state.currentUserId,
     action: requestedAction as DeletionRequest['action'],

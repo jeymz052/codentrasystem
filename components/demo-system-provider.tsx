@@ -76,9 +76,17 @@ import {
 import type { AccessibleTenant, BusinessType, DeletionRequest, PaymentMethod, User, UserRole } from '@/types/database'
 import { createClient } from '@/lib/supabase'
 
-const STORAGE_KEY = 'codentra.demo-cache.v3'
+const CACHE_PREFIX = 'codentra.demo-cache.v3.'
 const ACTIVE_TENANT_KEY = 'codentra.active-tenant.v3'
 
+// The cache is scoped per tenant so that switching roles / tenants (e.g. from a
+// tenant that had low-stock alerts to the sales staff view) never inherits
+// another tenant's stale alerts or records. A single global cache key caused
+// one role to surface stock notifications for products that don't exist in its
+// own inventory.
+function cacheKeyForTenant(tenantId?: string | null) {
+  return `${CACHE_PREFIX}${tenantId ?? 'default'}`
+}
 type SystemApiResponse = {
   state: DemoSystemState
   activeTenantId: string
@@ -364,10 +372,10 @@ type FeedbackItem = {
   message: string
 }
 
-function loadCachedState(): DemoSystemState {
+function loadCachedState(tenantId?: string | null): DemoSystemState {
   if (typeof window === 'undefined') return emptyDemoSystem()
 
-  const raw = window.localStorage.getItem(STORAGE_KEY)
+  const raw = window.localStorage.getItem(cacheKeyForTenant(tenantId))
   if (!raw) return emptyDemoSystem()
 
   try {
@@ -423,7 +431,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
   // Start from the last-known cached state (if any) so a page reload shows the
   // user's data immediately instead of flashing an empty seed and appearing to
   // "lose everything" while the server fetch is in flight or if it fails.
-  const [state, setState] = useState<DemoSystemState>(() => loadCachedState())
+  const [state, setState] = useState<DemoSystemState>(() => loadCachedState(window.localStorage.getItem(ACTIVE_TENANT_KEY)))
   const [availableTenants, setAvailableTenants] = useState<AccessibleTenant[]>([])
   const [activeTenantId, setActiveTenantId] = useState<string>('')
   const [hydrated, setHydrated] = useState(false)
@@ -452,7 +460,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
           } else {
             setState((prev) => mergeState(prev, resolvedRemote))
           }
-          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(resolvedRemote))
+          window.localStorage.setItem(cacheKeyForTenant(remote.activeTenantId), JSON.stringify(resolvedRemote))
         }
         setAvailableTenants(remote.availableTenants)
         setActiveTenantId(remote.activeTenantId)
@@ -466,7 +474,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         // "Untitled Workspace" and never stuck on the "Loading..." gate. If
         // there is no cache at all we still leave `hydrated` true (via finally)
         // so the page renders something rather than an endless spinner.
-        const cached = loadCachedState()
+        const cached = loadCachedState(window.localStorage.getItem(ACTIVE_TENANT_KEY))
         const cachedId = window.localStorage.getItem(ACTIVE_TENANT_KEY)
         const hasCache = Boolean(cached?.tenant?.id)
         const matchesRequest =
@@ -496,7 +504,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
 
   useEffect(() => {
     if (!hydrated) return
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+    window.localStorage.setItem(cacheKeyForTenant(activeTenantId || state.tenant.id), JSON.stringify(state))
     window.localStorage.setItem(ACTIVE_TENANT_KEY, activeTenantId || state.tenant.id)
   }, [hydrated, state, activeTenantId])
 
@@ -1024,7 +1032,10 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       }
       await supabase.auth.signOut()
       window.localStorage.removeItem(ACTIVE_TENANT_KEY)
-      window.localStorage.removeItem(STORAGE_KEY)
+      for (let i = window.localStorage.length - 1; i >= 0; i--) {
+        const key = window.localStorage.key(i)
+        if (key && key.startsWith(CACHE_PREFIX)) window.localStorage.removeItem(key)
+      }
       window.location.href = '/sign-in'
     },
     formatCurrency,
