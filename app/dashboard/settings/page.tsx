@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { Building2, Coins, Factory, Landmark, Layers3, MapPin, Pencil, Plus, Save, Settings as SettingsIcon, Sparkles, Tag, Trash2, Users, Wallet, Warehouse, X } from 'lucide-react'
+import { AlertTriangle, Building2, Coins, Factory, Landmark, Layers3, MapPin, Pencil, Plus, Save, Settings as SettingsIcon, Sparkles, Tag, Trash2, Users, Wallet, Warehouse, X } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { getRolePermissions } from '@/lib/access-control'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
@@ -25,6 +25,10 @@ export default function SettingsPage() {
   const role = activeTenant?.role ?? 'admin'
   const perms = getRolePermissions(role)
   const canEditPlan = isSuperAdminIdentity
+  // Storage locations count toward the plan quota; waste / defect / reject bins
+  // are quarantine storage kept separate, so they don't consume plan slots.
+  const storageLocations = state.locations.filter((location) => !location.is_waste_location)
+  const wasteLocations = state.locations.filter((location) => location.is_waste_location)
   const [billingLoading, setBillingLoading] = useState(false)
   const [catalogTab, setCatalogTab] = useState<'categories' | 'uom' | 'locations'>('categories')
   const [categoryForm, setCategoryForm] = useState({ name: '', color: '#3B82F6', description: '' })
@@ -221,6 +225,11 @@ export default function SettingsPage() {
       editLocation(editingLocationId, draft)
       notifySuccess('Location updated successfully.')
     } else {
+      const limit = Number(state.tenant.max_locations ?? 0)
+      if (storageLocations.length >= limit) {
+        notifyError(`Data cannot be loaded due to Plan package limitation. Your ${state.tenant.plan} plan allows up to ${limit} locations.`)
+        return
+      }
       addLocation(draft)
       notifySuccess('Location added successfully.')
     }
@@ -332,7 +341,8 @@ export default function SettingsPage() {
     { label: 'Business type', value: humanize(state.tenant.business_type), icon: Building2, color: '#8B5CF6' },
     { label: 'Users', value: `${state.users.length}/${state.tenant.max_users}`, icon: Users, color: '#10B981' },
     { label: 'Products', value: `${state.products.length}/${state.tenant.max_products}`, icon: Layers3, color: '#F59E0B' },
-    { label: 'Locations', value: `${state.locations.length}/${state.tenant.max_locations}`, icon: Warehouse, color: '#0F766E' },
+    { label: 'Locations', value: `${storageLocations.length}/${state.tenant.max_locations}`, icon: Warehouse, color: '#0F766E' },
+    { label: 'Quarantine bins', value: String(wasteLocations.length), icon: AlertTriangle, color: '#DC2626' },
   ]
 
   return (
@@ -581,7 +591,8 @@ export default function SettingsPage() {
               { label: 'Subscription', value: state.tenant.subscription_status, color: '#10B981' },
               { label: 'Users used', value: `${state.users.length}/${state.tenant.max_users}`, color: '#8B5CF6' },
               { label: 'Products used', value: `${state.products.length}/${state.tenant.max_products}`, color: '#F59E0B' },
-              { label: 'Locations used', value: `${state.locations.length}/${state.tenant.max_locations}`, color: '#0F766E' },
+              { label: 'Locations used', value: `${storageLocations.length}/${state.tenant.max_locations}`, color: '#0F766E' },
+              { label: 'Quarantine bins', value: String(wasteLocations.length), color: '#DC2626' },
             ].map((item) => (
               <div key={item.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
                 <div style={{ fontSize: 12, color: '#64748B', fontWeight: 700 }}>{item.label}</div>
@@ -1099,7 +1110,7 @@ export default function SettingsPage() {
                   ? `${state.categories.length} total`
                   : catalogTab === 'uom'
                     ? `${state.unitsOfMeasure.length} total`
-                    : `${state.locations.length} total`}
+                    : `${storageLocations.length} storage · ${wasteLocations.length} quarantine`}
               </div>
             </div>
 

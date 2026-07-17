@@ -30,6 +30,41 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'business_name is required' }, { status: 400 })
   }
 
+  const serviceClient = getSupabaseServiceClient()
+
+  // One email = one tenant. If this user/email already owns a tenant, reuse it
+  // instead of creating a duplicate workspace. This prevents the same person
+  // from ending up with multiple "Balai Ilocos Empanada" tenants after
+  // re-running onboarding (e.g. resubmitting the form or revisiting the page).
+  const { data: existingMembership } = await serviceClient
+    .from('tenant_memberships')
+    .select('tenant_id, role')
+    .eq('auth_user_id', user.id)
+    .single()
+
+  if (existingMembership?.tenant_id) {
+    const { data: existingTenant } = await serviceClient
+      .from('tenants')
+      .select('id')
+      .eq('id', existingMembership.tenant_id)
+      .single()
+
+    if (existingTenant) {
+      const response = NextResponse.json({ ok: true, tenantId: existingTenant.id, existing: true })
+      copyResponseCookies(cookieResponse, response)
+      response.cookies.set({
+        name: 'codentra.active-tenant',
+        value: existingTenant.id,
+        path: '/',
+        sameSite: 'lax',
+        httpOnly: false,
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: 60 * 60 * 24 * 30,
+      })
+      return response
+    }
+  }
+
   const tenantId = randomUUID()
   const now = new Date().toISOString()
   const subscriptionEndsAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
@@ -110,20 +145,22 @@ export async function POST(request: NextRequest) {
 
   await upsertTenantState(seed)
 
-  const serviceClient = getSupabaseServiceClient()
-
   await serviceClient
     .from('tenant_memberships')
     .update({ is_default: false })
     .eq('auth_user_id', user.id)
 
-  const { error: membershipError } = await serviceClient.from('tenant_memberships').insert({
-    id: randomUUID(),
-    tenant_id: tenantId,
-    auth_user_id: user.id,
-    role: 'admin',
-    is_default: true,
-  })
+  const { error: membershipError } = await serviceClient
+    .from('tenant_memberships')
+    .upsert(
+      {
+        tenant_id: tenantId,
+        auth_user_id: user.id,
+        role: 'admin',
+        is_default: true,
+      },
+      { onConflict: 'tenant_id,auth_user_id' },
+    )
 
   if (membershipError) {
     return NextResponse.json({ error: membershipError.message }, { status: 500 })

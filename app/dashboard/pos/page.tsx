@@ -62,6 +62,52 @@ function paymentLabel(method: string): string {
   return MANUAL_LABELS[method] ?? 'Other'
 }
 
+// Build a human label for how a sale was paid. Split sales list every method
+// used (e.g. "Split: Cash + GCash") instead of collapsing to a single method.
+function transactionPaymentLabel(tx: {
+  payment_method: string
+  split_payments?: Array<{ payment_method: string; amount: number }> | null
+}): string {
+  const splits = tx.split_payments ?? []
+  if (splits.length > 1) {
+    const methods: string[] = []
+    for (const split of splits) {
+      const label = paymentLabel(split.payment_method)
+      if (!methods.includes(label)) methods.push(label)
+    }
+    return `Split: ${methods.join(' + ')}`
+  }
+  if (splits.length === 1) return paymentLabel(splits[0].payment_method)
+  return paymentLabel(tx.payment_method)
+}
+
+// Payment-method filter options for the transactions list: always offer "All"
+// and "Split payments", then one option per payment method configured in
+// Settings (cash, QR Ph, plus any store payment account) so the filter only
+// surfaces methods the tenant actually uses.
+function buildPaymentFilterOptions(methods: Array<{ value: PayMethod; label: string }>): Array<{ value: string; label: string }> {
+  return [
+    { value: 'all', label: 'All payments' },
+    ...methods.map((entry) => ({ value: entry.value, label: entry.label })),
+    { value: 'split', label: 'Split payments' },
+  ]
+}
+
+// True when a transaction matches the selected payment-method filter. Split
+// sales match any of their constituent methods (and the dedicated "split" value).
+function transactionMatchesPayment(
+  tx: { payment_method: string; split_payments?: Array<{ payment_method: string }> | null },
+  filter: string,
+): boolean {
+  if (filter === 'all') return true
+  const splits = tx.split_payments ?? []
+  const isSplit = splits.length > 1
+  if (filter === 'split') return isSplit
+  if (isSplit) return splits.some((split) => split.payment_method === filter)
+  if (splits.length === 1) return splits[0].payment_method === filter
+  return tx.payment_method === filter
+}
+
 // Thermal receipt printers use a limited built-in font (code page 437/850) that
 // cannot render the PHP peso sign (₱) or the bullet (•). Swap those for ASCII
 // so the printout is not garbled when sent through the system print dialog.
@@ -196,11 +242,32 @@ export default function POSPage() {
   }
   const [search, setSearch] = useState('')
   const [cat, setCat] = useState('All')
+  const [txPaymentFilter, setTxPaymentFilter] = useState('all')
   const [cart, setCart] = useState<CartItem[]>([])
   const [payMethod, setPayMethod] = useState<PayMethod>('cash')
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null)
   const paymentAccounts = state.tenant.payment_accounts ?? []
   const selectedAccount = paymentAccounts.find((account) => account.id === selectedAccountId) ?? null
+
+  // Payment methods available for split payments: the always-available cash and
+  // QR Ph rails plus any method backed by a store payment account configured in
+  // Settings. This keeps the split dropdown limited to methods the tenant set
+  // up instead of defaulting to every possible method.
+  const configuredPaymentMethods = useMemo<Array<{ value: PayMethod; label: string }>>(() => {
+    const methods: Array<{ value: PayMethod; label: string }> = [
+      { value: 'cash', label: paymentLabel('cash') },
+      { value: 'qr_ph', label: paymentLabel('qr_ph') },
+    ]
+    const seen = new Set<PayMethod>(methods.map((entry) => entry.value))
+    for (const account of paymentAccounts) {
+      const method = resolveAccountMethod(account)
+      if (!seen.has(method)) {
+        seen.add(method)
+        methods.push({ value: method, label: account.label || paymentLabel(method) })
+      }
+    }
+    return methods
+  }, [paymentAccounts])
   const [tendered, setTendered] = useState('')
   const [reference, setReference] = useState('')
   const [qrZoom, setQrZoom] = useState<string | null>(null)
@@ -238,7 +305,7 @@ export default function POSPage() {
   const [voidReason, setVoidReason] = useState('')
   const [noShiftBlock, setNoShiftBlock] = useState(false)
   const [splitPayments, setSplitPayments] = useState<Array<{ payment_method: PayMethod; amount: number; reference?: string | null }>>([])
-  const [newSplitMethod, setNewSplitMethod] = useState<PayMethod>('bank_transfer')
+  const [newSplitMethod, setNewSplitMethod] = useState<PayMethod>(configuredPaymentMethods[0]?.value ?? 'cash')
   const [newSplitAmount, setNewSplitAmount] = useState('')
   const [newSplitReference, setNewSplitReference] = useState('')
   const [voidBusy, setVoidBusy] = useState(false)
@@ -257,8 +324,9 @@ export default function POSPage() {
     return [...state.salesTransactions]
       .slice()
       .reverse()
+      .filter((tx) => transactionMatchesPayment(tx, txPaymentFilter))
       .slice(0, 8)
-  }, [state.salesTransactions])
+  }, [state.salesTransactions, txPaymentFilter])
   const categoryOptions = useMemo(() => ['All', ...state.categories.map((category) => category.name)], [state.categories])
 
   const products = state.products.filter((product) => {
@@ -1462,16 +1530,7 @@ export default function POSPage() {
                     onChange={(event) => setNewSplitMethod(event.target.value as PayMethod)}
                     style={{ height: 38, borderRadius: 10 }}
                   >
-                    {([
-                      ['cash', 'Cash'],
-                      ['bank_transfer', 'Bank Transfer'],
-                      ['gcash', 'GCash'],
-                      ['maya', 'Maya'],
-                      ['bdo', 'BDO'],
-                      ['maribank', 'Maribank'],
-                      ['card', 'Card'],
-                      ['other', 'Other'],
-                    ] as const).map(([value, label]) => (
+                    {configuredPaymentMethods.map(({ value, label }) => (
                       <option key={value} value={value}>{label}</option>
                     ))}
                   </select>
@@ -1493,7 +1552,10 @@ export default function POSPage() {
                   onClick={() => {
                     const amount = Number(newSplitAmount)
                     if (!amount || amount <= 0) return
-                    setSplitPayments((current) => [...current, { payment_method: newSplitMethod, amount, reference: null }])
+                    const method = configuredPaymentMethods.some((entry) => entry.value === newSplitMethod)
+                      ? newSplitMethod
+                      : (configuredPaymentMethods[0]?.value ?? 'cash')
+                    setSplitPayments((current) => [...current, { payment_method: method, amount, reference: null }])
                     setNewSplitAmount('')
                     setNewSplitReference('')
                   }}
@@ -1631,19 +1693,40 @@ export default function POSPage() {
                 <h3 style={{ fontSize: 15, fontWeight: 800, color: '#0F172A' }}>Recent transactions</h3>
                 <p style={{ fontSize: 12, color: '#64748B', marginTop: 3 }}>Latest completed sales with quick details.</p>
               </div>
-              <Clock3 size={15} color="#64748B" />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <select
+                  value={txPaymentFilter}
+                  onChange={(e) => setTxPaymentFilter(e.target.value)}
+                  aria-label="Filter transactions by payment method"
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: '#0F172A',
+                    border: '1px solid #E2E8F0',
+                    borderRadius: 10,
+                    padding: '6px 10px',
+                    background: '#FFFFFF',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {buildPaymentFilterOptions(configuredPaymentMethods).map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <Clock3 size={15} color="#64748B" />
+              </div>
             </div>
 
             <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 320, overflowY: 'auto' }}>
               {recentTx.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '26px 10px', color: '#94A3B8' }}>
                   <ReceiptText size={28} style={{ marginBottom: 8, opacity: 0.35 }} />
-                  <p style={{ fontSize: 12 }}>No transactions yet</p>
+                  <p style={{ fontSize: 12 }}>{txPaymentFilter === 'all' ? 'No transactions yet' : 'No transactions match this filter'}</p>
                 </div>
               ) : recentTx.map((tx) => {
                 const cashier = tx.cashier?.full_name ?? 'Sales Staff'
                 const total = Number(tx.total_amount ?? 0)
-                const paidVia = paymentLabel(tx.payment_method)
+                const paidVia = transactionPaymentLabel(tx)
                 const count = tx.items?.length ?? 0
                 const isCompleted = tx.status === 'completed'
                 const isVoided = tx.status === 'voided'

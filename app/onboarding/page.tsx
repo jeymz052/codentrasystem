@@ -1,5 +1,8 @@
 import Image from 'next/image'
+import { redirect } from 'next/navigation'
 import { OnboardingForm } from '@/components/onboarding/onboarding-form'
+import { createSupabaseServerClient } from '@/lib/supabase-server'
+import { isConfiguredSuperAdminEmail, loadAccessibleTenants } from '@/lib/tenant-access'
 
 export default async function OnboardingPage({
   searchParams,
@@ -7,6 +10,18 @@ export default async function OnboardingPage({
   searchParams?: Promise<{ plan?: string }>
 }) {
   const params = (await searchParams) ?? {}
+
+  const supabase = await createSupabaseServerClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (user) {
+    const isSuperAdminIdentity = isConfiguredSuperAdminEmail(user.email)
+    const { tenants } = await loadAccessibleTenants(user.id, user.email, null)
+    // One email = one tenant: if the account already has a workspace, send
+    // them straight to the dashboard instead of letting them create another.
+    if (!isSuperAdminIdentity && tenants.length) {
+      redirect('/dashboard')
+    }
+  }
 
   return (
     <main className="auth-page auth-page--split">

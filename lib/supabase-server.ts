@@ -3,6 +3,18 @@ import type { NextRequest, NextResponse } from 'next/server'
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
+// Bound every Supabase HTTP call with a timeout so a transient network blip
+// (e.g. ECONNRESET from the database) fails fast instead of hanging the route
+// for the full platform request budget.
+const SUPABASE_FETCH_TIMEOUT_MS = 15000
+
+function timeoutFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), SUPABASE_FETCH_TIMEOUT_MS)
+  const signal = controller.signal
+  return fetch(input, { ...init, signal }).finally(() => clearTimeout(timer))
+}
+
 let serviceClient: SupabaseClient | null = null
 
 function normalizeCookieOptions(options: CookieOptions = {}): CookieOptions {
@@ -33,6 +45,9 @@ export async function createSupabaseServerClient() {
           }
         },
       },
+      global: {
+        fetch: timeoutFetch,
+      },
     }
   )
 }
@@ -51,6 +66,9 @@ export function createSupabaseRouteClient(request: NextRequest, response: NextRe
             response.cookies.set({ name, value, ...normalizeCookieOptions(options) })
           })
         },
+      },
+      global: {
+        fetch: timeoutFetch,
       },
     }
   )
@@ -83,6 +101,9 @@ export function getSupabaseServiceClient() {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
+    },
+    global: {
+      fetch: timeoutFetch,
     },
   })
 

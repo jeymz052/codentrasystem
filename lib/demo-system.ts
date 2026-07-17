@@ -351,12 +351,13 @@ export function seedDemoSystem(businessType: BusinessType = 'retail'): DemoSyste
     { id: id(), tenant_id: tenant.id, name: 'BakeCo', contact_name: 'Paolo Reyes', email: 'sales@bakeco.example', phone: '555-0106', address: '6 Oven Drive', lead_days: 2, is_active: true, notes: null, created_at: addMinutes(baseTime, 17), updated_at: addMinutes(baseTime, 17) },
   ]
 
+  // Exactly one real storage location (MAIN) counts toward the plan quota. The
+  // waste / defect / reject bins are quarantine storage kept separate from the
+  // billable storage count, so a starter tenant (1 storage slot) starts at 1/1
+  // storage plus its 3 quarantine bins instead of appearing over-limit (3/1).
+  const mainStorage = { id: id(), tenant_id: tenant.id, code: 'MAIN', name: 'Main Storage', zone: 'Backroom', is_active: true, is_waste_location: false, created_at: addMinutes(baseTime, 18) }
   const locations: Location[] = [
-    { id: id(), tenant_id: tenant.id, code: 'MAIN', name: 'Main Storage', zone: 'Backroom', is_active: true, is_waste_location: false, created_at: addMinutes(baseTime, 18) },
-    { id: id(), tenant_id: tenant.id, code: 'COLD', name: 'Cold Storage', zone: 'Chiller', is_active: true, is_waste_location: false, created_at: addMinutes(baseTime, 19) },
-    { id: id(), tenant_id: tenant.id, code: 'BULK', name: 'Bulk Storage', zone: 'Warehouse', is_active: true, is_waste_location: false, created_at: addMinutes(baseTime, 20) },
-    { id: id(), tenant_id: tenant.id, code: 'SHELF-A', name: 'Shelf A', zone: 'Front rack', is_active: true, is_waste_location: false, created_at: addMinutes(baseTime, 21) },
-    { id: id(), tenant_id: tenant.id, code: 'SHELF-B', name: 'Shelf B', zone: 'Front rack', is_active: true, is_waste_location: false, created_at: addMinutes(baseTime, 22) },
+    mainStorage,
     { id: deterministicUuid(tenant.id, 'waste-location'), tenant_id: tenant.id, code: 'WASTE', name: 'Waste', zone: 'Quarantine', is_active: true, is_waste_location: true, created_at: addMinutes(baseTime, 23) },
     { id: deterministicUuid(tenant.id, 'defect-location'), tenant_id: tenant.id, code: 'DEFECT', name: 'Defect', zone: 'Quarantine', is_active: true, is_waste_location: true, created_at: addMinutes(baseTime, 24) },
     { id: deterministicUuid(tenant.id, 'reject-location'), tenant_id: tenant.id, code: 'REJECT', name: 'Reject', zone: 'Quarantine', is_active: true, is_waste_location: true, created_at: addMinutes(baseTime, 25) },
@@ -365,7 +366,6 @@ export function seedDemoSystem(businessType: BusinessType = 'retail'): DemoSyste
   const [coffeeCat, dairyCat, ingredientCat, flavorCat, teaCat, bakeryCat] = categories
   const [kgUom, literUom, bottleUom, boxUom, pcsUom, packUom] = unitsOfMeasure
   const [beanCo, freshDairy, sweetCorp, chocoMix, teaHouse, bakeCo] = suppliers
-  const [mainStorage, coldStorage, bulkStorage, shelfA, shelfB] = locations
 
   const products: Product[] = [
     {
@@ -405,7 +405,7 @@ export function seedDemoSystem(businessType: BusinessType = 'retail'): DemoSyste
       description: 'Fresh dairy milk',
       category_id: dairyCat.id,
       supplier_id: freshDairy.id,
-      location_id: coldStorage.id,
+      location_id: mainStorage.id,
       uom_id: literUom.id,
       quantity_on_hand: 45,
       quantity_reserved: 0,
@@ -423,7 +423,7 @@ export function seedDemoSystem(businessType: BusinessType = 'retail'): DemoSyste
       updated_at: addMinutes(baseTime, 39),
       category: dairyCat,
       supplier: freshDairy,
-      location: coldStorage,
+      location: mainStorage,
       uom: literUom,
     },
     {
@@ -434,7 +434,7 @@ export function seedDemoSystem(businessType: BusinessType = 'retail'): DemoSyste
       description: 'Granulated white sugar',
       category_id: ingredientCat.id,
       supplier_id: sweetCorp.id,
-      location_id: bulkStorage.id,
+      location_id: mainStorage.id,
       uom_id: kgUom.id,
       quantity_on_hand: 33,
       quantity_reserved: 0,
@@ -452,7 +452,7 @@ export function seedDemoSystem(businessType: BusinessType = 'retail'): DemoSyste
       updated_at: addMinutes(baseTime, 40),
       category: ingredientCat,
       supplier: sweetCorp,
-      location: bulkStorage,
+      location: mainStorage,
       uom: kgUom,
     },
     {
@@ -463,7 +463,7 @@ export function seedDemoSystem(businessType: BusinessType = 'retail'): DemoSyste
       description: 'Topping syrup',
       category_id: flavorCat.id,
       supplier_id: chocoMix.id,
-      location_id: shelfA.id,
+      location_id: mainStorage.id,
       uom_id: bottleUom.id,
       quantity_on_hand: 18,
       quantity_reserved: 0,
@@ -481,7 +481,7 @@ export function seedDemoSystem(businessType: BusinessType = 'retail'): DemoSyste
       updated_at: addMinutes(baseTime, 41),
       category: flavorCat,
       supplier: chocoMix,
-      location: shelfA,
+      location: mainStorage,
       uom: bottleUom,
     },
     {
@@ -521,7 +521,7 @@ export function seedDemoSystem(businessType: BusinessType = 'retail'): DemoSyste
       description: 'Fresh bakery item',
       category_id: bakeryCat.id,
       supplier_id: bakeCo.id,
-      location_id: shelfB.id,
+      location_id: mainStorage.id,
       uom_id: pcsUom.id,
       quantity_on_hand: 40,
       quantity_reserved: 0,
@@ -539,7 +539,7 @@ export function seedDemoSystem(businessType: BusinessType = 'retail'): DemoSyste
       updated_at: addMinutes(baseTime, 35),
       category: bakeryCat,
       supplier: bakeCo,
-      location: shelfB,
+      location: mainStorage,
       uom: pcsUom,
     },
     {
@@ -550,7 +550,7 @@ export function seedDemoSystem(businessType: BusinessType = 'retail'): DemoSyste
       description: 'Powder for hot chocolate drinks',
       category_id: flavorCat.id,
       supplier_id: chocoMix.id,
-      location_id: bulkStorage.id,
+      location_id: mainStorage.id,
       uom_id: packUom.id,
       quantity_on_hand: 6,
       quantity_reserved: 0,
@@ -568,7 +568,7 @@ export function seedDemoSystem(businessType: BusinessType = 'retail'): DemoSyste
       updated_at: addMinutes(baseTime, 42),
       category: flavorCat,
       supplier: chocoMix,
-      location: bulkStorage,
+      location: mainStorage,
       uom: packUom,
     },
     {
@@ -895,13 +895,25 @@ export function seedDemoSystem(businessType: BusinessType = 'retail'): DemoSyste
   })
 }
 
+// Waste / defect / reject storage are kept as locations in the catalog but are
+// NOT part of the plan's billable storage quota. Keeping them separate means a
+// starter tenant (1 real storage location) can still carry its quarantine bins
+// without consuming the single allowed real storage slot.
+export function countStorageLocations(locations: Location[]): number {
+  return locations.filter((location) => !location.is_waste_location).length
+}
+
+export function PLAN_LIMIT_MESSAGE(plan: string, resource: string, limit: number) {
+  return `Data cannot be loaded due to Plan package limitation. Your ${plan} plan allows up to ${limit} ${resource}.`
+}
+
 function ensurePlanCapacity(state: DemoSystemState, resource: 'users' | 'products' | 'locations', isUpdate = false) {
   if (isUpdate) return
 
   const currentCount = {
     users: state.users.length,
     products: state.products.length,
-    locations: state.locations.length,
+    locations: countStorageLocations(state.locations),
   }[resource]
 
   const limitKey = {
@@ -912,7 +924,7 @@ function ensurePlanCapacity(state: DemoSystemState, resource: 'users' | 'product
 
   const limit = Number(state.tenant[limitKey] ?? 0)
   if (currentCount >= limit) {
-    throw new Error(`Your ${state.tenant.plan} plan allows up to ${limit} ${resource}. Upgrade your subscription to continue.`)
+    throw new Error(PLAN_LIMIT_MESSAGE(state.tenant.plan, resource, limit))
   }
 }
 
@@ -1334,9 +1346,9 @@ export function updateTenantSettings(state: DemoSystemState, patch: Partial<Demo
   }
 }
 
-export function addOrUpdateProduct(state: DemoSystemState, draft: ProductDraft, productId?: string): DemoSystemState {
+export function addOrUpdateProduct(state: DemoSystemState, draft: ProductDraft, productId?: string, skipCapacity = false): DemoSystemState {
   const isUpdate = Boolean(productId)
-  ensurePlanCapacity(state, 'products', isUpdate)
+  if (!skipCapacity) ensurePlanCapacity(state, 'products', isUpdate)
 
   const category = draft.category ? findCategory(state, draft.category) ?? {
     id: deterministicUuid(state.tenant.id, 'category', normalizeName(draft.category)),
@@ -1383,14 +1395,37 @@ export function addOrUpdateProduct(state: DemoSystemState, draft: ProductDraft, 
     created_at: nowIso(),
   } : null
 
+  const newItemCode = normalizeName(draft.item_code)
+  const newName = normalizeName(draft.name)
+
   const existing = productId
     ? state.products.find((row) => row.id === productId)
-    : state.products.find((row) => lower(row.item_code) === lower(normalizeName(draft.item_code)))
+    : state.products.find((row) => lower(row.item_code) === lower(newItemCode))
+
+  // One tenant = one product per item_code and per product name. Editing an
+  // existing product (productId set) is exempt; for new products we reject a
+  // duplicate item_code or product name. A duplicate item_code that already
+  // exists is treated as an update of that product (kept for bulk imports),
+  // but a duplicate *name* always points at a different record and is rejected.
+  if (!productId) {
+    const duplicateCode = state.products.find(
+      (row) => lower(row.item_code) === lower(newItemCode),
+    )
+    const duplicateName = state.products.find(
+      (row) => lower(row.name) === lower(newName),
+    )
+    if (duplicateName && (!duplicateCode || duplicateCode.name !== duplicateName.name)) {
+      throw new Error(`Product "${newName}" already exists.`)
+    }
+    if (duplicateCode && duplicateCode.name !== newName) {
+      throw new Error(`Item code "${newItemCode}" already exists.`)
+    }
+  }
   const product: Product = {
-    id: existing?.id ?? deterministicUuid(state.tenant.id, 'product', normalizeName(draft.item_code)),
+    id: existing?.id ?? deterministicUuid(state.tenant.id, 'product', newItemCode),
     tenant_id: state.tenant.id,
-    item_code: normalizeName(draft.item_code),
-    name: normalizeName(draft.name),
+    item_code: newItemCode,
+    name: newName,
     description: draft.description?.trim() ? draft.description.trim() : null,
     category_id: category?.id ?? null,
     supplier_id: supplier?.id ?? null,
@@ -1546,7 +1581,16 @@ function stripProducts(state: DemoSystemState, matchedIds: Set<string>): DemoSys
 }
 
 export function importProducts(state: DemoSystemState, drafts: ProductDraft[]): DemoSystemState {
-  return drafts.reduce((current, draft) => addOrUpdateProduct(current, draft), state)
+  // Count how many rows are genuinely NEW (don't match an existing item code).
+  // Updates don't consume plan quota, so only new rows push the count.
+  const existingCodes = new Set(state.products.map((product) => lower(product.item_code)))
+  const newCount = drafts.filter((draft) => !existingCodes.has(lower(normalizeName(draft.item_code)))).length
+  const limit = Number(state.tenant.max_products ?? 0)
+  const projected = state.products.length + newCount
+  if (projected > limit) {
+    throw new Error(PLAN_LIMIT_MESSAGE(state.tenant.plan, 'products', limit))
+  }
+  return drafts.reduce((current, draft) => addOrUpdateProduct(current, draft, undefined, true), state)
 }
 
 export function createSupplier(state: DemoSystemState, draft: SupplierDraft): DemoSystemState {
@@ -3708,9 +3752,22 @@ export function computeDashboardStats(state: DemoSystemState): DashboardStats {
   const lowStock = state.alerts.filter((alert) => alert.status === 'open' && alert.alert_type === 'low_stock')
   const outOfStock = state.alerts.filter((alert) => alert.status === 'open' && alert.alert_type === 'out_of_stock')
 
+  // Separate raw materials / packaging (valued at unit cost) from finished
+  // goods (valued at selling price, the POS-based value) so production
+  // businesses can see inventory value excluding finished output.
+  const activeProducts = state.products.filter((product) => product.is_active !== false)
+  const materialsValue = activeProducts
+    .filter((product) => !product.is_finished_good)
+    .reduce((sum, product) => sum + Number(product.quantity_on_hand ?? 0) * Number(product.unit_cost ?? 0), 0)
+  const finishedGoodsValue = activeProducts
+    .filter((product) => product.is_finished_good)
+    .reduce((sum, product) => sum + Number(product.quantity_on_hand ?? 0) * Number(product.selling_price ?? 0), 0)
+
   return {
-    total_products: state.products.filter((product) => product.is_active !== false).length,
+    total_products: activeProducts.length,
     total_value: state.products.reduce((sum, product) => sum + Number(product.quantity_on_hand ?? 0) * Number(product.unit_cost ?? 0), 0),
+    materials_value: materialsValue,
+    finished_goods_value: finishedGoodsValue,
     low_stock_count: lowStock.length,
     out_of_stock_count: outOfStock.length,
     open_alerts: state.alerts.filter((alert) => alert.status === 'open').length,

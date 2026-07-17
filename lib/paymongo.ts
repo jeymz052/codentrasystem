@@ -41,14 +41,22 @@ function fromPayMongoAmount(amount: number) {
 
 async function paymongoRequest<T>(path: string, init: RequestInit, keyName: 'PAYMONGO_SECRET_KEY' | 'PAYMONGO_PUBLIC_KEY' = 'PAYMONGO_SECRET_KEY') {
   const baseUrl = 'https://api.paymongo.com/v1'
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...init,
-    headers: {
-      Authorization: basicAuth(getPayMongoKey(keyName)),
-      'Content-Type': 'application/json',
-      ...(init.headers ?? {}),
-    },
-  })
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 15000)
+  let response: Response
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        Authorization: basicAuth(getPayMongoKey(keyName)),
+        'Content-Type': 'application/json',
+        ...(init.headers ?? {}),
+      },
+    })
+  } finally {
+    clearTimeout(timer)
+  }
 
   const text = await response.text()
   let parsed: unknown = null

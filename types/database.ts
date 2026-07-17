@@ -418,6 +418,8 @@ export interface Alert {
 export interface DashboardStats {
   total_products: number
   total_value: number
+  materials_value: number
+  finished_goods_value: number
   low_stock_count: number
   out_of_stock_count: number
   open_alerts: number

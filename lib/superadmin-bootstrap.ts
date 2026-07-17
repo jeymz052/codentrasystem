@@ -12,7 +12,6 @@ function isDuplicateKeyError(error: unknown) {
 }
 
 async function seedSuperadmin() {
-  if (process.env.NODE_ENV === 'production') return
   if (!process.env.SUPERADMIN_EMAIL || !process.env.SUPERADMIN_PASSWORD) return
 
   const client = getSupabaseAdminClient()
@@ -25,6 +24,13 @@ async function seedSuperadmin() {
   let userId = existingUser?.id ?? null
 
   if (!existingUser) {
+    // Only auto-create outside production to avoid spinning up stray accounts
+    // in the live environment. In production we still REPAIR an existing
+    // superadmin's credentials so a drifted password can be restored with the
+    // configured SUPERADMIN_PASSWORD (fixes "correct credentials are invalid").
+    if (process.env.NODE_ENV === 'production') {
+      return
+    }
     const { data, error } = await client.auth.admin.createUser({
       email: SUPERADMIN_EMAIL,
       password: SUPERADMIN_PASSWORD,

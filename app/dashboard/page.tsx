@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { AlertTriangle, ArrowRight, ArrowUpDown, BarChart3, CheckCircle2, CreditCard, DollarSign, LayoutDashboard, Package, PieChart, ShoppingCart, TrendingDown, Users, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, ArrowUpDown, BarChart3, Boxes, CheckCircle2, CreditCard, DollarSign, LayoutDashboard, Package, PieChart, ShoppingCart, TrendingDown, Users, X } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { formatRoleLabel } from '@/lib/access-control'
 import { formatTimestamp } from '@/lib/utils'
@@ -23,7 +23,10 @@ export default function DashboardPage() {
   const { state, stats, formatCurrency } = useDemoSystem()
   const router = useRouter()
   const visibleUsers = state.users
+  const activeUsers = visibleUsers.filter((user) => user.is_active)
+  const activeUserNames = activeUsers.map((user) => `${user.full_name || user.email || 'Unknown'} (${formatRoleLabel(user.role)})`).join(', ')
   const plan = SUBSCRIPTION_PLANS.find((entry) => entry.plan === state.tenant.plan) ?? SUBSCRIPTION_PLANS[0]
+  const isProduction = state.tenant.enable_production ?? false
   const greeting = getGreeting(new Date().getHours())
   const renewalDate = state.tenant.subscription_status === 'trial' ? state.tenant.trial_ends_at : state.tenant.subscription_ends_at
   const renewalLabel = renewalDate
@@ -32,7 +35,7 @@ export default function DashboardPage() {
   const planUsage = [
     { label: 'Users', used: visibleUsers.length, limit: typeof plan.users === 'number' ? plan.users : visibleUsers.length, color: '#2563EB' },
     { label: 'Products', used: state.products.length, limit: typeof plan.products === 'number' ? plan.products : state.products.length, color: '#10B981' },
-    { label: 'Locations', used: state.locations.length, limit: typeof plan.locations === 'number' ? plan.locations : state.locations.length, color: '#F59E0B' },
+    { label: 'Locations', used: state.locations.filter((location) => !location.is_waste_location).length, limit: typeof plan.locations === 'number' ? plan.locations : state.locations.filter((location) => !location.is_waste_location).length, color: '#F59E0B' },
   ].map((item) => ({
     ...item,
     percent: Math.min(Math.round((item.used / Math.max(item.limit, 1)) * 100), 100),
@@ -40,13 +43,22 @@ export default function DashboardPage() {
 
   const statCards = [
     { label: 'Total SKUs', value: String(stats.total_products), sub: 'Active products', icon: <Package size={18} />, color: '#3B82F6' },
-    { label: 'Inventory Value', value: formatCurrency(stats.total_value), sub: 'Based on unit cost', icon: <DollarSign size={18} />, color: '#10B981' },
+    { label: 'Inventory Value', value: formatCurrency(stats.materials_value), sub: 'Raw materials & packing', icon: <DollarSign size={18} />, color: '#10B981' },
+    ...(isProduction
+      ? [{
+          label: 'Finished Goods',
+          value: formatCurrency(stats.finished_goods_value),
+          sub: 'Based on POS selling price',
+          icon: <Boxes size={18} />,
+          color: '#0EA5E9',
+        }]
+      : []),
     { label: 'Low Stock', value: String(stats.low_stock_count), sub: `${stats.out_of_stock_count} out of stock`, icon: <TrendingDown size={18} />, color: '#F59E0B', alert: true },
     { label: 'Open Alerts', value: String(stats.open_alerts), sub: 'Needs attention', icon: <AlertTriangle size={18} />, color: '#EF4444', alert: true },
     { label: 'Pending Orders', value: String(stats.pending_orders), sub: 'Purchase orders', icon: <ShoppingCart size={18} />, color: '#8B5CF6' },
     { label: "Today's Sales", value: formatCurrency(stats.sales_today), sub: `${stats.transactions_today} transactions`, icon: <CreditCard size={18} />, color: '#2563EB' },
     { label: 'Stock Movements', value: String(state.stockMovements.length), sub: 'Audit trail', icon: <ArrowUpDown size={18} />, color: '#3B82F6' },
-    { label: 'Active Users', value: String(visibleUsers.filter((user) => user.is_active).length), sub: `${formatRoleLabel('admin')}, Manager, Supervisor, Staff`, icon: <Users size={18} />, color: '#8B5CF6' },
+    { label: 'Active Users', value: String(activeUsers.length), sub: activeUserNames || 'No active users', icon: <Users size={18} />, color: '#8B5CF6' },
   ]
 
   const lowStock = state.products
@@ -271,8 +283,8 @@ export default function DashboardPage() {
             </div>
           </Link>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            <button className="btn btn-primary btn-sm" onClick={() => router.push('/dashboard/orders')}>
-              <ShoppingCart size={13} /> Restock all
+            <button className="btn btn-primary btn-sm" onClick={() => router.push('/dashboard/inventory')}>
+              <Package size={13} /> View all
             </button>
           </div>
         </div>

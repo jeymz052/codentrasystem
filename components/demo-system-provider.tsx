@@ -107,7 +107,7 @@ type DemoSystemContextValue = {
   removeProduct: (productId: string) => void
   removeProducts: (productIds: string[]) => void
   removeSuppliers: (supplierIds: string[]) => void
-  importProductRows: (drafts: ProductDraft[]) => void
+  importProductRows: (drafts: ProductDraft[], errorLabel?: string) => void
   addSupplier: (draft: SupplierDraft) => void
   editSupplier: (supplierId: string, draft: SupplierDraft) => void
   removeSupplier: (supplierId: string) => void
@@ -358,12 +358,21 @@ function loadCachedState(): DemoSystemState {
 
 async function fetchRemoteState(tenantId?: string | null) {
   const url = tenantId ? `/api/system?tenantId=${encodeURIComponent(tenantId)}` : '/api/system'
-  const response = await fetch(url, { cache: 'no-store' })
-  if (!response.ok) {
-    const body = await response.text()
-    throw new Error(body || 'Failed to load system state')
+  // Guard against a hanging request (e.g. a stalled Supabase call behind the
+  // Cloudflare -> Vercel proxy). Without a timeout the promise never settles,
+  // `hydrated` is never set, and the dashboard is stuck on "Loading..." forever.
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), 15000)
+  try {
+    const response = await fetch(url, { cache: 'no-store', signal: controller.signal })
+    if (!response.ok) {
+      const body = await response.text()
+      throw new Error(body || 'Failed to load system state')
+    }
+    return (await response.json()) as SystemApiResponse
+  } finally {
+    window.clearTimeout(timeoutId)
   }
-  return (await response.json()) as SystemApiResponse
 }
 
 async function postMutation(tenantId: string, body: Record<string, unknown>) {
@@ -423,14 +432,18 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       } catch {
         if (!mounted) return
         // The initial load failed (e.g. onboarding not complete, network down,
-        // or the cached tenant no longer exists). Do NOT fall back to a stale
-        // demo seed ("Untitled Workspace") — that would mask the real tenant.
-        // Only reuse the cache if it actually belongs to the requested tenant.
+        // a request timed out behind the Cloudflare -> Vercel proxy, or the
+        // cached tenant no longer exists). Reuse the last-known cached state
+        // whenever we have one so the user is never stranded on an empty
+        // "Untitled Workspace" and never stuck on the "Loading..." gate. If
+        // there is no cache at all we still leave `hydrated` true (via finally)
+        // so the page renders something rather than an endless spinner.
         const cached = loadCachedState()
         const cachedId = window.localStorage.getItem(ACTIVE_TENANT_KEY)
+        const hasCache = Boolean(cached?.tenant?.id)
         const matchesRequest =
           initialTenantId && (cached.tenant.id === initialTenantId || cachedId === initialTenantId)
-        if (matchesRequest) {
+        if (hasCache && (matchesRequest || !initialTenantId || !cachedId)) {
           setState(ensureWasteLocation(cached))
           setAvailableTenants([{
             id: cached.tenant.id,
@@ -529,9 +542,32 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     requestIdRef.current += 1
     const currentRequest = requestIdRef.current
     const tenantId = state.tenant.id
-    setState((current) => {
-      return optimistic(current)
-    })
+
+    // The optimistic updater (e.g. addOrUpdateProduct) can throw when it
+    // rejects invalid input such as a duplicate item code or product name.
+    // Running it inside setState would otherwise crash React with an
+    // "application error: a client-side exception has occurred". Catch it
+    // here, surface the message, and roll back to the pristine remote state.
+    let nextState: DemoSystemState
+    try {
+      nextState = optimistic(state)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Something went wrong'
+      pushFeedback('error', options?.errorLabel ? `${options.errorLabel}: ${detail}` : detail)
+      void fetchRemoteState(tenantId)
+        .then((remote) => {
+          if (currentRequest === requestIdRef.current) {
+            setState((prev) => mergeState(prev, remote.state))
+            setAvailableTenants(remote.availableTenants)
+            setActiveTenantId(remote.activeTenantId)
+          }
+        })
+        .catch(() => {
+          // Keep current state if the network is unavailable.
+        })
+      return
+    }
+    setState(nextState)
 
     void postMutation(tenantId, mutation)
       .then((remote) => {
@@ -548,6 +584,9 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         if (options?.errorLabel) {
           const detail = error instanceof Error ? error.message : 'Something went wrong'
           pushFeedback('error', `${options.errorLabel}: ${detail}`)
+        } else {
+          const detail = error instanceof Error ? error.message : 'Something went wrong'
+          pushFeedback('error', detail)
         }
         void fetchRemoteState(tenantId)
           .then((remote) => {
@@ -627,10 +666,11 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         { action: 'removeProduct', productId, itemCode }
       )
     },
-    importProductRows: (drafts) => sync(
-      (current) => importProducts(current, drafts),
-      { action: 'importProductRows', drafts }
-    ),
+  importProductRows: (drafts, errorLabel) => sync(
+    (current) => importProducts(current, drafts),
+    { action: 'importProductRows', drafts },
+    errorLabel ? { errorLabel } : undefined
+  ),
     addSupplier: (draft) => sync(
       (current) => createSupplier(current, draft),
       { action: 'addSupplier', draft }

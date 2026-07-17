@@ -145,12 +145,12 @@ function ensurePlanCapacity(state: DemoSystemState, resource: 'users' | 'product
   const currentCount = {
     users: state.users.length,
     products: state.products.length,
-    locations: state.locations.length,
+    locations: state.locations.filter((location) => !location.is_waste_location).length,
   }[resource]
 
   const limit = Number(state.tenant[limitKey] ?? 0)
   if (currentCount >= limit) {
-    throw new Error(`Your ${state.tenant.plan} plan allows up to ${limit} ${resource}. Upgrade your subscription to continue.`)
+    throw new Error(`Data cannot be loaded due to Plan package limitation. Your ${state.tenant.plan} plan allows up to ${limit} ${resource}.`)
   }
 }
 
@@ -312,6 +312,9 @@ export async function loadTenantState(tenantId?: string | null) {
     refunded_at: row.refunded_at ?? null,
     refund_reason: row.refund_reason ?? null,
     parent_transaction_id: row.parent_transaction_id ?? null,
+    split_payments: Array.isArray(row.split_payments) && row.split_payments.length > 0 ? row.split_payments : undefined,
+    cash_sales_total: Number(row.cash_sales_total ?? 0),
+    qr_sales_total: Number(row.qr_sales_total ?? 0),
     cashier: row.cashier_id ? userById.get(row.cashier_id) ?? undefined : undefined,
     items: salesItemsByTxId.get(row.id) ?? [],
   }))
@@ -420,7 +423,14 @@ export async function upsertTenantState(state: DemoSystemState) {
 
   const productRows = state.products.map(({ category, supplier, location, uom, ...row }) => row)
   const purchaseOrderRows = state.purchaseOrders.map(({ supplier, items, ...row }) => row)
-  const salesTransactionRows = state.salesTransactions.map(({ cashier, items, split_payments, cash_sales_total, qr_sales_total, ...row }) => row)
+  const salesTransactionRows = state.salesTransactions.map(({ cashier, items, split_payments, cash_sales_total, qr_sales_total, ...row }) => ({
+    ...row,
+    // Persist the full split breakdown so the transactions list can reflect the
+    // real mode(s) of payment instead of collapsing every sale to a single method.
+    split_payments: split_payments && split_payments.length > 0 ? split_payments : null,
+    cash_sales_total: cash_sales_total ?? 0,
+    qr_sales_total: qr_sales_total ?? 0,
+  }))
   const purchaseOrderItemRows = state.purchaseOrderItems.map(({ product, ...row }) => row)
   const salesTransactionItemRows = state.salesTransactionItems.map(({ product, ...row }) => row)
   const alertRows = state.alerts.map(({ product, purchase_order_id, ...row }) => row)

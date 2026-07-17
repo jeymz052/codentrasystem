@@ -13,12 +13,18 @@ export async function POST(request: NextRequest) {
   const response = NextResponse.json({ ok: true })
   const supabase = createSupabaseRouteClient(request, response)
 
-  const { error } = await supabase.auth.signInWithPassword({ email, password })
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password })
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 401 })
+    // Forward any cookies Supabase set (e.g. on a retry/refresh) and return a
+    // clear message. Returning a brand new response here used to drop the
+    // Set-Cookie headers, which could strand the user in a logout loop.
+    return NextResponse.json(
+      { message: error.message, code: (error as { status?: number }).status ?? undefined },
+      { status: 401, headers: response.headers }
+    )
   }
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const user = data.user
   if (user) {
     const serviceClient = getSupabaseServiceClient()
     const { data: membership } = await serviceClient

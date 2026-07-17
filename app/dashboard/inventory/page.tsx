@@ -524,6 +524,24 @@ export default function InventoryPage() {
   function handleSave() {
     const draft = toDraft(form)
     if (!draft.item_code || !draft.name) return
+
+    const code = draft.item_code.trim().toLowerCase()
+    const name = draft.name.trim().toLowerCase()
+    const duplicateCode = state.products.find(
+      (product) => product.id !== editingId && product.item_code.trim().toLowerCase() === code,
+    )
+    const duplicateName = state.products.find(
+      (product) => product.id !== editingId && product.name.trim().toLowerCase() === name,
+    )
+    if (duplicateName) {
+      notifyError(`Product "${draft.name}" already exists.`)
+      return
+    }
+    if (duplicateCode) {
+      notifyError(`Item code "${draft.item_code}" already exists.`)
+      return
+    }
+
     saveProduct(draft, editingId ?? undefined)
     notifySuccess(editingId ? 'Item updated successfully.' : 'Item added successfully.')
     setShowModal(false)
@@ -711,6 +729,13 @@ export default function InventoryPage() {
         .map((row) => normalizeImportRow(row))
         .filter((row): row is ProductDraft => Boolean(row))
 
+      if (!rows.length) {
+        notifyError(
+          'No valid rows found. The file must include at least an "Item Code" and "Name" column (with headers). Please use the expected CSV/XLSX template.',
+        )
+        return
+      }
+
       setImportRows(rows)
       setShowImportModal(true)
     } catch {
@@ -721,6 +746,21 @@ export default function InventoryPage() {
   }
 
   function handleImportConfirm() {
+    if (!importRows.length) {
+      notifyError('There are no rows to import.')
+      setShowImportModal(false)
+      return
+    }
+
+    const existingCodes = new Set(state.products.map((product) => String(product.item_code ?? '').trim().toLowerCase()))
+    const newCount = importRows.filter((row) => !existingCodes.has(String(row.item_code ?? '').trim().toLowerCase())).length
+    const limit = Number(state.tenant.max_products ?? 0)
+    if (state.products.length + newCount > limit) {
+      notifyError(`Data cannot be loaded due to Plan package limitation. Your ${state.tenant.plan} plan allows up to ${limit} products.`)
+      setShowImportModal(false)
+      setImportRows([])
+      return
+    }
     importProductRows(importRows)
     notifySuccess(`Imported ${importRows.length} item${importRows.length === 1 ? '' : 's'} successfully.`)
     setShowImportModal(false)
