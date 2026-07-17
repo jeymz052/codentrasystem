@@ -148,6 +148,21 @@ export function SetPasswordForm() {
 
       if (updateError) throw updateError
 
+      // Clear the invite session so the user is forced to sign in fresh with
+      // their own credentials (rather than being dropped into a stale inviter
+      // session). Then send them to the login page.
+      await supabase.auth.signOut({ scope: 'local' })
+      // Belt-and-suspenders: wipe the persisted auth storage key directly so a
+      // leftover inviter session can never bounce /sign-in back to /dashboard.
+      try {
+        if (typeof window !== 'undefined') {
+          const ref = process.env.NEXT_PUBLIC_SUPABASE_URL?.match(/https?:\/\/([^.]+)/)?.[1]
+          if (ref) window.localStorage.removeItem(`sb-${ref}-auth-token`)
+        }
+      } catch {
+        // ignore storage access errors
+      }
+
       setSuccess('Account activated. You can now sign in.')
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Failed to set your password')

@@ -1,9 +1,10 @@
 'use client'
 
-import { useMemo, useState, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent, useEffect } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { ArrowRight, CheckCircle2, Eye, EyeOff, LockKeyhole, Mail } from 'lucide-react'
+import { createClient } from '@/lib/supabase'
 import { SUBSCRIPTION_PLANS, formatPlanPrice } from '@/lib/subscription-plans'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
 
@@ -31,6 +32,28 @@ export function AuthForm({
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState(initialPlan)
+
+  const supabase = useMemo(() => createClient(), [])
+
+  useEffect(() => {
+    if (mode !== 'sign-in') return
+    let cancelled = false
+    void (async () => {
+      try {
+        await supabase.auth.signOut({ scope: 'local' })
+      } catch {
+        // ignore sign-out errors on mount
+      }
+      if (cancelled) return
+      try {
+        const ref = process.env.NEXT_PUBLIC_SUPABASE_URL?.match(/https?:\/\/([^.]+)/)?.[1]
+        if (ref) window.localStorage.removeItem(`sb-${ref}-auth-token`)
+      } catch {
+        // ignore storage access errors
+      }
+    })()
+    return () => { cancelled = true }
+  }, [mode, supabase])
 
   const activePlan = useMemo(() => {
     return SUBSCRIPTION_PLANS.find((plan) => plan.plan === selectedPlan) ?? SUBSCRIPTION_PLANS[1]
