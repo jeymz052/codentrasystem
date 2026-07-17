@@ -119,7 +119,7 @@ export function SetPasswordForm() {
     if (!success) return
 
     const timer = window.setTimeout(() => {
-      router.replace('/dashboard')
+      router.replace('/sign-in?next=/dashboard')
     }, 1800)
 
     return () => window.clearTimeout(timer)
@@ -148,19 +148,7 @@ export function SetPasswordForm() {
 
       if (updateError) throw updateError
 
-      // Re-establish the session canonically with the new credentials. This
-      // guarantees the session the app/session/middleware read afterwards is
-      // exactly the invited user's (same path as a normal sign-in), so the
-      // first login after setup lands in the invited role instead of a stale
-      // inviter session.
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email: current.user.email ?? '',
-        password,
-      })
-
-      if (signInError) throw signInError
-
-      setSuccess('Password set. Taking you to your workspace...')
+      setSuccess('Account activated. You can now sign in.')
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Failed to set your password')
     } finally {

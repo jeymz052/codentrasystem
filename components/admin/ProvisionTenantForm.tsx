@@ -10,7 +10,7 @@ const BUSINESS_TYPES = [
 ]
 
 const ROLES = [
-  { value: 'admin', label: 'Admin' },
+  { value: 'admin', label: 'Tenant Admin' },
   { value: 'manager', label: 'Manager' },
   { value: 'sales_staff', label: 'Sales Staff' },
 ]
