@@ -1295,6 +1295,15 @@ export function ensureWasteLocation(state: DemoSystemState): DemoSystemState {
 }
 
 function setCurrentUser(state: DemoSystemState) {
+  // Preserve the real signed-in user whenever their row still exists. The
+  // persisted/cached state already points currentUserId at the actual person
+  // (resolved from the auth session by the client), so unless that row has been
+  // removed we must keep it — otherwise every state recomputation would fall
+  // back to the tenant admin / inviter and the POS would wrongly show their
+  // name instead of the invited sales staff who is actually logged in.
+  if (state.currentUserId && state.users.some((user) => user.id === state.currentUserId)) {
+    return state
+  }
   const currentUserId =
     state.users.find((user) => user.role === 'super_admin')?.id ??
     state.users.find((user) => user.role === 'admin')?.id ??

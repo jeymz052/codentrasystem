@@ -415,16 +415,13 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         // to its server-side status (e.g. draft) after a few seconds.
         const hasMutated = requestIdRef.current > 0
         if (!hasMutated) {
-          // If the active tenant changed (e.g. just onboarded a new workspace,
-          // switched tenants, or the cached state is from a different tenant),
-          // discard the stale local cache entirely so demo data or old tenant
-          // rows cannot bleed into the fresh workspace.
-          if (remote.state.tenant.id !== state.tenant.id) {
-            setState(ensureWasteLocation(remote.state))
+          const resolvedRemote = resolveCurrentUser(ensureWasteLocation(remote.state))
+          if (resolvedRemote.tenant.id !== state.tenant.id) {
+            setState(resolvedRemote)
           } else {
-            setState((prev) => mergeState(prev, ensureWasteLocation(remote.state)))
+            setState((prev) => mergeState(prev, resolvedRemote))
           }
-          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(remote.state))
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(resolvedRemote))
         }
         setAvailableTenants(remote.availableTenants)
         setActiveTenantId(remote.activeTenantId)
@@ -444,7 +441,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         const matchesRequest =
           initialTenantId && (cached.tenant.id === initialTenantId || cachedId === initialTenantId)
         if (hasCache && (matchesRequest || !initialTenantId || !cachedId)) {
-          setState(ensureWasteLocation(cached))
+          setState(resolveCurrentUser(ensureWasteLocation(cached)))
           setAvailableTenants([{
             id: cached.tenant.id,
             name: cached.tenant.name,
