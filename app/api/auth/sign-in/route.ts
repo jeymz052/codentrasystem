@@ -60,12 +60,20 @@ export async function POST(request: NextRequest) {
     // Enforce one active login per account: signing in on a new device must
     // force any other device's session for this user to sign out (so e.g. a
     // sales staff account can't be used from two POS terminals at once).
-    // `scope: 'others'` terminates every session except the one tied to this
-    // request, so the device that just signed in stays logged in.
-    await supabase.auth.signOut({ scope: 'others' }).catch(() => {
-      // Best-effort: if session revocation fails, the new login still succeeds
-      // rather than stranding the user.
-    })
+    // We use the service-role admin client with the NEW session's access token
+    // and `scope: 'others'`, which revokes every server-tracked session for
+    // this user EXCEPT the one just created — so the device that just signed
+    // in stays logged in and the old device (any tab/browser) is kicked on its
+    // next request. The route client's own signOut({ scope: 'others' }) does
+    // NOT work here because it only knows about its own request-scoped session.
+    if (data.session?.access_token) {
+      await serviceClient.auth.admin
+        .signOut(data.session.access_token, 'others')
+        .catch(() => {
+          // Best-effort: if session revocation fails, the new login still
+          // succeeds rather than stranding the user.
+        })
+    }
   }
 
   return response
