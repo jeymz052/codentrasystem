@@ -30,7 +30,7 @@ import {
 } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { formatTimestamp, formatCurrency } from '@/lib/utils'
-import { computeShiftExpectedCash, computeShiftPaymentTotals, cashPortionOfSale } from '@/lib/demo-system'
+import { computeShiftExpectedCash, computeTenantExpectedCash, computeShiftPaymentTotals, cashPortionOfSale } from '@/lib/demo-system'
 import { getRolePermissions } from '@/lib/access-control'
 import type { PaymentAccount, PaymentMethod, Tenant, CashShift, CashMovementKind, TransactionStatus } from '@/types/database'
 
@@ -1058,70 +1058,90 @@ export default function POSPage() {
         </div>
 
          {currentShift ? (() => {
-          // The drawer balance is driven by transaction status plus real drawer
-          // movements (cash in / cash out) — identical to the close-shift
-          // "Expected cash". Model: opening float + cash from COMPLETED sales,
-          // where a refund/void removes that cash again. A ₱120 sale makes the
-          // drawer 1620; refunding it returns it to 1500.
-          const balance = computeShiftExpectedCash(state, currentShift.id)
+           const isSupervisor = role === 'super_admin' || role === 'manager'
+           const openShiftIds = new Set(state.cashShifts.filter((shift) => shift.status === 'open').map((shift) => shift.id))
+           const targetShiftIds = isSupervisor ? openShiftIds : new Set([currentShift.id])
+           // The drawer balance is driven by transaction status plus real drawer
+           // movements (cash in / cash out) — identical to the close-shift
+           // "Expected cash". Model: opening float + cash from COMPLETED sales,
+           // where a refund/void removes that cash again. A ₱120 sale makes the
+           // drawer 1620; refunding it returns it to 1500.
+           const balance = isSupervisor
+             ? (() => {
+                 let cashFromSales = 0
+                 for (const tx of state.salesTransactions) {
+                   if (!targetShiftIds.has(tx.shift_id ?? '')) continue
+                   const cash = cashPortionOfSale(tx)
+                   cashFromSales += cash
+                   if (tx.status === 'refunded' || tx.status === 'voided') cashFromSales -= cash
+                 }
+                 const movementDelta = (state.cashMovements ?? [])
+                   .filter((m) => targetShiftIds.has(m.shift_id))
+                   .reduce((sum, m) => sum + (m.kind === 'cash_out' ? -Number(m.amount ?? 0) : m.kind === 'cash_in' ? Number(m.amount ?? 0) : 0), 0)
+                 const totalOpeningFloat = state.cashShifts
+                   .filter((s) => targetShiftIds.has(s.id))
+                   .reduce((sum, s) => sum + Number(s.opening_float ?? 0), 0)
+                 return totalOpeningFloat + cashFromSales + movementDelta
+               })()
+             : computeShiftExpectedCash(state, currentShift.id)
 
-          // Build the ledger the cashier actually sees: manual cash movements
-          // PLUS derived rows for each completed sale (cash in) and each
-          // refunded/voided sale (cash out), so the list agrees with the balance.
-          type LedgerRow = { id: string; label: string; amount: number; isOut: boolean; at: string; tint: string }
-          const ledger: LedgerRow[] = []
-          // Surface the opening float as a transparent "+Starting Cash" line so
-          // the cashier can see exactly where the drawer's starting balance came
-          // from when the shift first opens. Anchored to the shift's open time so
-          // it sorts to the very top of the tape.
-          const openingFloatAmount = Number(currentShift.opening_float ?? 0)
-          if (openingFloatAmount > 0) {
-            ledger.push({
-              id: `opening-${currentShift.id}`,
-              label: 'Starting Cash',
-              amount: openingFloatAmount,
-              isOut: false,
-              at: currentShift.opened_at ?? currentShift.created_at ?? new Date().toISOString(),
-              tint: '#FEF3C7',
-            })
-          }
-          for (const m of state.cashMovements) {
-            if (m.shift_id !== currentShift.id) continue
-            // denomination_adjustment is dead data (no UI creates it); skip it.
-            if (m.kind === 'denomination_adjustment') continue
-            ledger.push({
-              id: m.id,
-              label: m.kind === 'cash_in' ? 'Cash In' : m.kind === 'cash_out' ? 'Cash Out' : 'Denomination adj.',
-              amount: Number(m.amount ?? 0),
-              isOut: m.kind === 'cash_out',
-              at: m.created_at,
-              tint: m.kind === 'cash_out' ? '#FEE2E2' : '#DCFCE7',
-            })
-          }
-          for (const tx of state.salesTransactions) {
-            if (tx.shift_id !== currentShift.id) continue
-            const cash = cashPortionOfSale(tx)
-            const isVoid = tx.status === 'voided'
-            const isRefund = tx.status === 'refunded'
-            // Skip non-cash sales from the cash drawer ledger. Online, bank,
-            // and other non-cash tenders do not affect physical cash, so
-            // showing them as ₱0.00 is confusing.
-            if (cash <= 0 && !isVoid && !isRefund) continue
-            // Always show the original sale (+cash) so the transaction stays
-            // visible for records even after it is voided/refunded — the record
-            // is kept (status flips, it is never deleted). Then, if it was
-            // voided/refunded, also show the matching payout (−cash) directly
-            // beneath it, exactly like a cash-register tape:
-            //   Sale +₱375  →  Void −₱375   (net 0, drawer back to opening)
-            ledger.push({
-              id: `sale-${tx.id}`,
-              label: `Sale ${tx.receipt_number}`,
-              amount: cash,
-              isOut: false,
-              at: tx.created_at,
-              tint: '#DCFCE7',
-            })
-            if (isVoid) {
+           // Build the ledger the cashier actually sees: manual cash movements
+           // PLUS derived rows for each completed sale (cash in) and each
+           // refunded/voided sale (cash out), so the list agrees with the balance.
+           type LedgerRow = { id: string; label: string; amount: number; isOut: boolean; at: string; tint: string }
+           const ledger: LedgerRow[] = []
+           // Surface the opening float as a transparent "+Starting Cash" line so
+           // the cashier can see exactly where the drawer's starting balance came
+           // from when the shift first opens. Anchored to the shift's open time so
+           // it sorts to the very top of the tape.
+           const openingFloatAmount = Number(currentShift.opening_float ?? 0)
+           if (openingFloatAmount > 0) {
+             ledger.push({
+               id: `opening-${currentShift.id}`,
+               label: 'Starting Cash',
+               amount: openingFloatAmount,
+               isOut: false,
+               at: currentShift.opened_at ?? currentShift.created_at ?? new Date().toISOString(),
+               tint: '#FEF3C7',
+             })
+           }
+           for (const m of state.cashMovements) {
+             if (!targetShiftIds.has(m.shift_id)) continue
+             // denomination_adjustment is dead data (no UI creates it); skip it.
+             if (m.kind === 'denomination_adjustment') continue
+             ledger.push({
+               id: m.id,
+               label: m.kind === 'cash_in' ? 'Cash In' : m.kind === 'cash_out' ? 'Cash Out' : 'Denomination adj.',
+               amount: Number(m.amount ?? 0),
+               isOut: m.kind === 'cash_out',
+               at: m.created_at,
+               tint: m.kind === 'cash_out' ? '#FEE2E2' : '#DCFCE7',
+             })
+           }
+           for (const tx of state.salesTransactions) {
+             if (!targetShiftIds.has(tx.shift_id ?? '')) continue
+             const cash = cashPortionOfSale(tx)
+             const isVoid = tx.status === 'voided'
+             const isRefund = tx.status === 'refunded'
+             // Skip non-cash sales from the cash drawer ledger. Online, bank,
+             // and other non-cash tenders do not affect physical cash, so
+             // showing them as ₱0.00 is confusing.
+             if (cash <= 0 && !isVoid && !isRefund) continue
+             // Always show the original sale (+cash) so the transaction stays
+             // visible for records even after it is voided/refunded — the record
+             // is kept (status flips, it is never deleted). Then, if it was
+             // voided/refunded, also show the matching payout (−cash) directly
+             // beneath it, exactly like a cash-register tape:
+             //   Sale +₱375  →  Void −₱375   (net 0, drawer back to opening)
+             ledger.push({
+               id: `sale-${tx.id}`,
+               label: `Sale ${tx.receipt_number}`,
+               amount: cash,
+               isOut: false,
+               at: tx.created_at,
+               tint: '#DCFCE7',
+             })
+             if (isVoid) {
               ledger.push({
                 id: `void-${tx.id}`,
                 label: `Void ${tx.receipt_number}`,

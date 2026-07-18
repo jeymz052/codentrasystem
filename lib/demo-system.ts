@@ -3354,6 +3354,26 @@ export function computeShiftExpectedCash(state: DemoSystemState, shiftId: string
   return Number(state.cashShifts.find((s) => s.id === shiftId)?.opening_float ?? 0) + cashFromSales + movementDelta
 }
 
+export function computeTenantExpectedCash(state: DemoSystemState): number {
+  const openShiftIds = new Set(state.cashShifts.filter((shift) => shift.status === 'open').map((shift) => shift.id))
+  if (!openShiftIds.size) return 0
+
+  let cashFromSales = 0
+  for (const tx of state.salesTransactions) {
+    if (!openShiftIds.has(tx.shift_id ?? '')) continue
+    const cash = cashPortionOfSale(tx)
+    cashFromSales += cash
+    if (tx.status === 'refunded' || tx.status === 'voided') cashFromSales -= cash
+  }
+  const movementDelta = (state.cashMovements ?? [])
+    .filter((m) => openShiftIds.has(m.shift_id))
+    .reduce((sum, m) => sum + (m.kind === 'cash_out' ? -Number(m.amount ?? 0) : m.kind === 'cash_in' ? Number(m.amount ?? 0) : 0), 0)
+  const totalOpeningFloat = state.cashShifts
+    .filter((s) => openShiftIds.has(s.id))
+    .reduce((sum, s) => sum + Number(s.opening_float ?? 0), 0)
+  return totalOpeningFloat + cashFromSales + movementDelta
+}
+
 export function recordCashMovement(
   state: DemoSystemState,
   payload: {
