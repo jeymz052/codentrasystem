@@ -708,17 +708,6 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
 
     const intervalId = window.setInterval(refresh, 5000)
 
-    // Realtime session-kick detection: when this account is signed in on another
-    // device, the server revokes every other session (see app/api/auth/sign-in/
-    // route.ts). Supabase's client detects the now-invalid token on its next
-    // refresh and emits SIGNED_OUT — we react immediately with a message and a
-    // redirect to sign-in, so the old device logs out without a manual reload.
-    const { data: authListener } = supabase.auth.onAuthStateChange((event) => {
-      if (event === 'SIGNED_OUT') {
-        handleSessionRevoked()
-      }
-    })
-
     // Real-time cross-device sync: when a superior approves/rejects a void,
     // refund, or deletion request (or any record these actions touch) on
     // another device, Supabase Realtime pushes the change here and we refresh
@@ -759,7 +748,6 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       window.clearInterval(intervalId)
       channel?.close()
       if (realtimeChannel) supabase.removeChannel(realtimeChannel)
-      authListener.subscription.unsubscribe()
       broadcastInvalidateRef.current = null
     }
   }, [hydrated, activeTenantId, state.tenant.id])
@@ -786,11 +774,18 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
 
   // Called when the server tells us the session is no longer valid — typically
   // because the same account signed in on a different device, which revokes all
-  // other sessions (see app/api/auth/sign-in/route.ts). We surface a clear
-  // message and send the user to sign-in immediately, so the old device logs
-  // out in realtime instead of waiting for a manual page reload.
-  function handleSessionRevoked() {
+  // other sessions (see app/api/auth/sign-in/route.ts). A 401 from /api/system
+  // is the real signal (it only happens when supabase.auth.getUser() fails), but
+  // to avoid false positives from a transient network blip we re-confirm the
+  // session is genuinely gone via a direct getUser() before showing the message.
+  async function handleSessionRevoked() {
     if (sessionRevokedRef.current) return
+    try {
+      const { data } = await supabase.auth.getUser()
+      if (data.user) return
+    } catch {
+      // If getUser itself errors, fall through and treat the session as revoked.
+    }
     sessionRevokedRef.current = true
     pushFeedback('error', 'You have been signed out because your account was opened on another device.')
     window.setTimeout(() => {
