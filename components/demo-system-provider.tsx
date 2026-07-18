@@ -583,6 +583,11 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
   // Ensures the "signed out on another device" handling runs exactly once,
   // even though the poller keeps firing after the session is already revoked.
   const sessionRevokedRef = useRef(false)
+  // True only after this client has loaded a valid session at least once. We
+  // gate the SIGNED_OUT handler on this so the transient local sign-out that the
+  // sign-in form performs on its own mount (to clear stale sessions) can never
+  // trigger the message — at that point no dashboard session has been seen yet.
+  const sessionEstablishedRef = useRef(false)
 
   useEffect(() => {
     let mounted = true
@@ -591,6 +596,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         const cachedTenantId = window.localStorage.getItem(ACTIVE_TENANT_KEY)
         const remote = await fetchRemoteState(initialTenantId ?? cachedTenantId)
         if (!mounted) return
+        sessionEstablishedRef.current = true
         // Don't clobber local state if the user already started mutating it
         // while this initial load was still in flight (e.g. marking a PO
         // received). Otherwise the late snapshot would reset the record back
@@ -704,26 +710,23 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_shifts', filter: `tenant_id=eq.${tenantId}` }, () => void refresh())
         .on('postgres_changes', { event: '*', schema: 'public', table: 'deletion_requests', filter: `tenant_id=eq.${tenantId}` }, () => void refresh())
         .on('postgres_changes', { event: '*', schema: 'public', table: 'audit_logs', filter: `tenant_id=eq.${tenantId}` }, () => void refresh())
-        // Precise cross-device kick detection: the sign-in route writes a
-        // `user.session_revoked` audit row targeting the victim's auth user id
-        // ONLY when a second device signs in and revokes the other sessions.
-        // We react solely to that specific event, so the "signed out on another
-        // device" message never appears on a normal single-device login or a
-        // transient error (those are not observable here at all).
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'audit_logs', filter: `tenant_id=eq.${tenantId}` }, (payload) => {
-          const record = payload.new as { action?: string; user_id?: string } | null
-          if (record?.action === 'user.session_revoked' && record.user_id) {
-            void supabase.auth.getUser().then(({ data }) => {
-              if (data.user && data.user.id === record.user_id) {
-                handleSessionRevoked()
-              }
-            })
-          }
-        })
         .subscribe()
     } catch {
       // Realtime is best-effort; polling remains the fallback.
     }
+
+    // Realtime cross-device kick: when this account signs in on a second device,
+    // the server revokes every other session (see app/api/auth/sign-in/route.ts).
+    // Supabase's client detects the now-invalid refresh token and emits
+    // SIGNED_OUT immediately, so the first device logs out in realtime with a
+    // message — no reload needed. We gate on sessionEstablishedRef so the local
+    // sign-out the sign-in form performs on its own mount (before any dashboard
+    // session exists) can never trigger this on a normal single-device login.
+    const { data: authListener } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT' && sessionEstablishedRef.current) {
+        handleSessionRevoked()
+      }
+    })
 
     let channel: BroadcastChannel | null = null
     if (typeof BroadcastChannel !== 'undefined') {
@@ -746,6 +749,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       window.clearInterval(intervalId)
       channel?.close()
       if (realtimeChannel) supabase.removeChannel(realtimeChannel)
+      authListener.subscription.unsubscribe()
       broadcastInvalidateRef.current = null
     }
   }, [hydrated, activeTenantId, state.tenant.id])
