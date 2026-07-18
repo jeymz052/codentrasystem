@@ -166,8 +166,8 @@ type DemoSystemContextValue = {
   setWasteTypes: (productId: string, draft: { waste: number; defect: number; reject: number }, reason?: string) => void
   transferStock: (payload: { productId: string; fromLocationId: string | null; toLocationId: string | null; quantity: number; notes?: string }) => void
   requestDeletion: (requestedAction: string, targetType: string, targetId: string, details: Record<string, unknown>) => void
-  approveDeletion: (requestId: string) => void
-  rejectDeletion: (requestId: string) => void
+  approveDeletion: (requestId: string, notes?: string) => void
+  rejectDeletion: (requestId: string, notes?: string) => void
   markNotificationRead: (notificationId: string) => void
   markAllNotificationsRead: () => void
   switchTenant: (tenantId: string) => Promise<void>
@@ -328,6 +328,40 @@ type StockMovementLike = {
 function mergeStockMovements<T extends StockMovementLike>(localItems: T[], remoteItems: T[]): T[] {
   const keyFor = (item: StockMovementLike) =>
     `${item.reference_id ?? ''}|${item.product_id ?? ''}|${item.movement_type ?? ''}|${item.quantity ?? 0}`
+  const seen = new Set(localItems.map(keyFor))
+  const merged = [...localItems]
+  for (const remoteItem of remoteItems) {
+    const key = keyFor(remoteItem)
+    if (!seen.has(key)) {
+      seen.add(key)
+      merged.push(remoteItem)
+    }
+  }
+  return merged
+}
+
+// Cash movements are generated twice for the same logical event: once
+// optimistically on the client (random id) and again when the server persists
+// the mutation (a different random id), or via a realtime/interval refresh that
+// re-applies the same logical movement. mergeArray keeps both because the ids
+// differ, so Cash In / Cash Out (and void/refund payouts) appear twice in the
+// drawer ledger and double-count the balance. Collapse to one per logical
+// movement using a stable natural key.
+//
+// IMPORTANT: the key must NOT include id or created_at. created_at can differ
+// between the optimistic snapshot and the server snapshot for the SAME logical
+// event, and ids are random per run, so keying on either would let both copies
+// survive as duplicates. Key on the immutable logical identity instead.
+type CashMovementLike = {
+  id?: string
+  shift_id?: string | null
+  kind?: string | null
+  amount?: number | null
+  note?: string | null
+}
+function mergeCashMovements<T extends CashMovementLike>(localItems: T[], remoteItems: T[]): T[] {
+  const keyFor = (item: CashMovementLike) =>
+    `${item.shift_id ?? ''}|${item.kind ?? ''}|${item.amount ?? 0}|${item.note ?? ''}`
   const seen = new Set(localItems.map(keyFor))
   const merged = [...localItems]
   for (const remoteItem of remoteItems) {
@@ -823,7 +857,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       productRecipes: mergeArray(local.productRecipes, remote.productRecipes),
       productionTemplates: mergeArray(local.productionTemplates, remote.productionTemplates),
       cashShifts: mergeByIdRemoteWins(local.cashShifts, remote.cashShifts),
-      cashMovements: mergeArray(local.cashMovements, remote.cashMovements ?? []),
+      cashMovements: mergeCashMovements(local.cashMovements, remote.cashMovements ?? []),
       inventoryLots: mergeArray(local.inventoryLots, remote.inventoryLots ?? []),
       deletionRequests: dedupeDeletionRequests(mergeByIdRemoteWins(local.deletionRequests, remote.deletionRequests ?? [])),
       notifications: mergeNotifications(local.notifications, remote.notifications ?? []),
@@ -1194,14 +1228,14 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       { action: 'requestDeletion', requestedAction, targetType, targetId, details, requestedBy: state.currentUserId },
       { successMessage: 'Deletion request sent to manager for approval.', errorLabel: 'Could not request deletion' }
     ),
-    approveDeletion: (requestId) => sync(
-      (current) => approveDeletion(current, requestId),
-      { action: 'approveDeletion', requestId },
+    approveDeletion: (requestId, notes) => sync(
+      (current) => approveDeletion(current, requestId, notes),
+      { action: 'approveDeletion', requestId, notes },
       { successMessage: 'Deletion approved and record removed.', errorLabel: 'Could not approve deletion' }
     ),
-    rejectDeletion: (requestId) => sync(
-      (current) => rejectDeletion(current, requestId),
-      { action: 'rejectDeletion', requestId },
+    rejectDeletion: (requestId, notes) => sync(
+      (current) => rejectDeletion(current, requestId, notes),
+      { action: 'rejectDeletion', requestId, notes },
       { successMessage: 'Deletion request rejected.', errorLabel: 'Could not reject deletion' }
     ),
     markNotificationRead: (notificationId) => sync(

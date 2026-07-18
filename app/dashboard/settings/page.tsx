@@ -215,7 +215,7 @@ export default function SettingsPage() {
   }
 
   function handleSaveLocation() {
-    if (!locationForm.code.trim() || !locationForm.name.trim()) return
+    if (!locationForm.name.trim()) return
     const draft = {
       code: locationForm.code,
       name: locationForm.name,
@@ -1045,8 +1045,8 @@ export default function SettingsPage() {
               <div data-locations-builder style={{ display: 'grid', gap: 12 }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 10 }}>
                   <label className="auth-field">
-                    <span>Code</span>
-                    <input className="input" value={locationForm.code} onChange={(event) => setLocationForm((current) => ({ ...current, code: event.target.value }))} placeholder="e.g. WH-A" />
+                    <span>Code <span style={{ color: '#94A3B8', fontWeight: 500 }}>(optional)</span></span>
+                    <input className="input" value={locationForm.code} onChange={(event) => setLocationForm((current) => ({ ...current, code: event.target.value }))} placeholder="Auto from name (e.g. WH-A)" />
                   </label>
                   <label className="auth-field">
                     <span>Location name</span>

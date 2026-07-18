@@ -74,7 +74,7 @@ export type UnitOfMeasureDraft = {
 }
 
 export type LocationDraft = {
-  code: string
+  code?: string
   name: string
   zone?: string
 }
@@ -1819,9 +1819,16 @@ export function deleteUnitOfMeasure(state: DemoSystemState, uomId: string): Demo
 }
 
 export function createLocation(state: DemoSystemState, draft: LocationDraft): DemoSystemState {
-  const code = normalizeName(draft.code).toUpperCase()
   const name = normalizeName(draft.name)
-  if (!code || !name) return state
+  if (!name) return state
+
+  // Code is optional. When omitted, derive a short upper-case code from the
+  // name (e.g. "Main Storage" -> "MAINSTORAGE") so a location can be created
+  // without manually entering a code.
+  let code = normalizeName(draft.code ?? '').toUpperCase()
+  if (!code) {
+    code = name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) || 'LOC'
+  }
 
   ensurePlanCapacity(state, 'locations')
 
@@ -1852,9 +1859,13 @@ export function createLocation(state: DemoSystemState, draft: LocationDraft): De
 }
 
 export function updateLocation(state: DemoSystemState, locationId: string, draft: LocationDraft): DemoSystemState {
-  const code = normalizeName(draft.code).toUpperCase()
   const name = normalizeName(draft.name)
-  if (!code || !name) return state
+  if (!name) return state
+
+  let code = normalizeName(draft.code ?? '').toUpperCase()
+  if (!code) {
+    code = name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) || 'LOC'
+  }
 
   return {
     ...state,
@@ -2061,6 +2072,7 @@ export function requestDeletion(
     status: 'pending',
     reviewed_by: null,
     reviewed_at: null,
+    review_notes: null,
     created_at: nowIso(),
     updated_at: nowIso(),
   }
@@ -2084,14 +2096,16 @@ export function requestDeletion(
   }
 }
 
-export function approveDeletion(state: DemoSystemState, requestId: string): DemoSystemState {
+export function approveDeletion(state: DemoSystemState, requestId: string, notes?: string): DemoSystemState {
   const request = state.deletionRequests.find((row) => row.id === requestId)
   if (!request || request.status !== 'pending') return state
+
+  const reviewNotes = notes?.trim() || null
 
   let next = {
     ...state,
     deletionRequests: state.deletionRequests.map((row) =>
-      row.id === requestId ? { ...row, status: 'approved' as const, reviewed_by: state.currentUserId, reviewed_at: nowIso(), updated_at: nowIso() } : row
+      row.id === requestId ? { ...row, status: 'approved' as const, reviewed_by: state.currentUserId, reviewed_at: nowIso(), review_notes: reviewNotes, updated_at: nowIso() } : row
     ),
   }
 
@@ -2140,7 +2154,7 @@ export function approveDeletion(state: DemoSystemState, requestId: string): Demo
       next = {
         ...next,
         deletionRequests: next.deletionRequests.map((row) =>
-          row.id === requestId ? { ...row, status: 'approved' as const, reviewed_by: state.currentUserId, reviewed_at: nowIso(), updated_at: nowIso() } : row
+          row.id === requestId ? { ...row, status: 'approved' as const, reviewed_by: state.currentUserId, reviewed_at: nowIso(), review_notes: reviewNotes, updated_at: nowIso() } : row
         ),
       }
       break
@@ -2149,7 +2163,7 @@ export function approveDeletion(state: DemoSystemState, requestId: string): Demo
       next = {
         ...next,
         deletionRequests: next.deletionRequests.map((row) =>
-          row.id === requestId ? { ...row, status: 'approved' as const, reviewed_by: state.currentUserId, reviewed_at: nowIso(), updated_at: nowIso() } : row
+          row.id === requestId ? { ...row, status: 'approved' as const, reviewed_by: state.currentUserId, reviewed_at: nowIso(), review_notes: reviewNotes, updated_at: nowIso() } : row
         ),
       }
       break
@@ -2163,7 +2177,9 @@ export function approveDeletion(state: DemoSystemState, requestId: string): Demo
     tenant_id: state.tenant.id,
     user_id: request.requested_by,
     title: 'Request Approved',
-    message: `Your ${getActionLabel(request.action)} request was approved by ${reviewerName}.`,
+    message: reviewNotes
+      ? `Your ${getActionLabel(request.action)} request was approved by ${reviewerName}. Remarks: "${reviewNotes}"`
+      : `Your ${getActionLabel(request.action)} request was approved by ${reviewerName}.`,
     type: 'approval_result',
     read: false,
     created_at: nowIso(),
@@ -2188,14 +2204,16 @@ export function approveDeletion(state: DemoSystemState, requestId: string): Demo
   return next
 }
 
-export function rejectDeletion(state: DemoSystemState, requestId: string): DemoSystemState {
+export function rejectDeletion(state: DemoSystemState, requestId: string, notes?: string): DemoSystemState {
   const request = state.deletionRequests.find((row) => row.id === requestId)
   if (!request || request.status !== 'pending') return state
+
+  const reviewNotes = notes?.trim() || null
 
   let next: DemoSystemState = {
     ...state,
     deletionRequests: state.deletionRequests.map((row) =>
-      row.id === requestId ? { ...row, status: 'rejected' as const, reviewed_by: state.currentUserId, reviewed_at: nowIso(), updated_at: nowIso() } : row
+      row.id === requestId ? { ...row, status: 'rejected' as const, reviewed_by: state.currentUserId, reviewed_at: nowIso(), review_notes: reviewNotes, updated_at: nowIso() } : row
     ),
     notifications: [...state.notifications],
     auditLogs: [
@@ -2222,7 +2240,9 @@ export function rejectDeletion(state: DemoSystemState, requestId: string): DemoS
       tenant_id: state.tenant.id,
       user_id: request.requested_by,
       title: 'Request Rejected',
-      message: `Your ${getActionLabel(request.action)} request was rejected by ${reviewerName}.`,
+      message: reviewNotes
+        ? `Your ${getActionLabel(request.action)} request was rejected by ${reviewerName}. Remarks: "${reviewNotes}"`
+        : `Your ${getActionLabel(request.action)} request was rejected by ${reviewerName}.`,
       type: 'approval_result',
       read: false,
       created_at: nowIso(),

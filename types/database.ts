@@ -441,6 +441,7 @@ export interface DeletionRequest {
   status: DeletionRequestStatus
   reviewed_by: string | null
   reviewed_at: string | null
+  review_notes: string | null
   created_at: string
   updated_at: string
   requested_by_user?: User

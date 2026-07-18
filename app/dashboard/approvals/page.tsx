@@ -43,6 +43,7 @@ export default function ApprovalsPage() {
 
   const [tab, setTab] = useState<Tab>('pending')
   const [actionFilter, setActionFilter] = useState<string>('all')
+  const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({})
 
   const pendingPOs = useMemo(() => pending.filter((r) => r.action === 'approvePurchaseOrder'), [pending])
   const pendingVoidRefund = useMemo(() => pending.filter((r) => r.action === 'voidSale' || r.action === 'refundSale'), [pending])
@@ -157,7 +158,9 @@ export default function ApprovalsPage() {
       notifyError('You are not allowed to approve this request.')
       return
     }
-    approveDeletion(requestId)
+    const notes = reviewNotes[requestId]?.trim() || undefined
+    approveDeletion(requestId, notes)
+    setReviewNotes((current) => { const next = { ...current }; delete next[requestId]; return next })
     if (req.action === 'voidSale') notifySuccess('Void confirmed.')
     else if (req.action === 'refundSale') notifySuccess('Refund confirmed.')
     else if (req.action === 'approvePurchaseOrder') notifySuccess('Purchase order approved.')
@@ -169,7 +172,9 @@ export default function ApprovalsPage() {
       notifyError('You are not allowed to reject this request.')
       return
     }
-    rejectDeletion(requestId)
+    const notes = reviewNotes[requestId]?.trim() || undefined
+    rejectDeletion(requestId, notes)
+    setReviewNotes((current) => { const next = { ...current }; delete next[requestId]; return next })
     if (req.action === 'voidSale') notifySuccess('Void rejected — transaction reinstated and stock returned to the shelf.')
     else if (req.action === 'refundSale') notifySuccess('Refund rejected — transaction reinstated and stock returned to the shelf.')
     else if (req.action === 'approvePurchaseOrder') notifySuccess('Purchase order rejected.')
@@ -376,22 +381,32 @@ export default function ApprovalsPage() {
                   </div>
                   {renderRequestDetails(req)}
                   {canActOnApprovalRequest(role, req, state.currentUserId) ? (
-                    <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-                      <button
-                        className="btn btn-primary btn-sm"
-                        onClick={() => handleApprove(req.id, req)}
-                        style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-                      >
-                        <CheckCircle2 size={14} /> Approve
-                      </button>
-                      <button
-                        className="btn btn-danger btn-sm"
-                        onClick={() => handleReject(req.id, req)}
-                        style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-                      >
-                        <XCircle size={14} /> Reject
-                      </button>
-                    </div>
+                    <>
+                      <textarea
+                        className="input"
+                        value={reviewNotes[req.id] ?? ''}
+                        onChange={(event) => setReviewNotes((current) => ({ ...current, [req.id]: event.target.value }))}
+                        placeholder="Add remarks / reason for your decision (optional)"
+                        rows={2}
+                        style={{ width: '100%', resize: 'vertical', fontSize: 13 }}
+                      />
+                      <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => handleApprove(req.id, req)}
+                          style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                        >
+                          <CheckCircle2 size={14} /> Approve
+                        </button>
+                        <button
+                          className="btn btn-danger btn-sm"
+                          onClick={() => handleReject(req.id, req)}
+                          style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                        >
+                          <XCircle size={14} /> Reject
+                        </button>
+                      </div>
+                    </>
                   ) : (
                     <div style={{ fontSize: 12, color: '#94A3B8', marginTop: 4, textAlign: 'center', padding: '6px 0' }}>Awaiting higher approval</div>
                   )}
@@ -440,6 +455,11 @@ export default function ApprovalsPage() {
                     <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 2 }}>
                       by {getUserName(req.requested_by)} · reviewed by {getUserName(req.reviewed_by ?? undefined)}
                     </div>
+                    {req.review_notes ? (
+                      <div style={{ fontSize: 11, color: '#475569', marginTop: 3, fontStyle: 'italic', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 8, padding: '4px 8px' }}>
+                        &ldquo;{req.review_notes}&rdquo;
+                      </div>
+                    ) : null}
                   </div>
                   <span className="badge" style={{ background: `${statusBadge.bg}`, color: `${statusBadge.text}`, padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700, textTransform: 'capitalize', border: `1px solid ${statusBadge.border}` }}>
                     {statusBadge.label}

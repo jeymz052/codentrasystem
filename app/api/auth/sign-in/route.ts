@@ -56,6 +56,16 @@ export async function POST(request: NextRequest) {
         .eq('tenant_id', tenantId)
         .eq('email', user.email)
     }
+
+    // Enforce one active login per account: signing in on a new device must
+    // force any other device's session for this user to sign out (so e.g. a
+    // sales staff account can't be used from two POS terminals at once).
+    // `scope: 'others'` terminates every session except the one tied to this
+    // request, so the device that just signed in stays logged in.
+    await supabase.auth.signOut({ scope: 'others' }).catch(() => {
+      // Best-effort: if session revocation fails, the new login still succeeds
+      // rather than stranding the user.
+    })
   }
 
   return response

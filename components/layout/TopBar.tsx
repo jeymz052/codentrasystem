@@ -287,14 +287,17 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
                             Clear all
                           </button>
                         </div>
-                        {userNotifications.map((notif) => (
+                        {userNotifications.map((notif) => {
+                          const isApproved = notif.title.includes('Approved')
+                          const isRejected = notif.title.includes('Rejected')
+                          return (
                             <div
                               key={notif.id}
                               style={{
                                 padding: '12px 16px',
                                 borderBottom: '1px solid #F1F5F9',
-                                background: '#F0FDF4',
-                                borderLeft: `3px solid ${notif.title.includes('Approved') ? '#16A34A' : '#DC2626'}`,
+                                background: isRejected ? '#FEF2F2' : '#F0FDF4',
+                                borderLeft: `3px solid ${isApproved ? '#16A34A' : isRejected ? '#DC2626' : '#DC2626'}`,
                                 display: 'flex',
                                 gap: 10,
                                 alignItems: 'flex-start',
@@ -330,7 +333,8 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
                               <X size={14} />
                             </button>
                           </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     )}
 

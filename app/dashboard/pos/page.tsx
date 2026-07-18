@@ -998,12 +998,6 @@ export default function POSPage() {
               <Clock size={15} /> Open Shift
             </button>
           )}
-          <button className="btn btn-primary" type="button" onClick={handleCheckout} disabled={!canCheckout}>
-            <Check size={15} /> Complete Sale
-          </button>
-          <button className="btn btn-ghost" type="button" onClick={() => window.print()} disabled={!lastReceipt}>
-            <Printer size={15} /> Print receipt
-          </button>
         </div>
       </section>
 
