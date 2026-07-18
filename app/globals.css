@@ -561,6 +561,20 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
   padding: 28px 32px;
 }
 
+/* Responsive helpers for fixed two-column grids built with inline styles in
+   the settings page. Inline styles win over the stylesheet, so the mobile
+   overrides below use !important to collapse the columns on small screens. */
+.settings-grid-2col {
+  display: grid;
+  gap: 16px;
+  alignItems: start;
+}
+
+.settings-grid-fixed {
+  display: grid;
+  gap: 10px;
+}
+
 .topbar-menu-button {
   display: none;
 }
@@ -796,6 +810,35 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: var(
   .auth-panel {
     padding-left: 16px;
     padding-right: 16px;
+  }
+}
+
+/* Mobile responsiveness for the settings page and other fixed-width grids.
+   Inline grid-template-columns are overridden with !important so two-column
+   layouts stack into a single column on phones. */
+@media (max-width: 720px) {
+  .settings-grid-2col {
+    grid-template-columns: 1fr !important;
+  }
+
+  .settings-grid-fixed {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Any element flagged for mobile stacking collapses to one column. */
+  .stack-mobile {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Prevent horizontal overflow from fixed-minimum columns inside cards. */
+  .dashboard-main .card {
+    overflow-x: hidden;
+  }
+}
+
+@media (max-width: 480px) {
+  .dashboard-main {
+    padding: 14px 8px;
   }
 }
 

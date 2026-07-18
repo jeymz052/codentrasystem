@@ -451,7 +451,7 @@ export default function SettingsPage() {
         </button>
       </section>
 
-      <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(320px, 0.8fr)', gap: 16, alignItems: 'start' }}>
+      <section className="settings-grid-2col" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(320px, 0.8fr)', gap: 16, alignItems: 'start' }}>
         <div className="card" style={{ padding: 20, borderRadius: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', marginBottom: 18, flexWrap: 'wrap' }}>
             <div>
@@ -640,7 +640,7 @@ export default function SettingsPage() {
                   </button>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px', gap: 10 }}>
+                <div className="settings-grid-fixed" style={{ display: 'grid', gridTemplateColumns: '1fr 160px', gap: 10 }}>
                   <label className="auth-field" style={{ marginBottom: 0 }}>
                     <span>Account name</span>
                     <input
@@ -928,7 +928,7 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 0.92fr) minmax(0, 1.08fr)', gap: 16, alignItems: 'start' }}>
+        <div className="settings-grid-2col" style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 0.92fr) minmax(0, 1.08fr)', gap: 16, alignItems: 'start' }}>
           <div
             className="card"
             style={{
@@ -947,7 +947,7 @@ export default function SettingsPage() {
 
             {catalogTab === 'categories' && (
               <div style={{ display: 'grid', gap: 12 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: 10 }}>
+                <div className="settings-grid-fixed" style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: 10 }}>
                   <label className="auth-field">
                     <span>Category name</span>
                     <input className="input" value={categoryForm.name} onChange={(event) => setCategoryForm((current) => ({ ...current, name: event.target.value }))} placeholder="e.g. Bakery" />
@@ -1042,8 +1042,8 @@ export default function SettingsPage() {
             )}
 
             {catalogTab === 'locations' && (
-              <div data-locations-builder style={{ display: 'grid', gap: 12 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 10 }}>
+               <div data-locations-builder style={{ display: 'grid', gap: 12 }}>
+                <div className="settings-grid-fixed" style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 10 }}>
                   <label className="auth-field">
                     <span>Code <span style={{ color: '#94A3B8', fontWeight: 500 }}>(optional)</span></span>
                     <input className="input" value={locationForm.code} onChange={(event) => setLocationForm((current) => ({ ...current, code: event.target.value }))} placeholder="Auto from name (e.g. WH-A)" />

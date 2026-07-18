@@ -139,10 +139,18 @@ export default function ApprovalsPage() {
       : supplierIds
         ? `${supplierIds.length} supplier${supplierIds.length === 1 ? '' : 's'}`
         : String(req.details.item_code ?? req.details.name ?? req.target_id)
+    const reason = typeof req.details.reason === 'string' ? req.details.reason : null
     return (
-      <div style={{ fontSize: 12, color: '#475569', marginTop: 6, display: 'flex', gap: 12, alignItems: 'center' }}>
-        <span><strong>Type:</strong> {req.target_type}</span>
-        <span><strong>Item:</strong> {targetName}</span>
+      <div style={{ fontSize: 12, color: '#475569', marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <span><strong>Type:</strong> {req.target_type}</span>
+          <span><strong>Item:</strong> {targetName}</span>
+        </div>
+        {reason && (
+          <div style={{ fontStyle: 'italic', color: '#64748B', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 8, padding: '4px 8px' }}>
+            Reason: &ldquo;{reason}&rdquo;
+          </div>
+        )}
       </div>
     )
   }

@@ -259,6 +259,8 @@ export default function InventoryPage() {
   const [form, setForm] = useState<ProductForm>(EMPTY_FORM)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [bulkConfirm, setBulkConfirm] = useState(false)
+  const [deleteReason, setDeleteReason] = useState('')
+  const [deleteReasonTarget, setDeleteReasonTarget] = useState<{ type: 'single' | 'bulk'; id?: string; ids?: string[]; item_code?: string; name?: string; item_codes?: string[] } | null>(null)
   const [importRows, setImportRows] = useState<ProductDraft[]>([])
   const [wasteModal, setWasteModal] = useState<string | null>(null)
   const [wasteDraft, setWasteDraft] = useState<{ waste: string; defect: string; reject: string }>({ waste: '', defect: '', reject: '' })
@@ -456,9 +458,8 @@ export default function InventoryPage() {
       const itemCodes = state.products
         .filter((entry) => table.selectedIds.includes(entry.id))
         .map((entry) => entry.item_code)
-      requestDeletion('removeProducts', 'product', table.selectedIds[0] ?? '', { product_ids: table.selectedIds, item_codes: itemCodes })
-      notifySuccess('Deletion request sent to manager for approval.')
-      table.clearSelection()
+      setDeleteReasonTarget({ type: 'bulk', ids: table.selectedIds, item_codes: itemCodes })
+      setDeleteReason('')
       setBulkConfirm(false)
       return
     }
@@ -552,8 +553,8 @@ export default function InventoryPage() {
   function handleDelete(id: string) {
     if (!perms.canDeleteRecords) {
       const product = state.products.find((entry) => entry.id === id)
-      requestDeletion('removeProduct', 'product', id, { item_code: product?.item_code, name: product?.name })
-      notifySuccess('Deletion request sent to manager for approval.')
+      setDeleteReasonTarget({ type: 'single', id, item_code: product?.item_code, name: product?.name })
+      setDeleteReason('')
       setDeleteConfirm(null)
       return
     }
@@ -1329,6 +1330,53 @@ export default function InventoryPage() {
             <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
               <button className="btn btn-ghost" onClick={() => setDeleteConfirm(null)}>Cancel</button>
               <button className="btn btn-danger" onClick={() => handleDelete(deleteConfirm)}>Delete Item</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteReasonTarget && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ maxWidth: 420 }}>
+            <h3 style={{ fontSize: 17, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>Request Deletion{deleteReasonTarget.type === 'bulk' ? 's' : ''}</h3>
+            <p style={{ fontSize: 13, color: '#475569', marginBottom: 18 }}>
+              {deleteReasonTarget.type === 'bulk'
+                ? `You are about to request deletion of ${(deleteReasonTarget.ids?.length ?? 0)} item(s). Please provide a reason for the approver.`
+                : `You are about to request deletion of this item. Please provide a reason for the approver.`}
+            </p>
+            <label style={{ fontSize: 12, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 }}>Reason for deletion <span style={{ color: '#DC2626' }}>*</span></label>
+            <textarea
+              className="input"
+              value={deleteReason}
+              onChange={(event) => setDeleteReason(event.target.value)}
+              placeholder="e.g. expired stock, damaged items, discontinued product..."
+              rows={3}
+              style={{ width: '100%', resize: 'vertical', fontSize: 13, marginBottom: 18 }}
+            />
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button className="btn btn-ghost" onClick={() => { setDeleteReasonTarget(null); setDeleteReason('') }}>Cancel</button>
+              <button
+                className="btn btn-primary"
+                disabled={!deleteReason.trim()}
+                onClick={() => {
+                  const reason = deleteReason.trim()
+                  if (!reason || !deleteReasonTarget) return
+                  if (deleteReasonTarget.type === 'bulk') {
+                    const ids = deleteReasonTarget.ids ?? []
+                    const itemCodes = (deleteReasonTarget as any).item_codes ?? []
+                    requestDeletion('removeProducts', 'product', ids[0] ?? '', { product_ids: ids, item_codes: itemCodes, reason })
+                    notifySuccess('Deletion request sent to manager for approval.')
+                    table.clearSelection()
+                  } else {
+                    requestDeletion('removeProduct', 'product', deleteReasonTarget.id ?? '', { item_code: (deleteReasonTarget as any).item_code, name: (deleteReasonTarget as any).name, reason })
+                    notifySuccess('Deletion request sent to manager for approval.')
+                  }
+                  setDeleteReasonTarget(null)
+                  setDeleteReason('')
+                }}
+              >
+                Submit Request
+              </button>
             </div>
           </div>
         </div>
