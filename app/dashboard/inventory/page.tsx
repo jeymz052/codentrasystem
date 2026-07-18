@@ -8,7 +8,7 @@ import { useDemoSystem } from '@/components/demo-system-provider'
 import { getRolePermissions } from '@/lib/access-control'
 import { formatTimestamp } from '@/lib/utils'
 import type { ProductDraft } from '@/lib/demo-system'
-import { isWasteReversed } from '@/lib/demo-system'
+import { isWasteReversed, countStorageLocations } from '@/lib/demo-system'
 import type { InventoryLot } from '@/types/database'
 import { useTableState, type SortDirection } from '@/lib/use-table-state'
 import { TableToolbar, type ToolbarFilter } from '@/components/ui/table/TableToolbar'
@@ -752,15 +752,38 @@ export default function InventoryPage() {
       return
     }
 
+    const planName = String(state.tenant.plan ?? 'current').charAt(0).toUpperCase() + String(state.tenant.plan ?? '').slice(1)
+
     const existingCodes = new Set(state.products.map((product) => String(product.item_code ?? '').trim().toLowerCase()))
     const newCount = importRows.filter((row) => !existingCodes.has(String(row.item_code ?? '').trim().toLowerCase())).length
-    const limit = Number(state.tenant.max_products ?? 0)
-    if (state.products.length + newCount > limit) {
-      notifyError(`Data cannot be loaded due to Plan package limitation. Your ${state.tenant.plan} plan allows up to ${limit} products.`)
+    const productLimit = Number(state.tenant.max_products ?? 0)
+    if (state.products.length + newCount > productLimit) {
+      notifyError(`Data cannot be loaded due to Plan package limitation. Your ${planName} plan allows up to ${productLimit} products.`)
       setShowImportModal(false)
       setImportRows([])
       return
     }
+
+    // A distinct, new Location referenced by an import row would be created as a
+    // storage location. Block the import if it would exceed the plan's quota.
+    const existingLocations = new Set(
+      state.locations.filter((location) => !location.is_waste_location).map((location) => location.name.trim().toLowerCase()),
+    )
+    const referencedLocations = new Set(
+      importRows.map((row) => String(row.location ?? '').trim().toLowerCase()).filter((name) => name.length > 0),
+    )
+    let newLocations = 0
+    for (const name of referencedLocations) {
+      if (!existingLocations.has(name)) newLocations += 1
+    }
+    const locationLimit = Number(state.tenant.max_locations ?? 0)
+    if (countStorageLocations(state.locations) + newLocations > locationLimit) {
+      notifyError(`Data cannot be loaded due to Plan package limitation. Your ${planName} plan allows up to ${locationLimit} locations.`)
+      setShowImportModal(false)
+      setImportRows([])
+      return
+    }
+
     importProductRows(importRows)
     notifySuccess(`Imported ${importRows.length} item${importRows.length === 1 ? '' : 's'} successfully.`)
     setShowImportModal(false)

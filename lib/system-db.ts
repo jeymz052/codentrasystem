@@ -54,6 +54,9 @@ import {
   requestDeletion,
   approveDeletion,
   rejectDeletion,
+  markNotificationRead,
+  markAllNotificationsRead,
+  buildSaleTransactionId,
   type CategoryDraft,
   type LocationDraft,
   type ProductDraft,
@@ -117,9 +120,11 @@ type MutationPayload =
   | { action: 'transferStock'; payload: { productId: string; fromLocationId: string | null; toLocationId: string | null; quantity: number; notes?: string } }
   | { action: 'updatePurchaseOrder'; purchaseOrderId: string; draft: PurchaseOrderDraft }
   | { action: 'cancelPurchaseOrder'; purchaseOrderId: string }
-  | { action: 'requestDeletion'; requestedAction: MutationAction; targetType: string; targetId: string; details: Record<string, unknown> }
+  | { action: 'requestDeletion'; requestedAction: MutationAction; targetType: string; targetId: string; details: Record<string, unknown>; requestedBy: string }
   | { action: 'approveDeletion'; requestId: string }
   | { action: 'rejectDeletion'; requestId: string }
+  | { action: 'markNotificationRead'; notificationId: string }
+  | { action: 'markAllNotificationsRead' }
 
 function asArray<T>(value: T[] | null | undefined) {
   return Array.isArray(value) ? value : []
@@ -233,6 +238,15 @@ export async function loadTenantState(tenantId?: string | null) {
   } catch {
     // deletion_requests table may not exist in older deployments; requests are best-effort loaded.
     deletionRequestsRaw = []
+  }
+
+  let notificationsRaw: AnyRow[] = []
+  try {
+    const notificationsResult = await client.from('notifications').select('*').eq('tenant_id', tenant.id).order('created_at', { ascending: false }).limit(50)
+    notificationsRaw = asArray(notificationsResult.data as AnyRow[] | null)
+  } catch {
+    // notifications table may not exist in older deployments; notifications are best-effort loaded.
+    notificationsRaw = []
   }
 
   let inventoryLots: AnyRow[] = []
@@ -357,6 +371,7 @@ export async function loadTenantState(tenantId?: string | null) {
       reviewed_by_user: row.reviewed_by ? userById.get(row.reviewed_by) ?? null : null,
     })) as DemoSystemState['deletionRequests'],
     inventoryLots: inventoryLots as DemoSystemState['inventoryLots'],
+    notifications: notificationsRaw as DemoSystemState['notifications'],
   } satisfies DemoSystemState
   // Reconcile alerts against current product stock on every load so stale
   // out_of_stock / low_stock rows (left over from when an item was at zero
@@ -440,6 +455,7 @@ export async function upsertTenantState(state: DemoSystemState) {
   const cashShiftRows = state.cashShifts.map(({ opened_by_user, closed_by_user, location, ...row }) => row)
   const cashMovementRows = state.cashMovements.map(({ performed_by, ...row }) => row)
   const deletionRequestRows = state.deletionRequests.map(({ requested_by_user, reviewed_by_user, ...row }) => row)
+  const notificationRows = state.notifications.map((row) => row)
 
   const baseTenantRow = {
     id: tenantId,
@@ -480,6 +496,7 @@ export async function upsertTenantState(state: DemoSystemState) {
   await upsert('purchase_order_items', purchaseOrderItemRows)
   await upsert('sales_transaction_items', salesTransactionItemRows)
   await upsert('alerts', alertRows)
+  await upsert('notifications', notificationRows)
   await upsert('stock_movements', stockMovementRows)
   await upsert('audit_logs', auditLogRows)
   await upsert('product_recipes', recipeRows)
@@ -517,6 +534,7 @@ export async function upsertTenantState(state: DemoSystemState) {
     prune('stock_movements', state.stockMovements.map((row) => row.id)),
     prune('inventory_lots', state.inventoryLots.map((row) => row.id)),
     prune('alerts', state.alerts.map((row) => row.id)),
+    prune('notifications', state.notifications.map((row) => row.id)),
     prune('product_recipes', state.productRecipes.map((row) => row.id)),
   ])
 
@@ -530,6 +548,7 @@ export async function upsertTenantState(state: DemoSystemState) {
     prune('purchase_orders', state.purchaseOrders.map((row) => row.id)),
     prune('sales_transactions', state.salesTransactions.map((row) => row.id)),
     prune('audit_logs', state.auditLogs.map((row) => row.id)),
+    prune('notifications', state.notifications.map((row) => row.id)),
     prune('production_templates', state.productionTemplates.map((row) => row.id)),
     prune('cash_shifts', state.cashShifts.map((row) => row.id)),
     prune('cash_movements', state.cashMovements.map((row) => row.id)),
@@ -956,9 +975,30 @@ export async function applyDatabaseMutation(
     case 'receivePO':
       state = receivePurchaseOrder(state, mutation.purchaseOrderId)
       break
-    case 'completeSale':
-      state = recordSale(state, mutation.payload).state
+    case 'completeSale': {
+      const payload = { ...mutation.payload }
+      const existingReceipts = new Set(state.salesTransactions.map((tx) => tx.receipt_number))
+      if (payload.receiptNumber && existingReceipts.has(payload.receiptNumber)) {
+        payload.receiptNumber = buildSaleTransactionId(state)
+      }
+      let result = recordSale(state, payload)
+      state = result.state
+      try {
+        await upsertTenantState(state)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : ''
+        if (message.includes('receipt_number') && message.includes('already exists')) {
+          state = await ensureDatabaseState(state.tenant.id)
+          payload.receiptNumber = buildSaleTransactionId(state)
+          result = recordSale(state, payload)
+          state = result.state
+          await upsertTenantState(state)
+        } else {
+          throw error
+        }
+      }
       break
+    }
     case 'voidSale':
       state = voidTransaction(state, { transactionId: mutation.transactionId, reason: mutation.reason })
       break
@@ -1015,13 +1055,19 @@ export async function applyDatabaseMutation(
       state = cancelPurchaseOrder(state, mutation.purchaseOrderId)
       break
     case 'requestDeletion':
-      state = requestDeletion(state, mutation.requestedAction, mutation.targetType, mutation.targetId, mutation.details)
+      state = requestDeletion(state, mutation.requestedAction, mutation.targetType, mutation.targetId, mutation.details, mutation.requestedBy)
       break
     case 'approveDeletion':
       state = approveDeletion(state, mutation.requestId)
       break
     case 'rejectDeletion':
       state = rejectDeletion(state, mutation.requestId)
+      break
+    case 'markNotificationRead':
+      state = markNotificationRead(state, mutation.notificationId)
+      break
+    case 'markAllNotificationsRead':
+      state = markAllNotificationsRead(state)
       break
   }
 

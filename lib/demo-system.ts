@@ -13,6 +13,7 @@ import type {
   DeletionRequest,
   Location,
   MovementType,
+  Notification,
   OrderStatus,
   PaymentAccount,
   PaymentMethod,
@@ -127,6 +128,7 @@ export type DemoSystemState = {
   salesTransactionItems: SalesTransactionItem[]
   stockMovements: StockMovement[]
   alerts: Alert[]
+  notifications: Notification[]
   auditLogs: AuditLog[]
   productRecipes: ProductRecipe[]
   productionTemplates: ProductionTemplate[]
@@ -138,6 +140,25 @@ const PLAN_LIMITS: Record<SubscriptionPlan, Pick<Tenant, 'max_users' | 'max_prod
   starter: { max_users: 3, max_products: 100, max_locations: 1 },
   professional: { max_users: 10, max_products: 1000, max_locations: 5 },
   enterprise: { max_users: 999, max_products: 9999, max_locations: 99 },
+}
+
+const ACTION_LABELS: Record<string, string> = {
+  voidSale: 'Void Sale',
+  refundSale: 'Refund Sale',
+  approvePurchaseOrder: 'PO Approval',
+  removeProduct: 'Delete Product',
+  removeSupplier: 'Delete Supplier',
+  removeProducts: 'Delete Products',
+  removeSuppliers: 'Delete Suppliers',
+  deleteRecipe: 'Delete Recipe',
+  deleteProductionTemplate: 'Delete Template',
+  deleteLocation: 'Delete Location',
+  deleteCategory: 'Delete Category',
+  deleteUnitOfMeasure: 'Delete UOM',
+}
+
+function getActionLabel(action: string): string {
+  return ACTION_LABELS[action] ?? 'Approval'
 }
 
 export function id() {
@@ -304,6 +325,7 @@ function emptyState(businessType: BusinessType): DemoSystemState {
     salesTransactionItems: [],
     stockMovements: [],
     alerts: [],
+    notifications: [],
     auditLogs: [],
     productRecipes: [],
     productionTemplates: [],
@@ -871,6 +893,7 @@ export function seedDemoSystem(businessType: BusinessType = 'retail'): DemoSyste
     stockMovements,
     alerts: [],
     auditLogs: seedAuditLogs,
+    notifications: [],
     productRecipes: [
       { id: id(), tenant_id: tenant.id, finished_good_id: icedCoffee.id, ingredient_id: espresso.id, quantity_per_unit: 0.02, uom_id: null, created_at: addMinutes(baseTime, 38) },
       { id: id(), tenant_id: tenant.id, finished_good_id: icedCoffee.id, ingredient_id: milk.id, quantity_per_unit: 0.15, uom_id: null, created_at: addMinutes(baseTime, 38) },
@@ -955,6 +978,7 @@ export function remapStateTenantId(state: DemoSystemState, tenantId: string): De
     salesTransactions: remapArrayTenantId(state.salesTransactions, tenantId),
     stockMovements: remapArrayTenantId(state.stockMovements, tenantId),
     alerts: remapArrayTenantId(state.alerts, tenantId),
+    notifications: remapArrayTenantId(state.notifications, tenantId),
     auditLogs: remapArrayTenantId(state.auditLogs, tenantId),
     productRecipes: remapArrayTenantId(state.productRecipes, tenantId),
     cashMovements: remapArrayTenantId(state.cashMovements, tenantId),
@@ -1342,13 +1366,33 @@ function toAlertRow(alert: Alert) {
   return row
 }
 
-export function updateTenantSettings(state: DemoSystemState, patch: Partial<DemoSystemState['tenant']> & { business_type?: BusinessType }): DemoSystemState {
+export function updateTenantSettings(
+  state: DemoSystemState,
+  patch: Partial<DemoSystemState['tenant']> & { business_type?: BusinessType },
+  options?: { asSuperAdmin?: boolean }
+): DemoSystemState {
   const businessType = patch.business_type ? normalizeBusinessType(patch.business_type) : state.tenant.business_type
+  // Plan configuration (plan, subscription status, and the user/product/location
+  // limits) is owned by the provider (superadmin) only. Tenant admins can edit the
+  // rest of their profile but must never be able to raise their own limits, so we
+  // strip those fields from the patch unless the caller is acting as a superadmin.
+  const canEditPlan = Boolean(options?.asSuperAdmin)
+  const { plan, subscription_status, max_users, max_products, max_locations, ...planSafePatch } = patch
+  const planPatch = canEditPlan
+    ? {
+        ...(plan !== undefined ? { plan } : {}),
+        ...(subscription_status !== undefined ? { subscription_status } : {}),
+        ...(max_users !== undefined ? { max_users } : {}),
+        ...(max_products !== undefined ? { max_products } : {}),
+        ...(max_locations !== undefined ? { max_locations } : {}),
+      }
+    : {}
   return {
     ...state,
     tenant: {
       ...state.tenant,
-      ...patch,
+      ...planSafePatch,
+      ...planPatch,
       business_type: businessType,
       updated_at: nowIso(),
     },
@@ -1594,11 +1638,31 @@ export function importProducts(state: DemoSystemState, drafts: ProductDraft[]): 
   // Updates don't consume plan quota, so only new rows push the count.
   const existingCodes = new Set(state.products.map((product) => lower(product.item_code)))
   const newCount = drafts.filter((draft) => !existingCodes.has(lower(normalizeName(draft.item_code)))).length
-  const limit = Number(state.tenant.max_products ?? 0)
-  const projected = state.products.length + newCount
-  if (projected > limit) {
-    throw new Error(PLAN_LIMIT_MESSAGE(state.tenant.plan, 'products', limit))
+  const productLimit = Number(state.tenant.max_products ?? 0)
+  const projectedProducts = state.products.length + newCount
+  if (projectedProducts > productLimit) {
+    throw new Error(PLAN_LIMIT_MESSAGE(state.tenant.plan, 'products', productLimit))
   }
+
+  // A distinct, non-empty Location referenced by an import row that does NOT
+  // already exist will be created as a new storage location. Importing such a
+  // file must not push the tenant past its plan's location quota either.
+  const existingLocations = new Set(
+    state.locations.filter((location) => !location.is_waste_location).map((location) => lower(location.name)),
+  )
+  const referencedLocations = new Set(
+    drafts.map((draft) => lower(normalizeName(draft.location))).filter((name) => name.length > 0),
+  )
+  let newLocations = 0
+  for (const name of referencedLocations) {
+    if (!existingLocations.has(name)) newLocations += 1
+  }
+  const locationLimit = Number(state.tenant.max_locations ?? 0)
+  const projectedLocations = countStorageLocations(state.locations) + newLocations
+  if (projectedLocations > locationLimit) {
+    throw new Error(PLAN_LIMIT_MESSAGE(state.tenant.plan, 'locations', locationLimit))
+  }
+
   return drafts.reduce((current, draft) => addOrUpdateProduct(current, draft, undefined, true), state)
 }
 
@@ -1979,6 +2043,7 @@ export function requestDeletion(
   targetType: string,
   targetId: string,
   details: Record<string, unknown>,
+  requestedBy?: string,
 ): DemoSystemState {
   const alreadyPending = state.deletionRequests.some(
     (req) => req.action === requestedAction && req.target_type === targetType && req.target_id === targetId && req.status === 'pending'
@@ -1988,7 +2053,7 @@ export function requestDeletion(
   const request: DeletionRequest = {
     id: id(),
     tenant_id: state.tenant.id,
-    requested_by: state.currentUserId,
+    requested_by: requestedBy ?? state.currentUserId,
     action: requestedAction as DeletionRequest['action'],
     target_type: targetType as DeletionRequest['target_type'],
     target_id: targetId,
@@ -2071,9 +2136,6 @@ export function approveDeletion(state: DemoSystemState, requestId: string): Demo
       }
       break
     case 'voidSale':
-      // Actually apply the void now that a superior has approved it, and keep
-      // the deletion request marked approved so the POS no longer shows
-      // "PENDING APPROVAL" for the transaction.
       next = voidTransaction(next, { transactionId: request.target_id, reason: String(request.details?.reason ?? '') })
       next = {
         ...next,
@@ -2095,6 +2157,20 @@ export function approveDeletion(state: DemoSystemState, requestId: string): Demo
       break
   }
 
+  const reviewerName = state.users.find((u) => u.id === state.currentUserId)?.full_name ?? 'Supervisor'
+  const notification: Notification = {
+    id: id(),
+    tenant_id: state.tenant.id,
+    user_id: request.requested_by,
+    title: 'Request Approved',
+    message: `Your ${getActionLabel(request.action)} request was approved by ${reviewerName}.`,
+    type: 'approval_result',
+    read: false,
+    created_at: nowIso(),
+    reference_id: requestId,
+  }
+
+  next.notifications = [...next.notifications, notification]
   next.auditLogs = [
     ...next.auditLogs,
     {
@@ -2121,6 +2197,7 @@ export function rejectDeletion(state: DemoSystemState, requestId: string): DemoS
     deletionRequests: state.deletionRequests.map((row) =>
       row.id === requestId ? { ...row, status: 'rejected' as const, reviewed_by: state.currentUserId, reviewed_at: nowIso(), updated_at: nowIso() } : row
     ),
+    notifications: [...state.notifications],
     auditLogs: [
       ...state.auditLogs,
       {
@@ -2136,6 +2213,22 @@ export function rejectDeletion(state: DemoSystemState, requestId: string): DemoS
       },
     ],
   }
+
+  const reviewerName = state.users.find((u) => u.id === state.currentUserId)?.full_name ?? 'Supervisor'
+  next.notifications = [
+    ...next.notifications,
+    {
+      id: id(),
+      tenant_id: state.tenant.id,
+      user_id: request.requested_by,
+      title: 'Request Rejected',
+      message: `Your ${getActionLabel(request.action)} request was rejected by ${reviewerName}.`,
+      type: 'approval_result',
+      read: false,
+      created_at: nowIso(),
+      reference_id: requestId,
+    },
+  ]
 
   // Rejecting a provisional void/refund reverses it: the transaction is
   // restored and the stock returned to the customer is put back on the shelf.
@@ -2622,7 +2715,18 @@ export function receivePurchaseOrder(state: DemoSystemState, purchaseOrderId: st
 }
 
 export function buildSaleTransactionId(state: DemoSystemState) {
-  return nextCode('RCP', state.salesTransactions.length)
+  const today = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  const prefix = `RCP-${today}-`
+  const sameDay = state.salesTransactions
+    .map((tx) => tx.receipt_number)
+    .filter((receipt) => receipt.startsWith(prefix))
+  let maxSuffix = 0
+  for (const receipt of sameDay) {
+    const suffix = Number(receipt.slice(prefix.length))
+    if (Number.isFinite(suffix) && suffix > maxSuffix) maxSuffix = suffix
+  }
+  const padded = String(maxSuffix + 1).padStart(3, '0')
+  return `${prefix}${padded}`
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -3108,15 +3212,11 @@ export function closeShift(
   if (!shift || shift.status !== 'open') return null
 
   const now = nowIso()
-  // Expected cash in the drawer = opening float + cash sales + cash_in − cash_out.
-  // QR / non-cash sales never enter the drawer, so including them in total_sales
-  // would overstate expected cash (the original bug). Cash movements are tracked
-  // separately via the cashMovements table.
-  const movementDelta = (state.cashMovements ?? [])
-    .filter((m) => m.shift_id === shift.id)
-    .reduce((sum, m) => sum + (m.kind === 'cash_out' ? -Number(m.amount ?? 0) : Number(m.amount ?? 0)), 0)
-  const expected =
-    Number(shift.opening_float ?? 0) + Number(shift.cash_sales_total ?? 0) + movementDelta
+  // Expected cash is derived from the shift's actual transactions (completed
+  // sales minus voided/refunded) plus the opening float and cash movements, so
+  // it always reflects voids/refunds correctly. Voided/refunded sales are
+  // subtracted from the SALES side, never from the opening float.
+  const expected = computeShiftExpectedCash(state, shift.id)
   const variance = Number(payload.countedCash) - expected
 
   const updatedShift: CashShift = {
@@ -3155,6 +3255,76 @@ export function closeShift(
       },
     ],
   }
+}
+
+// Cash portion of a single transaction: for split sales, the sum of the cash
+// splits; for a single-method sale, the full amount when paid in cash, else 0.
+export function cashPortionOfSale(tx: { payment_method: string; total_amount?: number | null; split_payments?: Array<{ payment_method: string; amount: number }> | null }): number {
+  const splits = tx.split_payments ?? []
+  if (splits.length > 0) {
+    return splits
+      .filter((split) => split.payment_method === 'cash')
+      .reduce((sum, split) => sum + Number(split.amount ?? 0), 0)
+  }
+  return tx.payment_method === 'cash' ? Number(tx.total_amount ?? 0) : 0
+}
+
+// Per-payment-method totals for a shift's COMPLETED (non-voided, non-refunded)
+// sales. Used by the close-shift summary so the cashier can reconcile bank /
+// online tenders (GCash, Maya, BDO, Maribank, card, etc.) separately from the
+// cash drawer. Voided and refunded sales are excluded because their money was
+// returned and must not inflate the expected totals.
+export function computeShiftPaymentTotals(
+  state: DemoSystemState,
+  shiftId: string,
+): Record<string, number> {
+  const totals: Record<string, number> = {}
+  for (const tx of state.salesTransactions) {
+    if (tx.shift_id !== shiftId) continue
+    if (tx.status !== 'completed') continue
+    const splits = tx.split_payments ?? []
+    const methods = splits.length > 0 ? splits : [{ payment_method: tx.payment_method, amount: Number(tx.total_amount ?? 0) }]
+    for (const method of methods) {
+      const key = method.payment_method
+      totals[key] = (totals[key] ?? 0) + Number((method as { amount: number }).amount ?? 0)
+    }
+  }
+  return totals
+}
+
+// Expected cash in the drawer, derived from the shift's actual transactions so
+// it always reflects voids/refunds correctly (like a cash-register tape):
+//   opening float + cash from every SALE − cash from REFUNDED/VOIDED payouts
+//   + cash movements (cash in − cash out)
+// Every sale adds its cash when it happens; a refund/void removes that same
+// cash (the customer gets it back). So a ₱375 sale then void is +₱375 then
+// −₱375 → net 0, and the drawer returns to the opening float. This matches the
+// ledger display exactly (Sale +₱X then Void/Refund −₱X). QR / non-cash sales
+// never enter the drawer, so only the cash portion counts. denomination_
+// adjustment rows are dead data (no UI creates them) and are excluded.
+export function computeShiftExpectedCash(state: DemoSystemState, shiftId: string): number {
+  let cashFromSales = 0
+  for (const tx of state.salesTransactions) {
+    if (tx.shift_id !== shiftId) continue
+    const cash = cashPortionOfSale(tx)
+    // Mirror the cash-register tape shown in the drawer ledger: every sale adds
+    // its cash when it happens, and a void/refund removes that same cash (the
+    // customer gets it back). So a completed sale is +cash; a voided/refunded
+    // sale is +cash (the original sale) then -cash (the payout) = net 0.
+    //   Sale +₱375  →  +₱375
+    //   Void −₱375  →  −₱375   (net 0, drawer returns to opening)
+    cashFromSales += cash
+    if (tx.status === 'refunded' || tx.status === 'voided') cashFromSales -= cash
+  }
+  const movementDelta = (state.cashMovements ?? [])
+    .filter((m) => m.shift_id === shiftId)
+    // Only real drawer cash movements affect the balance: cash_in adds,
+    // cash_out deducts. All other kinds (refund_payout, void_payout,
+    // denomination_adjustment, cash_sale) are either dead data or informational
+    // ledger annotations and must NOT change the balance — otherwise a stray
+    // movement (e.g. from an older DB trigger) would double-deduct a void/refund.
+    .reduce((sum, m) => sum + (m.kind === 'cash_out' ? -Number(m.amount ?? 0) : m.kind === 'cash_in' ? Number(m.amount ?? 0) : 0), 0)
+  return Number(state.cashShifts.find((s) => s.id === shiftId)?.opening_float ?? 0) + cashFromSales + movementDelta
 }
 
 export function recordCashMovement(
@@ -3254,6 +3424,22 @@ export function voidTransaction(
     }
   }
 
+  // NOTE: a void must NOT change the drawer cash balance. The cash was never
+  // actually taken from the drawer for a void (the sale is simply cancelled), so
+  // there is nothing to return and nothing to deduct. The drawer's expected cash
+  // is derived from transaction status in computeShiftExpectedCash(), which
+  // already treats a voided sale as "not completed" and therefore excludes it.
+  // We deliberately do NOT create any cash movement here.
+
+  // NOTE: we intentionally do NOT mutate the shift's running sales totals here.
+  // The drawer's expected cash is derived from scratch in
+  // computeShiftExpectedCash() by inspecting each transaction's status
+  // (cash from completed sales minus cash from voided/refunded sales). A voided
+  // sale is therefore automatically excluded from the expected drawer cash, and
+  // the cash that left the drawer (returned to the customer) is reflected
+  // there — without double-subtracting a running accumulator that would
+  // otherwise corrupt the balance when the optimistic and server runs both apply.
+
   nextState = {
     ...nextState,
     auditLogs: [
@@ -3341,24 +3527,11 @@ export function refundTransaction(
   }
 
   if (transaction.shift_id) {
-    const shift = nextState.cashShifts.find((s) => s.id === transaction.shift_id)
-    if (shift) {
-      // Refund reverses the cash/QR split that was recorded at sale time so the
-      // shift totals stay consistent with this transaction.
-      const cashPart = Number(transaction.cash_sales_total ?? 0) || 0
-      const qrPart = Number(transaction.qr_sales_total ?? 0) || 0
-      const updatedShift: CashShift = {
-        ...shift,
-        total_sales: Number(shift.total_sales ?? 0) - refundAmount,
-        cash_sales_total: Number(shift.cash_sales_total ?? 0) - cashPart,
-        qr_sales_total: Number(shift.qr_sales_total ?? 0) - qrPart,
-        updated_at: now,
-      }
-      nextState = {
-        ...nextState,
-        cashShifts: nextState.cashShifts.map((s) => (s.id === transaction.shift_id ? updatedShift : s)),
-      }
-    }
+    // NOTE: a refund must NOT change the drawer cash balance. Returning cash to
+    // the customer simply means the original sale's cash is no longer "sold"
+    // — the drawer's expected cash (derived from transaction status in
+    // computeShiftExpectedCash) already excludes the refunded sale, so there is
+    // nothing to deduct. We deliberately do NOT create any cash movement here.
   }
 
   nextState = {
@@ -3451,26 +3624,9 @@ export function reverseSaleCancellation(
   }
 
   if (action === 'refundSale' && transaction.shift_id) {
-    const shift = next.cashShifts.find((row) => row.id === transaction.shift_id)
-    if (shift) {
-      const refundAmount = Number(transaction.total_amount ?? 0)
-      const cashPart = Number(transaction.cash_sales_total ?? 0)
-      const qrPart = Number(transaction.qr_sales_total ?? 0)
-      next = {
-        ...next,
-        cashShifts: next.cashShifts.map((row) =>
-          row.id === transaction.shift_id
-            ? {
-                ...row,
-                total_sales: Number(row.total_sales ?? 0) + refundAmount,
-                cash_sales_total: Number(row.cash_sales_total ?? 0) + cashPart,
-                qr_sales_total: Number(row.qr_sales_total ?? 0) + qrPart,
-                updated_at: now,
-              }
-            : row
-        ),
-      }
-    }
+    // NOTE: no shift running-total mutation here, mirroring refundTransaction.
+    // Expected drawer cash is derived from transaction status in
+    // computeShiftExpectedCash(), which already accounts for the reversal.
   }
 
   next = {
@@ -3782,6 +3938,15 @@ export function resolveAllAlerts(state: DemoSystemState): DemoSystemState {
   }
 }
 
+export function markNotificationRead(state: DemoSystemState, notificationId: string): DemoSystemState {
+  return {
+    ...state,
+    notifications: state.notifications.map((notification) =>
+      notification.id === notificationId ? { ...notification, read: true } : notification
+    ),
+  }
+}
+
 export function computeDashboardStats(state: DemoSystemState): DashboardStats {
   const today = new Date().toDateString()
   const lowStock = state.alerts.filter((alert) => alert.status === 'open' && alert.alert_type === 'low_stock')
@@ -3807,7 +3972,17 @@ export function computeDashboardStats(state: DemoSystemState): DashboardStats {
     out_of_stock_count: outOfStock.length,
     open_alerts: state.alerts.filter((alert) => alert.status === 'open').length,
     pending_orders: state.purchaseOrders.filter((order) => order.status !== 'received' && order.status !== 'cancelled').length,
-    sales_today: state.salesTransactions.filter((tx) => new Date(tx.created_at).toDateString() === today).reduce((sum, tx) => sum + Number(tx.total_amount ?? 0), 0),
-    transactions_today: state.salesTransactions.filter((tx) => new Date(tx.created_at).toDateString() === today).length,
+    sales_today: state.salesTransactions.filter((tx) => tx.status === 'completed' && new Date(tx.created_at).toDateString() === today).reduce((sum, tx) => sum + Number(tx.total_amount ?? 0), 0),
+    transactions_today: state.salesTransactions.filter((tx) => tx.status === 'completed' && new Date(tx.created_at).toDateString() === today).length,
+  }
+}
+
+export function markAllNotificationsRead(state: DemoSystemState): DemoSystemState {
+  return {
+    ...state,
+    notifications: state.notifications.map((notification) => ({
+      ...notification,
+      read: true,
+    })),
   }
 }

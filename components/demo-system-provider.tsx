@@ -61,6 +61,8 @@ import {
   requestDeletion,
   approveDeletion,
   rejectDeletion,
+  markNotificationRead,
+  markAllNotificationsRead,
   seedDemoSystem,
   emptyDemoSystem,
   type DemoSystemState,
@@ -73,7 +75,7 @@ import {
   type UnitOfMeasureDraft,
   type UserDraft,
 } from '@/lib/demo-system'
-import type { AccessibleTenant, BusinessType, DeletionRequest, PaymentMethod, User, UserRole } from '@/types/database'
+import type { AccessibleTenant, BusinessType, DeletionRequest, Notification, PaymentMethod, User, UserRole } from '@/types/database'
 import { createClient } from '@/lib/supabase'
 
 const CACHE_PREFIX = 'codentra.demo-cache.v3.'
@@ -86,6 +88,20 @@ const ACTIVE_TENANT_KEY = 'codentra.active-tenant.v3'
 // own inventory.
 function cacheKeyForTenant(tenantId?: string | null) {
   return `${CACHE_PREFIX}${tenantId ?? 'default'}`
+}
+
+// Drop every locally cached tenant snapshot and the active-tenant pointer. Used
+// when the server reports that the user has no tenants (e.g. after a full DB
+// wipe) so a stale browser snapshot never replays and strands the app on an old
+// "sari sari" workspace instead of showing a clean onboarding screen.
+function clearDemoCache() {
+  try {
+    Object.keys(window.localStorage)
+      .filter((key) => key.startsWith(CACHE_PREFIX) || key === ACTIVE_TENANT_KEY)
+      .forEach((key) => window.localStorage.removeItem(key))
+  } catch {
+    // localStorage may be unavailable (private mode / SSR); nothing to clear.
+  }
 }
 type SystemApiResponse = {
   state: DemoSystemState
@@ -152,6 +168,8 @@ type DemoSystemContextValue = {
   requestDeletion: (requestedAction: string, targetType: string, targetId: string, details: Record<string, unknown>) => void
   approveDeletion: (requestId: string) => void
   rejectDeletion: (requestId: string) => void
+  markNotificationRead: (notificationId: string) => void
+  markAllNotificationsRead: () => void
   switchTenant: (tenantId: string) => Promise<void>
   signOut: () => Promise<void>
   formatCurrency: (amount: number) => string
@@ -197,6 +215,29 @@ function mergeByIdRemoteWins<T extends { id: string }>(localItems: T[], remoteIt
   return merged
 }
 
+// Notifications are user-specific. When the user marks one as read locally,
+// mergeByIdRemoteWins would overwrite that with the remote copy (still unread)
+// on the next sync. This variant preserves the local read status so dismissed
+// notifications stay dismissed.
+function mergeNotifications(localItems: Notification[], remoteItems: Notification[]): Notification[] {
+  const remoteById = new Map(remoteItems.map((item) => [item.id, item]))
+  const merged: Notification[] = []
+  for (const localItem of localItems) {
+    const remoteItem = remoteById.get(localItem.id)
+    if (remoteItem) {
+      merged.push({ ...remoteItem, read: localItem.read || remoteItem.read })
+    } else {
+      merged.push(localItem)
+    }
+  }
+  for (const remoteItem of remoteItems) {
+    if (!localItems.some((item) => item.id === remoteItem.id)) {
+      merged.push(remoteItem)
+    }
+  }
+  return merged
+}
+
 // Collapse deletion requests that describe the same logical approval (same
 // tenant + action + target) into a single record. Historically a request could
 // be duplicated — once optimistically on the client and again when replayed on
@@ -206,21 +247,61 @@ function mergeByIdRemoteWins<T extends { id: string }>(localItems: T[], remoteIt
 // while a superior (who only ever saw one copy) correctly showed "VOIDED".
 // Keeping the resolved copy (approved/rejected) over a lingering pending one
 // makes both views consistent.
+//
+// IMPORTANT: a resolved request must only suppress an orphaned *pending twin*
+// (a duplicate raised at the same time as the resolved request). It must NOT
+// suppress a genuine new request. Otherwise, after the first void/refund on a
+// target is approved, a second, later request for the same target would be
+// deduped away (approved outranks pending) and the new "PENDING APPROVAL" would
+// vanish — letting the transaction silently snap back to "completed".
+// We distinguish the two by time: a pending request is an orphan only if it was
+// raised at or before the latest resolution; a pending request created *after*
+// the latest resolution is a fresh, legitimate request and must be preserved.
 function dedupeDeletionRequests(requests: DeletionRequest[]): DeletionRequest[] {
-  const byKey = new Map<string, DeletionRequest>()
+  const byKey = new Map<string, DeletionRequest[]>()
   for (const req of requests) {
     const key = `${req.tenant_id}:${req.action}:${req.target_type}:${req.target_id}`
-    const existing = byKey.get(key)
-    if (!existing) {
-      byKey.set(key, req)
-      continue
-    }
-    const rank = (status: string) => (status === 'pending' ? 0 : 1)
-    byKey.set(key, rank(req.status) >= rank(existing.status) ? req : existing)
+    const list = byKey.get(key) ?? []
+    list.push(req)
+    byKey.set(key, list)
   }
-  return [...byKey.values()]
+
+  const result: DeletionRequest[] = []
+  for (const list of byKey.values()) {
+    const resolved = list
+      .filter((r) => r.status !== 'pending')
+      .sort((a, b) =>
+        (b.reviewed_at ?? b.updated_at ?? '').localeCompare(a.reviewed_at ?? a.updated_at ?? '')
+      )
+    const latestResolved = resolved[0] ?? null
+    const resolvedCutoff = latestResolved ? (latestResolved.reviewed_at ?? latestResolved.updated_at ?? '') : null
+
+    // Keep at most one pending request per key. Drop an orphan pending twin of
+    // an already-resolved request (raised at/before the resolution), but keep a
+    // pending request raised after the latest resolution — that is a new ask.
+    const pending = list
+      .filter((r) => r.status === 'pending')
+      .filter((r) => !resolvedCutoff || (r.created_at ?? '') > resolvedCutoff)
+      .sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+
+    if (latestResolved) result.push(latestResolved)
+    if (pending[0]) result.push(pending[0])
+  }
+  return result
 }
 
+// Cash movements can be generated twice for the same logical event: once
+// optimistically on the client (random id) and again when the server persists /
+// replays the mutation (a different random id), or via a realtime/interval
+// refresh that re-applies the same logical movement. mergeArray keeps both
+// because the ids differ, so Cash In / Cash Out (and void/refund payouts) appear
+// twice in the drawer ledger and double-count the balance. Collapse to one per
+// logical movement using a stable natural key.
+//
+// IMPORTANT: the key must NOT include created_at or id. created_at can differ
+// between the optimistic snapshot and the server snapshot for the SAME logical
+// event, and ids are random per run, so keying on either would let both copies
+// survive as duplicates. Key on the immutable logical identity instead (shift,
 // Stock movements are generated twice for the same logical event: once
 // optimistically on the client (random ids) and again when the server
 // recomputes the mutation (different random ids). mergeArray keeps both
@@ -406,12 +487,25 @@ async function fetchRemoteState(tenantId?: string | null) {
   try {
     const response = await fetch(url, { cache: 'no-store', signal: controller.signal })
     if (!response.ok) {
+      // A 409 "Complete onboarding first" means the user has no tenants (e.g.
+      // after a full DB wipe). Surface it as a typed error so the caller can
+      // clear stale cached snapshots instead of replaying an old workspace.
+      if (response.status === 409) {
+        throw new NoTenantsError()
+      }
       const body = await response.text()
       throw new Error(body || 'Failed to load system state')
     }
     return (await response.json()) as SystemApiResponse
   } finally {
     window.clearTimeout(timeoutId)
+  }
+}
+
+class NoTenantsError extends Error {
+  constructor() {
+    super('No tenants')
+    this.name = 'NoTenantsError'
   }
 }
 
@@ -430,10 +524,11 @@ async function postMutation(tenantId: string, body: Record<string, unknown>) {
 }
 
 export function DemoSystemProvider({ children, initialTenantId, authUserEmail = null, isSuperAdminIdentity = false }: PropsWithChildren<{ initialTenantId?: string; authUserEmail?: string | null; isSuperAdminIdentity?: boolean }>) {
-  // Start from the last-known cached state (if any) so a page reload shows the
-  // user's data immediately instead of flashing an empty seed and appearing to
-  // "lose everything" while the server fetch is in flight or if it fails.
-  const [state, setState] = useState<DemoSystemState>(() => loadCachedState(window.localStorage.getItem(ACTIVE_TENANT_KEY)))
+  // Always start from an empty seed. The server is the source of truth, so a
+  // fresh tenant (or one after a DB wipe) never replays a stale browser
+  // snapshot. The cached state is only used as a fallback in the initial-load
+  // catch handler when the server fetch fails (offline / reconnect).
+  const [state, setState] = useState<DemoSystemState>(() => emptyDemoSystem())
   const [availableTenants, setAvailableTenants] = useState<AccessibleTenant[]>([])
   const [activeTenantId, setActiveTenantId] = useState<string>('')
   const [hydrated, setHydrated] = useState(false)
@@ -476,32 +571,36 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         setAvailableTenants(remote.availableTenants)
         setActiveTenantId(remote.activeTenantId)
         window.localStorage.setItem(ACTIVE_TENANT_KEY, remote.activeTenantId)
-      } catch {
+      } catch (error) {
         if (!mounted) return
-        // The initial load failed (e.g. onboarding not complete, network down,
-        // a request timed out behind the Cloudflare -> Vercel proxy, or the
-        // cached tenant no longer exists). Reuse the last-known cached state
-        // whenever we have one so the user is never stranded on an empty
-        // "Untitled Workspace" and never stuck on the "Loading..." gate. If
-        // there is no cache at all we still leave `hydrated` true (via finally)
-        // so the page renders something rather than an endless spinner.
-        const cached = loadCachedState(window.localStorage.getItem(ACTIVE_TENANT_KEY))
-        const cachedId = window.localStorage.getItem(ACTIVE_TENANT_KEY)
-        const hasCache = Boolean(cached?.tenant?.id)
-        const matchesRequest =
-          initialTenantId && (cached.tenant.id === initialTenantId || cachedId === initialTenantId)
-        if (hasCache && (matchesRequest || !initialTenantId || !cachedId)) {
-          setState(resolveCurrentUser(ensureWasteLocation(cached)))
-          setAvailableTenants([{
-            id: cached.tenant.id,
-            name: cached.tenant.name,
-            business_type: cached.tenant.business_type,
-            plan: cached.tenant.plan,
-            subscription_status: cached.tenant.subscription_status,
-            role: isSuperAdminIdentity ? 'super_admin' : 'admin',
-            is_default: true,
-          }])
-          setActiveTenantId(cached.tenant.id)
+        // When the server reports the user has no tenants (409 "Complete
+        // onboarding first" — the case after a full DB wipe), clear any stale
+        // cached snapshots so a reload shows a clean onboarding screen instead
+        // of replaying an old workspace. No cache is used in that situation.
+        if (error instanceof NoTenantsError) {
+          clearDemoCache()
+        } else {
+          // Other failures (network down, timeout, cached tenant gone): reuse
+          // the last-known cached state so the user is never stranded. If there
+          // is no cache at all we still leave `hydrated` true (via finally).
+          const cached = loadCachedState(window.localStorage.getItem(ACTIVE_TENANT_KEY))
+          const cachedId = window.localStorage.getItem(ACTIVE_TENANT_KEY)
+          const hasCache = Boolean(cached?.tenant?.id)
+          const matchesRequest =
+            initialTenantId && (cached.tenant.id === initialTenantId || cachedId === initialTenantId)
+          if (hasCache && (matchesRequest || !initialTenantId || !cachedId)) {
+            setState(resolveCurrentUser(ensureWasteLocation(cached)))
+            setAvailableTenants([{
+              id: cached.tenant.id,
+              name: cached.tenant.name,
+              business_type: cached.tenant.business_type,
+              plan: cached.tenant.plan,
+              subscription_status: cached.tenant.subscription_status,
+              role: isSuperAdminIdentity ? 'super_admin' : 'admin',
+              is_default: true,
+            }])
+            setActiveTenantId(cached.tenant.id)
+          }
         }
       } finally {
         if (mounted) setHydrated(true)
@@ -546,6 +645,26 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     }
 
     const intervalId = window.setInterval(refresh, 5000)
+
+    // Real-time cross-device sync: when a superior approves/rejects a void,
+    // refund, or deletion request (or any record these actions touch) on
+    // another device, Supabase Realtime pushes the change here and we refresh
+    // immediately instead of waiting up to ~5s for the polling interval. Same
+    // is filtered to this tenant so each workspace only reacts to its own data.
+    let realtimeChannel: ReturnType<typeof supabase.channel> | null = null
+    const tenantId = activeTenantId || state.tenant.id
+    try {
+      realtimeChannel = supabase
+        .channel(`codentra-${tenantId}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'sales_transactions', filter: `tenant_id=eq.${tenantId}` }, () => void refresh())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_shifts', filter: `tenant_id=eq.${tenantId}` }, () => void refresh())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'deletion_requests', filter: `tenant_id=eq.${tenantId}` }, () => void refresh())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'audit_logs', filter: `tenant_id=eq.${tenantId}` }, () => void refresh())
+        .subscribe()
+    } catch {
+      // Realtime is best-effort; polling remains the fallback.
+    }
+
     let channel: BroadcastChannel | null = null
     if (typeof BroadcastChannel !== 'undefined') {
       channel = new BroadcastChannel('codentra.state')
@@ -566,6 +685,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       cancelled = true
       window.clearInterval(intervalId)
       channel?.close()
+      if (realtimeChannel) supabase.removeChannel(realtimeChannel)
       broadcastInvalidateRef.current = null
     }
   }, [hydrated, activeTenantId, state.tenant.id])
@@ -576,7 +696,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     const timeoutIds = feedback.map((item) =>
       window.setTimeout(() => {
         setFeedback((current) => current.filter((entry) => entry.id !== item.id))
-      }, 3200)
+      }, 7000)
     )
 
     return () => {
@@ -605,6 +725,8 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     if (!authUserEmail) return next
     const normalized = authUserEmail.trim().toLowerCase()
     const existing = next.users.find((u) => (u.email ?? '').trim().toLowerCase() === normalized)
+    const currentUser = next.currentUserId ? next.users.find((u) => u.id === next.currentUserId) : undefined
+    if (currentUser) return next
     if (existing) {
       return { ...next, currentUserId: existing.id }
     }
@@ -635,15 +757,41 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
   }
 
   function mergeState(local: DemoSystemState, remote: DemoSystemState): DemoSystemState {
+    const mergedUsers = mergeUsers(local.users, remote.users)
     const merged: DemoSystemState = {
       ...remote,
-      currentUserId: resolveCurrentUser(remote).currentUserId,
+      currentUserId: (() => {
+        if (!authUserEmail) return remote.currentUserId
+        const normalized = authUserEmail.trim().toLowerCase()
+        const existing = mergedUsers.find((u) => (u.email ?? '').trim().toLowerCase() === normalized)
+        if (existing) return existing.id
+
+        const activeTenantRole = availableTenants.find((t) => t.id === (activeTenantId || remote.tenant.id))?.role
+        const authUserId = `auth:${normalized}`
+        const displayName = (authUserEmail.split('@')[0] || 'User')
+          .split(/[._-]/)
+          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+          .join(' ')
+        const syntheticUser: User = {
+          id: authUserId,
+          tenant_id: remote.tenant.id,
+          role: (activeTenantRole || mergedUsers[0]?.role || 'sales_staff') as User['role'],
+          full_name: displayName,
+          email: authUserEmail,
+          avatar_url: null,
+          is_active: true,
+          last_login: new Date().toISOString(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }
+        return authUserId
+      })(),
       tenant: { ...local.tenant, ...remote.tenant },
       categories: mergeCategories(local.categories, remote.categories),
       unitsOfMeasure: mergeByIdRemoteWins(local.unitsOfMeasure, remote.unitsOfMeasure),
       locations: mergeLocations(local.locations, remote.locations),
       suppliers: mergeByIdRemoteWins(local.suppliers, remote.suppliers),
-      users: mergeUsers(local.users, remote.users),
+      users: mergedUsers,
       products: mergeProducts(local.products, remote.products),
       purchaseOrders: mergeByIdRemoteWins(local.purchaseOrders, remote.purchaseOrders),
       purchaseOrderItems: mergeArray(local.purchaseOrderItems, remote.purchaseOrderItems),
@@ -655,9 +803,10 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       productRecipes: mergeArray(local.productRecipes, remote.productRecipes),
       productionTemplates: mergeArray(local.productionTemplates, remote.productionTemplates),
       cashShifts: mergeByIdRemoteWins(local.cashShifts, remote.cashShifts),
-      cashMovements: mergeArray(local.cashMovements, remote.cashMovements),
+      cashMovements: mergeArray(local.cashMovements, remote.cashMovements ?? []),
       inventoryLots: mergeArray(local.inventoryLots, remote.inventoryLots ?? []),
       deletionRequests: dedupeDeletionRequests(mergeByIdRemoteWins(local.deletionRequests, remote.deletionRequests ?? [])),
+      notifications: mergeNotifications(local.notifications, remote.notifications ?? []),
     }
 
     // Always reconcile alerts against the merged product stock so stale
@@ -747,13 +896,13 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     activeTenantId,
     authUserEmail,
     isSuperAdminIdentity,
-    stats: computeDashboardStats(state),
+      stats: computeDashboardStats(state),
     resetDemo: (businessType = state.tenant.business_type) => sync(
       (current) => remapStateTenantId(seedDemoSystem(businessType), current.tenant.id),
       { action: 'resetDemo', businessType }
     ),
     updateTenant: (patch) => sync(
-      (current) => updateTenantSettings(current, patch),
+      (current) => updateTenantSettings(current, patch, { asSuperAdmin: isSuperAdminIdentity }),
       { action: 'updateTenant', patch },
       { successMessage: 'Settings saved successfully.', errorLabel: 'Could not save settings' }
     ),
@@ -1012,8 +1161,8 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       { action: 'transferStock', payload }
     ),
     requestDeletion: (requestedAction, targetType, targetId, details) => sync(
-      (current) => requestDeletion(current, requestedAction, targetType, targetId, details),
-      { action: 'requestDeletion', requestedAction, targetType, targetId, details },
+      (current) => requestDeletion(current, requestedAction, targetType, targetId, details, current.currentUserId),
+      { action: 'requestDeletion', requestedAction, targetType, targetId, details, requestedBy: state.currentUserId },
       { successMessage: 'Deletion request sent to manager for approval.', errorLabel: 'Could not request deletion' }
     ),
     approveDeletion: (requestId) => sync(
@@ -1025,6 +1174,14 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       (current) => rejectDeletion(current, requestId),
       { action: 'rejectDeletion', requestId },
       { successMessage: 'Deletion request rejected.', errorLabel: 'Could not reject deletion' }
+    ),
+    markNotificationRead: (notificationId) => sync(
+      (current) => markNotificationRead(current, notificationId),
+      { action: 'markNotificationRead', notificationId }
+    ),
+    markAllNotificationsRead: () => sync(
+      (current) => markAllNotificationsRead(current),
+      { action: 'markAllNotificationsRead' }
     ),
     switchTenant: async (tenantId: string) => {
       const response = await fetch('/api/session/tenant', {

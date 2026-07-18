@@ -30,6 +30,7 @@ import {
 } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { formatTimestamp, formatCurrency } from '@/lib/utils'
+import { computeShiftExpectedCash, computeShiftPaymentTotals, cashPortionOfSale } from '@/lib/demo-system'
 import { getRolePermissions } from '@/lib/access-control'
 import type { PaymentAccount, PaymentMethod, Tenant, CashShift, CashMovementKind, TransactionStatus } from '@/types/database'
 
@@ -60,6 +61,14 @@ const MANUAL_LABELS: Record<string, string> = {
 
 function paymentLabel(method: string): string {
   return MANUAL_LABELS[method] ?? 'Other'
+}
+
+function isOnlinePayment(method: string): boolean {
+  return method === 'gcash' || method === 'maya'
+}
+
+function isBankPayment(method: string): boolean {
+  return method === 'bdo' || method === 'maribank' || method === 'card' || method === 'bank_transfer'
 }
 
 // Build a human label for how a sale was paid. Split sales list every method
@@ -311,6 +320,7 @@ export default function POSPage() {
   const [newSplitReference, setNewSplitReference] = useState('')
   const [voidBusy, setVoidBusy] = useState(false)
   const [refundBusy, setRefundBusy] = useState(false)
+  const [cashBusy, setCashBusy] = useState(false)
 
   const currentShift = useMemo(() => state.cashShifts.find((shift) => shift.status === 'open'), [state.cashShifts])
   const posStoreLocationId = currentShift?.location_id ?? posStoreLocations[0] ?? ''
@@ -786,6 +796,7 @@ export default function POSPage() {
   }
 
   function handleCashMovement() {
+    if (cashBusy) return
     if (!currentShift) {
       notifyError('No active shift. Open a shift first.')
       return
@@ -794,11 +805,13 @@ export default function POSPage() {
       notifyError('Enter a valid amount.')
       return
     }
+    setCashBusy(true)
     recordCashMovement(currentShift.id, cashAction, Number(cashAmount), cashNote || undefined)
     setShowCashModal(false)
     setCashAmount('')
     setCashNote('')
     notifySuccess(cashAction === 'cash_in' ? 'Cash added to drawer' : 'Cash removed from drawer')
+    setTimeout(() => setCashBusy(false), 1000)
   }
 
   function confirmVoid() {
@@ -1045,42 +1058,100 @@ export default function POSPage() {
           </div>
         </div>
 
-        {currentShift ? (() => {
-          const shiftMovements = state.cashMovements
-            .filter((movement) => movement.shift_id === currentShift.id)
-            .slice()
-            .sort((a, b) => b.created_at.localeCompare(a.created_at))
-          const balance = shiftMovements.reduce(
-            (sum, movement) => sum + (movement.kind === 'cash_out' ? -Number(movement.amount ?? 0) : Number(movement.amount ?? 0)),
-            Number(currentShift.opening_float ?? 0)
-          )
+         {currentShift ? (() => {
+          // The drawer balance is driven by transaction status plus real drawer
+          // movements (cash in / cash out) — identical to the close-shift
+          // "Expected cash". Model: opening float + cash from COMPLETED sales,
+          // where a refund/void removes that cash again. A ₱120 sale makes the
+          // drawer 1620; refunding it returns it to 1500.
+          const balance = computeShiftExpectedCash(state, currentShift.id)
+
+          // Build the ledger the cashier actually sees: manual cash movements
+          // PLUS derived rows for each completed sale (cash in) and each
+          // refunded/voided sale (cash out), so the list agrees with the balance.
+          type LedgerRow = { id: string; label: string; amount: number; isOut: boolean; at: string; tint: string }
+          const ledger: LedgerRow[] = []
+          for (const m of state.cashMovements) {
+            if (m.shift_id !== currentShift.id) continue
+            // denomination_adjustment is dead data (no UI creates it); skip it.
+            if (m.kind === 'denomination_adjustment') continue
+            ledger.push({
+              id: m.id,
+              label: m.kind === 'cash_in' ? 'Cash In' : m.kind === 'cash_out' ? 'Cash Out' : 'Denomination adj.',
+              amount: Number(m.amount ?? 0),
+              isOut: m.kind === 'cash_out',
+              at: m.created_at,
+              tint: m.kind === 'cash_out' ? '#FEE2E2' : '#DCFCE7',
+            })
+          }
+          for (const tx of state.salesTransactions) {
+            if (tx.shift_id !== currentShift.id) continue
+            const cash = cashPortionOfSale(tx)
+            const isVoid = tx.status === 'voided'
+            const isRefund = tx.status === 'refunded'
+            // Skip non-cash sales from the cash drawer ledger. Online, bank,
+            // and other non-cash tenders do not affect physical cash, so
+            // showing them as ₱0.00 is confusing.
+            if (cash <= 0 && !isVoid && !isRefund) continue
+            // Always show the original sale (+cash) so the transaction stays
+            // visible for records even after it is voided/refunded — the record
+            // is kept (status flips, it is never deleted). Then, if it was
+            // voided/refunded, also show the matching payout (−cash) directly
+            // beneath it, exactly like a cash-register tape:
+            //   Sale +₱375  →  Void −₱375   (net 0, drawer back to opening)
+            ledger.push({
+              id: `sale-${tx.id}`,
+              label: `Sale ${tx.receipt_number}`,
+              amount: cash,
+              isOut: false,
+              at: tx.created_at,
+              tint: '#DCFCE7',
+            })
+            if (isVoid) {
+              ledger.push({
+                id: `void-${tx.id}`,
+                label: `Void ${tx.receipt_number}`,
+                amount: cash,
+                isOut: true,
+                at: tx.voided_at ?? tx.created_at,
+                tint: '#FEE2E2',
+              })
+            } else if (isRefund) {
+              ledger.push({
+                id: `refund-${tx.id}`,
+                label: `Refund ${tx.receipt_number}`,
+                amount: cash,
+                isOut: true,
+                at: tx.refunded_at ?? tx.created_at,
+                tint: '#FEE2E2',
+              })
+            }
+          }
+          ledger.sort((a, b) => b.at.localeCompare(a.at))
+
           return (
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderRadius: 12, background: '#F0FDF4', border: '1px solid #BBF7D0', marginBottom: 10 }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: '#047857' }}>Drawer balance</span>
                 <span style={{ fontSize: 18, fontWeight: 900, color: '#047857' }}>{formatCurrency(balance)}</span>
               </div>
-              {shiftMovements.length === 0 ? (
+              {ledger.length === 0 ? (
                 <div style={{ fontSize: 12, color: '#94A3B8', textAlign: 'center', padding: '14px 0' }}>
-                  No cash movements yet. Use Cash In / Cash Out above.
+                  No cash activity yet. Sales and cash in/out will appear here.
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto' }}>
-                  {shiftMovements.map((movement) => {
-                    const isOut = movement.kind === 'cash_out'
-                    const label = movement.kind === 'cash_in' ? 'Cash In' : movement.kind === 'cash_out' ? 'Cash Out' : movement.kind
-                    return (
-                      <div key={movement.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '8px 10px', borderRadius: 10, background: '#F8FBFF', border: '1px solid #E2E8F0' }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A' }}>{label}</div>
-                          <div style={{ fontSize: 11, color: '#64748B', marginTop: 1 }}>{movement.note ? `${movement.note} · ` : ''}{formatClock(movement.created_at)}</div>
-                        </div>
-                        <span style={{ fontSize: 14, fontWeight: 900, color: isOut ? '#DC2626' : '#16A34A' }}>
-                          {isOut ? '−' : '+'}{formatCurrency(Number(movement.amount ?? 0))}
-                        </span>
+                  {ledger.map((row) => (
+                    <div key={row.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '8px 10px', borderRadius: 10, background: row.tint, border: '1px solid #E2E8F0' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A' }}>{row.label}</div>
+                        <div style={{ fontSize: 11, color: '#64748B', marginTop: 1 }}>{formatClock(row.at)}</div>
                       </div>
-                    )
-                  })}
+                      <span style={{ fontSize: 14, fontWeight: 900, color: row.isOut ? '#DC2626' : '#16A34A' }}>
+                        {row.isOut ? '−' : '+'}{formatCurrency(row.amount)}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               )}
             </>
@@ -2059,10 +2130,15 @@ export default function POSPage() {
                 style={{ height: 44, fontSize: 18, fontWeight: 700, borderRadius: 12, marginBottom: 12 }}
               />
               {currentShift && shiftAction === 'close' && (() => {
-                const movementDelta = state.cashMovements
-                  .filter((m) => m.shift_id === currentShift.id)
-                  .reduce((sum, m) => sum + (m.kind === 'cash_out' ? -Number(m.amount ?? 0) : Number(m.amount ?? 0)), 0)
-                const expectedCash = Number(currentShift.opening_float) + Number(currentShift.cash_sales_total || 0) + movementDelta
+                // Expected cash is derived from the shift's actual transactions
+                // (completed sales minus voided/refunded) plus the opening float
+                // and cash movements — so voids/refunds subtract from SALES, not
+                // from the starting float.
+                const expectedCash = computeShiftExpectedCash(state, currentShift.id)
+                const paymentTotals = computeShiftPaymentTotals(state, currentShift.id)
+                const nonCashMethods = Object.keys(paymentTotals)
+                  .filter((method) => method !== 'cash')
+                  .sort((a, b) => (paymentTotals[b] ?? 0) - (paymentTotals[a] ?? 0))
                 return (
                 <div style={{ padding: '10px 12px', borderRadius: 10, background: '#F8FBFF', border: '1px solid #D8E4F2', marginBottom: 12 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
@@ -2073,7 +2149,56 @@ export default function POSPage() {
                     <span style={{ color: '#475569' }}>Expected cash</span>
                     <span style={{ fontWeight: 700 }}>{formatCurrency(expectedCash)}</span>
                   </div>
-                  <div style={{ fontSize: 11, color: '#64748B' }}>Shift: {currentShift.shift_code}</div>
+                  {nonCashMethods.length > 0 && (() => {
+                    const onlineMethods = nonCashMethods.filter((method) => isOnlinePayment(method)).sort((a, b) => (paymentTotals[b] ?? 0) - (paymentTotals[a] ?? 0))
+                    const bankMethods = nonCashMethods.filter((method) => isBankPayment(method)).sort((a, b) => (paymentTotals[b] ?? 0) - (paymentTotals[a] ?? 0))
+                    const otherMethods = nonCashMethods.filter((method) => !isOnlinePayment(method) && !isBankPayment(method)).sort((a, b) => (paymentTotals[b] ?? 0) - (paymentTotals[a] ?? 0))
+                    const paymentBreakdown = (
+                      <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #E2E8F0' }}>
+                        {onlineMethods.length > 0 && (
+                          <div style={{ marginBottom: 6 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>
+                              Online (excl. void &amp; refund)
+                            </div>
+                            {onlineMethods.map((method) => (
+                              <div key={method} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 2 }}>
+                                <span style={{ color: '#64748B' }}>{paymentLabel(method)}</span>
+                                <span style={{ fontWeight: 600 }}>{formatCurrency(paymentTotals[method] ?? 0)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {bankMethods.length > 0 && (
+                          <div style={{ marginBottom: 6 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>
+                              Bank (excl. void &amp; refund)
+                            </div>
+                            {bankMethods.map((method) => (
+                              <div key={method} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 2 }}>
+                                <span style={{ color: '#64748B' }}>{paymentLabel(method)}</span>
+                                <span style={{ fontWeight: 600 }}>{formatCurrency(paymentTotals[method] ?? 0)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {otherMethods.length > 0 && (
+                          <div>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>
+                              Other (excl. void &amp; refund)
+                            </div>
+                            {otherMethods.map((method) => (
+                              <div key={method} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 2 }}>
+                                <span style={{ color: '#64748B' }}>{paymentLabel(method)}</span>
+                                <span style={{ fontWeight: 600 }}>{formatCurrency(paymentTotals[method] ?? 0)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                    return paymentBreakdown
+                  })()}
+                  <div style={{ fontSize: 11, color: '#64748B', marginTop: 6 }}>Shift: {currentShift.shift_code}</div>
                 </div>
                 )
               })()}

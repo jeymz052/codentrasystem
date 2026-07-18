@@ -136,6 +136,7 @@ export async function POST(request: NextRequest) {
     salesTransactionItems: [],
     stockMovements: [],
     alerts: [],
+    notifications: [],
     auditLogs: [],
     productRecipes: [],
     productionTemplates: [],

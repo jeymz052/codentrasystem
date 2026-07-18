@@ -358,7 +358,7 @@ Each **Cash Shift** records:
 - The **station/bay** and **location**
 - Opened-by / closed-by and timestamps
 
-**Cash Movements** within a shift capture `cash_in`, `cash_out`, `cash_sale`, `refund_payout`, and `denomination_adjustment` events with optional denomination breakdowns. Shift and cash totals update automatically as sales and refunds/voids occur, giving managers a clean end-of-day reconciliation.
+**Cash Movements** within a shift capture `cash_in`, `cash_out`, `cash_sale`, `refund_payout`, `void_payout`, and `denomination_adjustment` events with optional denomination breakdowns. Shift and cash totals update automatically as sales and refunds/voids occur, giving managers a clean end-of-day reconciliation.
 
 ---
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bell, Building2, AlertTriangle, Menu, ShoppingCart, CheckCircle2, Receipt } from 'lucide-react'
+import { Bell, Building2, AlertTriangle, Menu, ShoppingCart, CheckCircle2, Receipt, X } from 'lucide-react'
 import { usePathname, useRouter } from 'next/navigation'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { getRolePermissions, canActOnApprovalRequest } from '@/lib/access-control'
@@ -37,7 +37,7 @@ function formatNotificationDateTime(value: string) {
 export function TopBar({ onToggleSidebar }: TopBarProps) {
   const path = usePathname()
   const router = useRouter()
-  const { state, stats, availableTenants, activeTenantId, isSuperAdminIdentity, switchTenant, formatCurrency } = useDemoSystem()
+  const { state, stats, availableTenants, activeTenantId, isSuperAdminIdentity, switchTenant, formatCurrency, markNotificationRead, markAllNotificationsRead } = useDemoSystem()
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [selectedAlerts, setSelectedAlerts] = useState<string[]>([])
   const menuRef = useRef<HTMLDivElement>(null)
@@ -56,8 +56,19 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
     [canApprove, state.deletionRequests, role, state.currentUserId]
   )
 
-  // Total items shown in the bell: live stock alerts + pending approvals.
-  const totalNotifications = stats.open_alerts + pendingApprovals.length
+  const userNotifications = useMemo(
+    () => state.notifications
+      .filter((n) => n.user_id === state.currentUserId && !n.read)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .slice(0, 5),
+    [state.notifications, state.currentUserId]
+  )
+
+  // Total items shown in the bell: live stock alerts + pending approvals +
+  // unread approval-result notifications for the current user. Every role
+  // sees stock alerts; only superior roles see pending approvals; every
+  // role sees their own approval updates if they have any.
+  const totalNotifications = stats.open_alerts + pendingApprovals.length + userNotifications.length
 
   const notifications = useMemo(
     () => [...state.alerts].sort((left, right) => right.created_at.localeCompare(left.created_at)).slice(0, 6),
@@ -203,9 +214,11 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
                   <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A' }}>Notifications</div>
                   <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>
                     {stats.open_alerts > 0 && `${stats.open_alerts} stock alert${stats.open_alerts === 1 ? '' : 's'}`}
-                    {stats.open_alerts > 0 && pendingApprovals.length > 0 && ' · '}
+                    {stats.open_alerts > 0 && (pendingApprovals.length > 0 || userNotifications.length > 0) && ' · '}
                     {pendingApprovals.length > 0 && `${pendingApprovals.length} approval${pendingApprovals.length === 1 ? '' : 's'} pending`}
-                    {stats.open_alerts === 0 && pendingApprovals.length === 0 && 'You’re all caught up'}
+                    {pendingApprovals.length > 0 && userNotifications.length > 0 && ' · '}
+                    {userNotifications.length > 0 && `${userNotifications.length} approval update${userNotifications.length === 1 ? '' : 's'}`}
+                    {stats.open_alerts === 0 && pendingApprovals.length === 0 && userNotifications.length === 0 && 'You’re all caught up'}
                   </div>
                 </div>
                 {stats.open_alerts > 0 && (
@@ -256,12 +269,71 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
               )}
 
               <div style={{ maxHeight: 360, overflowY: 'auto' }}>
-                {notifications.length === 0 && pendingApprovals.length === 0 ? (
+                {notifications.length === 0 && pendingApprovals.length === 0 && userNotifications.length === 0 ? (
                   <div style={{ padding: '20px 16px', color: '#64748B', fontSize: 12 }}>
                     No notifications right now.
                   </div>
                 ) : (
                   <>
+                    {userNotifications.length > 0 && (
+                      <div>
+                        <div style={{ padding: '8px 16px', fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#94A3B8', background: '#FBFCFE', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span>Approval updates</span>
+                          <button
+                            type="button"
+                            onClick={() => markAllNotificationsRead()}
+                            style={{ fontSize: 10, fontWeight: 700, color: '#3B82F6', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}
+                          >
+                            Clear all
+                          </button>
+                        </div>
+                        {userNotifications.map((notif) => (
+                            <div
+                              key={notif.id}
+                              style={{
+                                padding: '12px 16px',
+                                borderBottom: '1px solid #F1F5F9',
+                                background: '#F0FDF4',
+                                borderLeft: `3px solid ${notif.title.includes('Approved') ? '#16A34A' : '#DC2626'}`,
+                                display: 'flex',
+                                gap: 10,
+                                alignItems: 'flex-start',
+                              }}
+                            >
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A' }}>
+                                {notif.title}
+                              </div>
+                              <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.45, marginTop: 2 }}>
+                                {notif.message}
+                              </div>
+                              <div style={{ marginTop: 5, fontSize: 10, color: '#94A3B8' }}>
+                                {formatNotificationDateTime(notif.created_at)}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => markNotificationRead(notif.id)}
+                              style={{
+                                background: 'transparent',
+                                border: 'none',
+                                cursor: 'pointer',
+                                padding: 4,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: '#94A3B8',
+                                flexShrink: 0,
+                              }}
+                              aria-label="Dismiss notification"
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
                     {pendingApprovals.length > 0 && (
                       <div>
                         <div style={{ padding: '8px 16px', fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#94A3B8', background: '#FBFCFE' }}>

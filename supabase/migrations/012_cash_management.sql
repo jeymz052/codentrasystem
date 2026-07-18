@@ -111,22 +111,18 @@ BEGIN
     UPDATE cash_movements
     SET kind = 'cash_sale'::cash_movement_kind
     WHERE shift_id = NEW.shift_id
-      AND kind NOT IN ('cash_in', 'cash_out', 'refund_payout', 'denomination_adjustment');
+      AND kind NOT IN ('cash_in', 'cash_out', 'refund_payout', 'void_payout', 'denomination_adjustment');
   ELSIF NEW.status = 'refunded' OR NEW.status = 'voided' THEN
-    UPDATE cash_shifts
-    SET total_sales = total_sales - COALESCE(NEW.total_amount, 0)
-    WHERE id = NEW.shift_id;
-
-    INSERT INTO cash_movements (tenant_id, shift_id, kind, amount, note, performed_by, created_at)
-    VALUES (
-      NEW.tenant_id,
-      NEW.shift_id,
-      'refund_payout',
-      -COALESCE(NEW.total_amount, 0),
-      'Refund / Void: ' || NEW.receipt_number,
-      NEW.refunded_by,
-      NOW()
-    );
+    -- Void / refund must NOT deduct the drawer's cash balance. The drawer's
+    -- expected cash is derived (in computeShiftExpectedCash) from each
+    -- transaction's status: only cash from COMPLETED sales counts, so a
+    -- voided/refunded sale is simply excluded — its cash was never in the
+    -- drawer to begin with and is returned to the customer. Previously this
+    -- branch both subtracted the shift totals AND inserted a refund_payout
+    -- movement, double-deducting the amount and corrupting the drawer balance.
+    -- We no longer mutate the shift totals or add a payout movement here; the
+    -- derived expected cash already handles voids/refunds correctly.
+    NULL;
   END IF;
   RETURN NEW;
 END;

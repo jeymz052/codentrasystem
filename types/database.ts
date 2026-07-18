@@ -56,7 +56,7 @@ export type MutationAction =
   | 'rejectDeletion'
 export type OrderStatus = 'draft' | 'pending_approval' | 'approved' | 'ordered' | 'partially_received' | 'received' | 'cancelled'
 export type MovementType = 'inbound' | 'outbound' | 'adjustment' | 'return' | 'production' | 'waste' | 'defect' | 'reject'
-export type CashMovementKind = 'cash_in' | 'cash_out' | 'cash_sale' | 'refund_payout' | 'denomination_adjustment'
+export type CashMovementKind = 'cash_in' | 'cash_out' | 'cash_sale' | 'refund_payout' | 'void_payout' | 'denomination_adjustment'
 export type AlertType = 'low_stock' | 'out_of_stock' | 'overstock' | 'expiry_warning'
 export type AlertStatus = 'open' | 'acknowledged' | 'resolved'
 export type ShiftStatus = 'open' | 'closed' | 'voided'
@@ -452,11 +452,23 @@ export interface AuditLog {
   tenant_id: string
   user_id: string | null
   action: string
-  target_type: 'user' | 'product' | 'supplier' | 'order' | 'sale' | 'shift' | 'system' | 'recipe' | 'production_template' | 'location'
+  target_type: string
   target_id: string | null
   details: Record<string, unknown>
   performed_by: string | null
   performed_at: string
+}
+
+export interface Notification {
+  id: string
+  tenant_id: string
+  user_id: string
+  title: string
+  message: string
+  type: 'approval_result' | 'info'
+  read: boolean
+  created_at: string
+  reference_id?: string
 }
 
 // POS Cart

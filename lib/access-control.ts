@@ -62,6 +62,7 @@ export type MutationAction =
   | 'requestDeletion'
   | 'approveDeletion'
   | 'rejectDeletion'
+  | 'markNotificationRead'
 
 const DELETION_ACTIONS: MutationAction[] = [
   'removeProduct',
@@ -242,6 +243,7 @@ export function canPerformMutation(role: UserRole, action: MutationAction) {
       'recordWaste',
       'setWasteTypes',
       'requestDeletion',
+      'markNotificationRead',
     ].includes(action)
   }
 
@@ -254,6 +256,7 @@ export function canPerformMutation(role: UserRole, action: MutationAction) {
       'voidSale',
       'refundSale',
       'requestDeletion',
+      'markNotificationRead',
     ].includes(action)
   }
 
@@ -270,6 +273,7 @@ export function canPerformMutation(role: UserRole, action: MutationAction) {
       'resolve',
       'transferStock',
       'requestDeletion',
+      'markNotificationRead',
     ].includes(action)
   }
 
@@ -283,6 +287,7 @@ export function canPerformMutation(role: UserRole, action: MutationAction) {
       'editSupplier',
       'removeSupplier',
       'requestDeletion',
+      'markNotificationRead',
     ].includes(action)
   }
 
