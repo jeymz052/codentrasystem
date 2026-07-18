@@ -1058,15 +1058,15 @@ export default function POSPage() {
         </div>
 
          {currentShift ? (() => {
-           const isSupervisor = role === 'super_admin' || role === 'manager'
-           const openShiftIds = new Set(state.cashShifts.filter((shift) => shift.status === 'open').map((shift) => shift.id))
-           const targetShiftIds = isSupervisor ? openShiftIds : new Set([currentShift.id])
+            const isSuperior = role === 'super_admin' || role === 'admin' || role === 'manager' || role === 'supervisor'
+            const openShiftIds = new Set(state.cashShifts.filter((shift) => shift.status === 'open').map((shift) => shift.id))
+            const targetShiftIds = isSuperior ? openShiftIds : new Set([currentShift.id])
            // The drawer balance is driven by transaction status plus real drawer
            // movements (cash in / cash out) — identical to the close-shift
            // "Expected cash". Model: opening float + cash from COMPLETED sales,
            // where a refund/void removes that cash again. A ₱120 sale makes the
            // drawer 1620; refunding it returns it to 1500.
-           const balance = isSupervisor
+            const balance = isSuperior
              ? (() => {
                  let cashFromSales = 0
                  for (const tx of state.salesTransactions) {
