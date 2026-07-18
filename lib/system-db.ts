@@ -103,7 +103,7 @@ type MutationPayload =
   | { action: 'produceFinishedGood'; finishedGoodId: string; quantity: number; locationId?: string | null }
   | { action: 'createPO'; draft: PurchaseOrderDraft; orderId: string }
   | { action: 'receivePO'; purchaseOrderId: string }
-  | { action: 'completeSale'; payload: { payment_method: PaymentMethod; payment_provider?: string; payment_reference?: string | null; amount_tendered: number; location_id: string | null; notes?: string; items: SaleDraftItem[]; receiptNumber?: string; transactionId?: string; itemIds?: string[]; movementIds?: string[]; auditLogId?: string; split_payments?: Array<{ payment_method: PaymentMethod; amount: number; reference?: string | null }> } }
+  | { action: 'completeSale'; payload: { payment_method: PaymentMethod; payment_provider?: string; payment_reference?: string | null; amount_tendered: number; location_id: string | null; notes?: string; items: SaleDraftItem[]; receiptNumber?: string; transactionId?: string; itemIds?: string[]; movementIds?: string[]; auditLogId?: string; split_payments?: Array<{ payment_method: PaymentMethod; amount: number; reference?: string | null }>; openShiftId?: string | null } }
   | { action: 'voidSale'; transactionId: string; reason?: string }
   | { action: 'refundSale'; transactionId: string; reason?: string }
   | { action: 'openShift'; payload: { openingFloat: number; locationId?: string | null; notes?: string } }

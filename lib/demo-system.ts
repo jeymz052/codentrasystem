@@ -2787,6 +2787,7 @@ export function recordSale(
     auditLogId?: string
     cashierId?: string | null
     split_payments?: SplitPayment[]
+    openShiftId?: string | null
   }
 ): { state: DemoSystemState; receiptNumber: string; transactionId: string; itemIds: string[]; movementIds: string[]; auditLogId: string } {
   const now = nowIso()
@@ -2862,7 +2863,7 @@ export function recordSale(
   const changeAmount = usingSplits
     ? Math.max(0, cashSplitTotal - Math.max(0, totalAmount - nonCashSplitTotal))
     : Math.max(0, Number(payload.amount_tendered ?? 0) - totalAmount)
-  const openShiftId = state.cashShifts.find((row) => row.status === 'open')?.id ?? null
+  const openShiftId = payload.openShiftId ?? state.cashShifts.find((row) => row.status === 'open')?.id ?? null
   const parentTransaction: SalesTransaction = {
     id: transactionId,
     tenant_id: state.tenant.id,

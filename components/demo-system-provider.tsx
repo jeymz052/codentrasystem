@@ -1119,6 +1119,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       // copy wins the merge. Send the real signed-in user's id so the server
       // attributes the sale to the actual cashier (matching the client).
       const cashierId = resolveCurrentUserId(state)
+      const openShiftId = state.cashShifts.find((row) => row.status === 'open')?.id ?? null
       const local = recordSale(state, {
         ...payload,
         cashierId,
@@ -1127,6 +1128,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         itemIds,
         movementIds,
         auditLogId,
+        openShiftId,
       })
       sync(
         (current) => recordSale(current, {
@@ -1137,6 +1139,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
           itemIds,
           movementIds,
           auditLogId,
+          openShiftId,
         }).state,
         {
           action: 'completeSale',
@@ -1148,6 +1151,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
             itemIds,
             movementIds,
             auditLogId,
+            openShiftId,
           },
         }
       )
