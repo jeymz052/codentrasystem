@@ -153,7 +153,7 @@ type DemoSystemContextValue = {
   completeSale: (payload: { payment_method: PaymentMethod; payment_provider?: string; payment_reference?: string | null; amount_tendered: number; location_id: string | null; notes?: string; items: SaleDraftItem[]; split_payments?: Array<{ payment_method: PaymentMethod; amount: number; reference?: string | null }> }) => { receiptNumber: string; transactionId: string }
   voidSale: (transactionId: string, reason?: string) => void
   refundSale: (transactionId: string, reason?: string) => void
-  openShift: (payload: { openingFloat: number; locationId?: string | null; notes?: string; station?: string | null }) => void
+  openShift: (payload: { shiftId?: string; openingFloat: number; locationId?: string | null; notes?: string; station?: string | null }) => void
   closeShift: (shiftId: string, countedCash: number, notes?: string) => void
   recordCashMovement: (shiftId: string, kind: 'cash_in' | 'cash_out' | 'denomination_adjustment', amount: number, note?: string | null, denominations?: Record<string, number> | null) => void
   acknowledge: (alertId: string) => void
@@ -527,6 +527,13 @@ async function fetchRemoteState(tenantId?: string | null) {
       if (response.status === 409) {
         throw new NoTenantsError()
       }
+      // A 401 means the session is no longer valid — most commonly because the
+      // same account signed in on another device, which (per the sign-in route)
+      // revokes all other server-tracked sessions. Surface it as a typed error
+      // so the app can react in realtime instead of waiting for a page reload.
+      if (response.status === 401) {
+        throw new SessionRevokedError()
+      }
       const body = await response.text()
       throw new Error(body || 'Failed to load system state')
     }
@@ -540,6 +547,13 @@ class NoTenantsError extends Error {
   constructor() {
     super('No tenants')
     this.name = 'NoTenantsError'
+  }
+}
+
+class SessionRevokedError extends Error {
+  constructor() {
+    super('Session revoked')
+    this.name = 'SessionRevokedError'
   }
 }
 
@@ -580,6 +594,9 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
   const inFlightRef = useRef(0)
   const feedbackIdRef = useRef(0)
   const broadcastInvalidateRef = useRef<(() => void) | null>(null)
+  // Ensures the "signed out on another device" handling runs exactly once,
+  // even though the poller keeps firing after the session is already revoked.
+  const sessionRevokedRef = useRef(false)
 
   useEffect(() => {
     let mounted = true
@@ -613,6 +630,8 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         // of replaying an old workspace. No cache is used in that situation.
         if (error instanceof NoTenantsError) {
           clearDemoCache()
+        } else if (error instanceof SessionRevokedError) {
+          handleSessionRevoked()
         } else {
           // Other failures (network down, timeout, cached tenant gone): reuse
           // the last-known cached state so the user is never stranded. If there
@@ -676,12 +695,29 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         setState((prev) => mergeState(prev, resolved))
         setAvailableTenants(remote.availableTenants)
         setActiveTenantId(remote.activeTenantId)
-      } catch {
-        // Keep current state if the network is unavailable.
+      } catch (error) {
+        // A revoked session (e.g. the same account signed in on another device)
+        // makes /api/system return 401. React in realtime instead of stranding
+        // the user until a page reload: tell them and send them to sign-in.
+        if (error instanceof SessionRevokedError) {
+          handleSessionRevoked()
+        }
+        // Keep current state for any other failure (e.g. network unavailable).
       }
     }
 
     const intervalId = window.setInterval(refresh, 5000)
+
+    // Realtime session-kick detection: when this account is signed in on another
+    // device, the server revokes every other session (see app/api/auth/sign-in/
+    // route.ts). Supabase's client detects the now-invalid token on its next
+    // refresh and emits SIGNED_OUT — we react immediately with a message and a
+    // redirect to sign-in, so the old device logs out without a manual reload.
+    const { data: authListener } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT') {
+        handleSessionRevoked()
+      }
+    })
 
     // Real-time cross-device sync: when a superior approves/rejects a void,
     // refund, or deletion request (or any record these actions touch) on
@@ -723,6 +759,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       window.clearInterval(intervalId)
       channel?.close()
       if (realtimeChannel) supabase.removeChannel(realtimeChannel)
+      authListener.subscription.unsubscribe()
       broadcastInvalidateRef.current = null
     }
   }, [hydrated, activeTenantId, state.tenant.id])
@@ -745,6 +782,20 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     feedbackIdRef.current += 1
     const id = `${kind}-${feedbackIdRef.current}`
     setFeedback((current) => [...current, { id, kind, message }].slice(-3))
+  }
+
+  // Called when the server tells us the session is no longer valid — typically
+  // because the same account signed in on a different device, which revokes all
+  // other sessions (see app/api/auth/sign-in/route.ts). We surface a clear
+  // message and send the user to sign-in immediately, so the old device logs
+  // out in realtime instead of waiting for a manual page reload.
+  function handleSessionRevoked() {
+    if (sessionRevokedRef.current) return
+    sessionRevokedRef.current = true
+    pushFeedback('error', 'You have been signed out because your account was opened on another device.')
+    window.setTimeout(() => {
+      window.location.href = '/sign-in'
+    }, 2500)
   }
 
   // The real signed-in user is identified by their auth email (passed from the

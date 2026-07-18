@@ -106,7 +106,7 @@ type MutationPayload =
   | { action: 'completeSale'; payload: { payment_method: PaymentMethod; payment_provider?: string; payment_reference?: string | null; amount_tendered: number; location_id: string | null; notes?: string; items: SaleDraftItem[]; receiptNumber?: string; transactionId?: string; itemIds?: string[]; movementIds?: string[]; auditLogId?: string; split_payments?: Array<{ payment_method: PaymentMethod; amount: number; reference?: string | null }>; openShiftId?: string | null } }
   | { action: 'voidSale'; transactionId: string; reason?: string }
   | { action: 'refundSale'; transactionId: string; reason?: string }
-  | { action: 'openShift'; payload: { openingFloat: number; locationId?: string | null; notes?: string } }
+  | { action: 'openShift'; payload: { shiftId?: string; openingFloat: number; locationId?: string | null; notes?: string; station?: string | null } }
   | { action: 'closeShift'; payload: { shiftId: string; countedCash: number; notes?: string } }
   | { action: 'recordCashMovement'; payload: { shiftId: string; kind: CashMovementKind; amount: number; note?: string | null; denominations?: Record<string, number> | null } }
   | { action: 'acknowledge'; alertId: string }

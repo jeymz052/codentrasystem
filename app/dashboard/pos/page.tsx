@@ -30,7 +30,7 @@ import {
 } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { formatTimestamp, formatCurrency } from '@/lib/utils'
-import { computeShiftExpectedCash, computeTenantExpectedCash, computeShiftPaymentTotals, cashPortionOfSale } from '@/lib/demo-system'
+import { computeShiftExpectedCash, computeTenantExpectedCash, computeShiftPaymentTotals, cashPortionOfSale, id } from '@/lib/demo-system'
 import { getRolePermissions } from '@/lib/access-control'
 import type { PaymentAccount, PaymentMethod, Tenant, CashShift, CashMovementKind, TransactionStatus } from '@/types/database'
 
@@ -775,6 +775,7 @@ export default function POSPage() {
       return
     }
     openShift({
+      shiftId: id(),
       openingFloat: Number(openingFloat),
       locationId: shiftStoreLocationId || posStoreLocations[0] || null,
       notes: shiftNote || undefined,

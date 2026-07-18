@@ -3181,12 +3181,12 @@ export function setWasteTypes(
 
 export function openShift(
   state: DemoSystemState,
-  payload: { openingFloat: number; locationId?: string | null; notes?: string; station?: string | null }
+  payload: { shiftId?: string; openingFloat: number; locationId?: string | null; notes?: string; station?: string | null }
 ): DemoSystemState {
   const now = nowIso()
   const posLocation = resolvePosLocation(state, payload.locationId)
   const shift: CashShift = {
-    id: id(),
+    id: payload.shiftId || id(),
     tenant_id: state.tenant.id,
     shift_code: '',
     opened_by: state.currentUserId || '',

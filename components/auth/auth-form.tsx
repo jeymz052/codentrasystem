@@ -15,25 +15,50 @@ type AuthFormProps = {
   nextPath?: string
   initialPlan?: string
   resetMessage?: boolean
+  initialEmail?: string
 }
+
+const REMEMBER_KEY = 'codentra.remember-credentials'
 
 export function AuthForm({
   mode,
   nextPath = '/dashboard',
   initialPlan = 'professional',
   resetMessage = false,
+  initialEmail = '',
 }: AuthFormProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
-  const [email, setEmail] = useState('')
+  // For official users the email is supplied up front (e.g. a pre-provisioned
+  // link), so it's prefilled. Otherwise we restore the last remembered email.
+  const [email, setEmail] = useState(initialEmail)
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState(initialPlan)
+  const [remember, setRemember] = useState(false)
 
   const supabase = useMemo(() => createClient(), [])
+
+  // Restore the last remembered email so returning users don't retype it.
+  // Official users already get their email via `initialEmail`, so we skip this.
+  useEffect(() => {
+    if (mode !== 'sign-in' || initialEmail) return
+    try {
+      const raw = window.localStorage.getItem(REMEMBER_KEY)
+      if (raw) {
+        const saved = JSON.parse(raw) as { email?: string; remember?: boolean }
+        if (saved.email) {
+          setEmail(saved.email)
+          setRemember(Boolean(saved.remember))
+        }
+      }
+    } catch {
+      // ignore malformed stored value
+    }
+  }, [mode, initialEmail])
 
   useEffect(() => {
     if (mode !== 'sign-in') return
@@ -83,6 +108,17 @@ export function AuthForm({
         if (!response.ok) {
           const message = await response.text()
           throw new Error(message || 'Sign in failed')
+        }
+
+        // Remember the email for the next visit when the user opted in.
+        try {
+          if (remember) {
+            window.localStorage.setItem(REMEMBER_KEY, JSON.stringify({ email: submittedEmail, remember: true }))
+          } else {
+            window.localStorage.removeItem(REMEMBER_KEY)
+          }
+        } catch {
+          // storage may be unavailable; sign-in still succeeds
         }
 
         window.location.replace(nextPath)
@@ -254,10 +290,10 @@ export function AuthForm({
               <label className="auth-inline-label">
                 <input
                   type="checkbox"
-                  checked={showPassword}
-                  onChange={(event) => setShowPassword(event.target.checked)}
+                  checked={remember}
+                  onChange={(event) => setRemember(event.target.checked)}
                 />
-                Show password
+                Remember me
               </label>
               <Link href="/forgot-password" className="auth-link-button">
                 Forgot password?
