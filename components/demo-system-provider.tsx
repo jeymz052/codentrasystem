@@ -597,6 +597,11 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
   // Ensures the "signed out on another device" handling runs exactly once,
   // even though the poller keeps firing after the session is already revoked.
   const sessionRevokedRef = useRef(false)
+  // Counts consecutive 401s from the poller. A single 401 can be a transient
+  // blip (e.g. cookie not settled right after login), so we only treat the
+  // session as revoked after TWO in a row — a genuine cross-device revoke
+  // stays 401 on every poll, while noise self-corrects on the next refresh.
+  const revokeStreakRef = useRef(0)
 
   useEffect(() => {
     let mounted = true
@@ -630,8 +635,6 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         // of replaying an old workspace. No cache is used in that situation.
         if (error instanceof NoTenantsError) {
           clearDemoCache()
-        } else if (error instanceof SessionRevokedError) {
-          handleSessionRevoked()
         } else {
           // Other failures (network down, timeout, cached tenant gone): reuse
           // the last-known cached state so the user is never stranded. If there
@@ -691,16 +694,20 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       try {
         const remote = await fetchRemoteState(activeTenantId || state.tenant.id)
         if (cancelled || inFlightRef.current > 0) return
+        revokeStreakRef.current = 0
         const resolved = resolveCurrentUser(ensureWasteLocation(remote.state), remote.availableTenants)
         setState((prev) => mergeState(prev, resolved))
         setAvailableTenants(remote.availableTenants)
         setActiveTenantId(remote.activeTenantId)
       } catch (error) {
         // A revoked session (e.g. the same account signed in on another device)
-        // makes /api/system return 401. React in realtime instead of stranding
-        // the user until a page reload: tell them and send them to sign-in.
+        // makes /api/system return 401. To avoid kicking a fresh single-device
+        // login on a transient 401, only act after two consecutive failures.
         if (error instanceof SessionRevokedError) {
-          handleSessionRevoked()
+          revokeStreakRef.current += 1
+          if (revokeStreakRef.current >= 2) handleSessionRevoked()
+        } else {
+          revokeStreakRef.current = 0
         }
         // Keep current state for any other failure (e.g. network unavailable).
       }
@@ -772,20 +779,14 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
     setFeedback((current) => [...current, { id, kind, message }].slice(-3))
   }
 
-  // Called when the server tells us the session is no longer valid — typically
-  // because the same account signed in on a different device, which revokes all
-  // other sessions (see app/api/auth/sign-in/route.ts). A 401 from /api/system
-  // is the real signal (it only happens when supabase.auth.getUser() fails), but
-  // to avoid false positives from a transient network blip we re-confirm the
-  // session is genuinely gone via a direct getUser() before showing the message.
-  async function handleSessionRevoked() {
+  // Called only after the poller has seen the session fail on TWO consecutive
+  // refreshes (see the refresh() below). A single transient 401 from /api/system
+  // (cookie not yet settled, a network blip, or the login form's own mount-time
+  // local sign-out) must NOT count, or a fresh single-device login would be
+  // wrongly kicked. The double-confirmation makes a genuine cross-device revoke
+  // (which stays 401 every poll) reliably detected while ignoring noise.
+  function handleSessionRevoked() {
     if (sessionRevokedRef.current) return
-    try {
-      const { data } = await supabase.auth.getUser()
-      if (data.user) return
-    } catch {
-      // If getUser itself errors, fall through and treat the session as revoked.
-    }
     sessionRevokedRef.current = true
     pushFeedback('error', 'You have been signed out because your account was opened on another device.')
     window.setTimeout(() => {
