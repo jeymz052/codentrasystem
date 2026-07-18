@@ -2765,12 +2765,18 @@ export function recordSale(
     itemIds?: string[]
     movementIds?: string[]
     auditLogId?: string
+    cashierId?: string | null
     split_payments?: SplitPayment[]
   }
 ): { state: DemoSystemState; receiptNumber: string; transactionId: string; itemIds: string[]; movementIds: string[]; auditLogId: string } {
   const now = nowIso()
   const receiptNumber = payload.receiptNumber ?? buildSaleTransactionId(state)
   const transactionId = payload.transactionId ?? id()
+  // Prefer the explicit cashier id (the real signed-in user, passed from the
+  // client) over state.currentUserId. The served/persisted state defaults
+  // currentUserId to the seed super_admin, which would otherwise attribute
+  // every sale to "superadmin" after the server copy wins the merge.
+  const cashierId = payload.cashierId ?? (state.currentUserId || null)
   const posLocation = resolvePosLocation(state, payload.location_id)
   const itemIdIter = payload.itemIds ? payload.itemIds.values() : null
   const movementIdIter = payload.movementIds ? payload.movementIds.values() : null
@@ -2819,7 +2825,7 @@ export function recordSale(
       reference_type: 'sales_transaction',
       location_id: posLocation.location_id,
       pos_store_location: posLocation.pos_store_location,
-      performed_by: state.currentUserId || null,
+      performed_by: cashierId || null,
       notes: payload.notes?.trim() || null,
       created_at: now,
       product: nextState.products.find((row) => row.id === product.id),
@@ -2841,7 +2847,7 @@ export function recordSale(
     id: transactionId,
     tenant_id: state.tenant.id,
     receipt_number: receiptNumber,
-    cashier_id: state.currentUserId || null,
+    cashier_id: cashierId || null,
     shift_id: openShiftId,
     location_id: posLocation.location_id,
     pos_store_location: posLocation.pos_store_location,
@@ -2867,7 +2873,7 @@ export function recordSale(
     refund_reason: null,
     parent_transaction_id: null,
     created_at: now,
-    cashier: state.users.find((user) => user.id === state.currentUserId) ?? undefined,
+    cashier: state.users.find((user) => user.id === cashierId) ?? undefined,
     items,
   }
 
@@ -2875,7 +2881,7 @@ export function recordSale(
   const auditLogEntries = allTransactions.map((tx, index) => ({
     id: index === 0 ? (payload.auditLogId ?? id()) : id(),
     tenant_id: state.tenant.id,
-    user_id: state.currentUserId || null,
+    user_id: cashierId || null,
     action: index === 0 ? 'sale.completed' : 'sale.split.completed',
     target_type: 'sale' as const,
     target_id: tx.id,
@@ -2887,7 +2893,7 @@ export function recordSale(
       shift_id: openShiftId,
       parent_transaction_id: index === 0 ? null : transactionId,
     },
-    performed_by: state.currentUserId || null,
+    performed_by: cashierId || null,
     performed_at: now,
   }))
 

@@ -560,7 +560,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         // to its server-side status (e.g. draft) after a few seconds.
         const hasMutated = inFlightRef.current > 0
         if (!hasMutated) {
-          const resolvedRemote = resolveCurrentUser(ensureWasteLocation(remote.state))
+          const resolvedRemote = resolveCurrentUser(ensureWasteLocation(remote.state), remote.availableTenants)
           if (resolvedRemote.tenant.id !== state.tenant.id) {
             setState(resolvedRemote)
           } else {
@@ -589,14 +589,17 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
           const matchesRequest =
             initialTenantId && (cached.tenant.id === initialTenantId || cachedId === initialTenantId)
           if (hasCache && (matchesRequest || !initialTenantId || !cachedId)) {
-            setState(resolveCurrentUser(ensureWasteLocation(cached)))
+            const resolvedCache = resolveCurrentUser(ensureWasteLocation(cached))
+            const cachedUser = resolvedCache.users.find((u) => u.id === resolvedCache.currentUserId)
+            const cachedRole = cachedUser?.role ?? (isSuperAdminIdentity ? 'super_admin' : 'admin')
+            setState(resolvedCache)
             setAvailableTenants([{
               id: cached.tenant.id,
               name: cached.tenant.name,
               business_type: cached.tenant.business_type,
               plan: cached.tenant.plan,
               subscription_status: cached.tenant.subscription_status,
-              role: isSuperAdminIdentity ? 'super_admin' : 'admin',
+              role: cachedRole,
               is_default: true,
             }])
             setActiveTenantId(cached.tenant.id)
@@ -635,7 +638,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       try {
         const remote = await fetchRemoteState(activeTenantId || state.tenant.id)
         if (cancelled || inFlightRef.current > 0) return
-        const resolved = resolveCurrentUser(ensureWasteLocation(remote.state))
+        const resolved = resolveCurrentUser(ensureWasteLocation(remote.state), remote.availableTenants)
         setState((prev) => mergeState(prev, resolved))
         setAvailableTenants(remote.availableTenants)
         setActiveTenantId(remote.activeTenantId)
@@ -721,17 +724,20 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
   // a user entry from their auth identity so the POS always shows the real
   // logged-in person's name and email instead of falling back to the seed
   // superadmin.
-  function resolveCurrentUser(next: DemoSystemState): DemoSystemState {
+  function resolveCurrentUser(next: DemoSystemState, tenants?: AccessibleTenant[]): DemoSystemState {
     if (!authUserEmail) return next
     const normalized = authUserEmail.trim().toLowerCase()
-    const existing = next.users.find((u) => (u.email ?? '').trim().toLowerCase() === normalized)
     const currentUser = next.currentUserId ? next.users.find((u) => u.id === next.currentUserId) : undefined
-    if (currentUser) return next
+    if (currentUser && (currentUser.email ?? '').trim().toLowerCase() === normalized) {
+      return next
+    }
+    const existing = next.users.find((u) => (u.email ?? '').trim().toLowerCase() === normalized)
     if (existing) {
       return { ...next, currentUserId: existing.id }
     }
 
-    const activeTenantRole = availableTenants.find((t) => t.id === (activeTenantId || next.tenant.id))?.role
+    const tenantList = tenants ?? availableTenants
+    const activeTenantRole = tenantList.find((t) => t.id === (activeTenantId || next.tenant.id))?.role
     const authUserId = `auth:${normalized}`
     const displayName = (authUserEmail.split('@')[0] || 'User')
       .split(/[._-]/)
@@ -754,6 +760,20 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       currentUserId: authUserId,
       users: [...next.users, syntheticUser],
     }
+  }
+
+  // Resolve the real signed-in user's id from their auth email. The persisted
+  // demo state defaults currentUserId to the seed super_admin, so callers that
+  // need the actual logged-in person (e.g. attributing a sale to a cashier)
+  // must re-point to the matching user row instead of trusting state.currentUserId.
+  function resolveCurrentUserId(next: DemoSystemState): string {
+    if (authUserEmail) {
+      const normalized = authUserEmail.trim().toLowerCase()
+      const existing = next.users.find((u) => (u.email ?? '').trim().toLowerCase() === normalized)
+      if (existing) return existing.id
+      return `auth:${normalized}`
+    }
+    return next.currentUserId || next.users[0]?.id || ''
   }
 
   function mergeState(local: DemoSystemState, remote: DemoSystemState): DemoSystemState {
@@ -1059,8 +1079,15 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       const itemIds = payload.items.map(() => id())
       const movementIds = payload.items.map(() => id())
       const auditLogId = id()
+      // The server's persisted state always defaults currentUserId to the seed
+      // super_admin (see system-db ensureDatabaseState), so recordSale would
+      // otherwise attribute every sale to "superadmin@test.com" once the server
+      // copy wins the merge. Send the real signed-in user's id so the server
+      // attributes the sale to the actual cashier (matching the client).
+      const cashierId = resolveCurrentUserId(state)
       const local = recordSale(state, {
         ...payload,
+        cashierId,
         receiptNumber,
         transactionId,
         itemIds,
@@ -1070,6 +1097,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       sync(
         (current) => recordSale(current, {
           ...payload,
+          cashierId,
           receiptNumber,
           transactionId,
           itemIds,
@@ -1080,6 +1108,7 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
           action: 'completeSale',
           payload: {
             ...payload,
+            cashierId,
             receiptNumber,
             transactionId,
             itemIds,

@@ -238,10 +238,17 @@ const blankCheckout: PendingSale = {
 }
 
 export default function POSPage() {
-  const { state, availableTenants, activeTenantId, completeSale, formatCurrency, notifyError, notifySuccess, voidSale, refundSale, requestDeletion, openShift, closeShift, recordCashMovement } = useDemoSystem()
+  const { state, availableTenants, activeTenantId, authUserEmail, completeSale, formatCurrency, notifyError, notifySuccess, voidSale, refundSale, requestDeletion, openShift, closeShift, recordCashMovement } = useDemoSystem()
   const activeTenant = availableTenants.find((tenant) => tenant.id === (activeTenantId || state.tenant.id)) ?? availableTenants[0]
   const role = activeTenant?.role ?? 'sales_staff'
   const perms = getRolePermissions(role)
+
+  const currentCashier = useMemo(() => {
+    if (!authUserEmail) return null
+    const normalized = authUserEmail.trim().toLowerCase()
+    return state.users.find((u) => (u.email ?? '').trim().toLowerCase() === normalized) ?? null
+  }, [state.users, authUserEmail])
+  const cashierLabel = currentCashier?.full_name?.trim() || currentCashier?.email || 'Sales Staff'
 
   function formatClock(value: string | null | undefined): string {
     if (!value) return '—'
@@ -326,11 +333,9 @@ export default function POSPage() {
   const posStoreLocationId = currentShift?.location_id ?? posStoreLocations[0] ?? ''
   const lastClosedShift = useMemo(() => {
     return [...state.cashShifts]
-      .filter((shift) => shift.status === 'closed' && shift.closed_by === state.currentUserId)
+      .filter((shift) => shift.status === 'closed' && shift.closed_by === (currentCashier?.id ?? ''))
       .sort((a, b) => (b.closed_at ?? '').localeCompare(a.closed_at ?? ''))[0] ?? null
-  }, [state.cashShifts, state.currentUserId])
-  const currentCashier = state.users.find((user) => user.id === state.currentUserId) ?? null
-  const cashierLabel = currentCashier?.full_name?.trim() || currentCashier?.email || 'Sales Staff'
+  }, [state.cashShifts, currentCashier?.id])
   const recentTx = useMemo(() => {
     return [...state.salesTransactions]
       .slice()
@@ -545,7 +550,7 @@ export default function POSPage() {
           const sale = pendingSale
           if (!sale) return
 
-          const cashierName = state.users.find((user) => user.id === state.currentUserId)?.full_name ?? 'Sales Staff'
+          const cashierName = currentCashier?.full_name ?? 'Sales Staff'
           setLastReceipt({
             receiptNo: data.receiptNumber ?? qrSession.intentId,
             items: sale.items,
@@ -643,7 +648,7 @@ export default function POSPage() {
           description: `POS sale - ${state.tenant.name}`,
           reference: receiptHint,
           tenantId: state.tenant.id,
-          cashierId: state.currentUserId,
+          cashierId: currentCashier?.id ?? state.currentUserId,
           receiptNumber: receiptHint,
           locationId,
           notes: `QR Ph payment at ${state.tenant.name}`,
@@ -687,7 +692,7 @@ export default function POSPage() {
       return
     }
 
-    const cashierName = state.users.find((user) => user.id === state.currentUserId)?.full_name ?? 'Sales Staff'
+    const cashierName = currentCashier?.full_name ?? 'Sales Staff'
     const saleItems = cart.map((item) => {
       const lineNet = item.sellingPrice * item.quantity - item.discount
       const share = subtotal > 0 ? lineNet / subtotal : 0
