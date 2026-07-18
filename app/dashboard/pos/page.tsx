@@ -1076,6 +1076,21 @@ export default function POSPage() {
           // refunded/voided sale (cash out), so the list agrees with the balance.
           type LedgerRow = { id: string; label: string; amount: number; isOut: boolean; at: string; tint: string }
           const ledger: LedgerRow[] = []
+          // Surface the opening float as a transparent "+Starting Cash" line so
+          // the cashier can see exactly where the drawer's starting balance came
+          // from when the shift first opens. Anchored to the shift's open time so
+          // it sorts to the very top of the tape.
+          const openingFloatAmount = Number(currentShift.opening_float ?? 0)
+          if (openingFloatAmount > 0) {
+            ledger.push({
+              id: `opening-${currentShift.id}`,
+              label: 'Starting Cash',
+              amount: openingFloatAmount,
+              isOut: false,
+              at: currentShift.opened_at ?? currentShift.created_at ?? new Date().toISOString(),
+              tint: '#FEF3C7',
+            })
+          }
           for (const m of state.cashMovements) {
             if (m.shift_id !== currentShift.id) continue
             // denomination_adjustment is dead data (no UI creates it); skip it.
