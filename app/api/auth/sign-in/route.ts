@@ -63,18 +63,20 @@ export async function POST(request: NextRequest) {
     // We use the service-role admin client with the NEW session's access token
     // and `scope: 'others'`, which revokes every server-tracked session for
     // this user EXCEPT the one just created — so the device that just signed
-    // in stays logged in and the old device (any tab/browser) is kicked on its
-    // next request. The route client's own signOut({ scope: 'others' }) does
-    // NOT work here because it only knows about its own request-scoped session.
+    // in stays logged in and the old device (any other browser/device) is
+    // kicked on its next request. NOTE: two tabs in the SAME browser share one
+    // cookie session, so signing in on a second tab just refreshes that same
+    // session and there is nothing to revoke — test this across different
+    // browsers/devices, not two tabs of the same browser.
     if (data.session?.access_token) {
-      await serviceClient.auth.admin
+      const revoke = await serviceClient.auth.admin
         .signOut(data.session.access_token, 'others')
-        .catch(() => {
-          // Best-effort: if session revocation fails, the new login still
-          // succeeds rather than stranding the user.
-        })
+      if (revoke.error) {
+        console.error('[sign-in] failed to revoke other sessions:', revoke.error.message)
+      }
     }
   }
+
 
   return response
 }

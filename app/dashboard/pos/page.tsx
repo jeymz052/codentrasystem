@@ -1929,7 +1929,7 @@ export default function POSPage() {
                       <span>{count} item{count !== 1 ? 's' : ''}</span>
                       <span>{cashier}</span>
                     </div>
-                    {isCompleted && currentShift && tx.shift_id === currentShift.id && (perms.canVoidSales || perms.canRefundSales) && (
+                    {isCompleted && currentShift && (perms.canVoidSales || perms.canRefundSales) && (
                       <div style={{ display: 'flex', gap: 6, marginTop: 10, justifyContent: 'flex-end' }}>
                         {perms.canVoidSales && (
                           <button

@@ -121,8 +121,8 @@ type MutationPayload =
   | { action: 'updatePurchaseOrder'; purchaseOrderId: string; draft: PurchaseOrderDraft }
   | { action: 'cancelPurchaseOrder'; purchaseOrderId: string }
   | { action: 'requestDeletion'; requestedAction: MutationAction; targetType: string; targetId: string; details: Record<string, unknown>; requestedBy: string }
-  | { action: 'approveDeletion'; requestId: string }
-  | { action: 'rejectDeletion'; requestId: string }
+  | { action: 'approveDeletion'; requestId: string; notes?: string }
+  | { action: 'rejectDeletion'; requestId: string; notes?: string }
   | { action: 'markNotificationRead'; notificationId: string }
   | { action: 'markAllNotificationsRead' }
 
@@ -1058,10 +1058,10 @@ export async function applyDatabaseMutation(
       state = requestDeletion(state, mutation.requestedAction, mutation.targetType, mutation.targetId, mutation.details, mutation.requestedBy)
       break
     case 'approveDeletion':
-      state = approveDeletion(state, mutation.requestId)
+      state = approveDeletion(state, mutation.requestId, mutation.notes)
       break
     case 'rejectDeletion':
-      state = rejectDeletion(state, mutation.requestId)
+      state = rejectDeletion(state, mutation.requestId, mutation.notes)
       break
     case 'markNotificationRead':
       state = markNotificationRead(state, mutation.notificationId)
