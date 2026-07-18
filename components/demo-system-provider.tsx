@@ -527,13 +527,6 @@ async function fetchRemoteState(tenantId?: string | null) {
       if (response.status === 409) {
         throw new NoTenantsError()
       }
-      // A 401 means the session is no longer valid — most commonly because the
-      // same account signed in on another device, which (per the sign-in route)
-      // revokes all other server-tracked sessions. Surface it as a typed error
-      // so the app can react in realtime instead of waiting for a page reload.
-      if (response.status === 401) {
-        throw new SessionRevokedError()
-      }
       const body = await response.text()
       throw new Error(body || 'Failed to load system state')
     }
@@ -547,13 +540,6 @@ class NoTenantsError extends Error {
   constructor() {
     super('No tenants')
     this.name = 'NoTenantsError'
-  }
-}
-
-class SessionRevokedError extends Error {
-  constructor() {
-    super('Session revoked')
-    this.name = 'SessionRevokedError'
   }
 }
 
@@ -597,11 +583,6 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
   // Ensures the "signed out on another device" handling runs exactly once,
   // even though the poller keeps firing after the session is already revoked.
   const sessionRevokedRef = useRef(false)
-  // Counts consecutive 401s from the poller. A single 401 can be a transient
-  // blip (e.g. cookie not settled right after login), so we only treat the
-  // session as revoked after TWO in a row — a genuine cross-device revoke
-  // stays 401 on every poll, while noise self-corrects on the next refresh.
-  const revokeStreakRef = useRef(0)
 
   useEffect(() => {
     let mounted = true
@@ -694,22 +675,16 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
       try {
         const remote = await fetchRemoteState(activeTenantId || state.tenant.id)
         if (cancelled || inFlightRef.current > 0) return
-        revokeStreakRef.current = 0
         const resolved = resolveCurrentUser(ensureWasteLocation(remote.state), remote.availableTenants)
         setState((prev) => mergeState(prev, resolved))
         setAvailableTenants(remote.availableTenants)
         setActiveTenantId(remote.activeTenantId)
-      } catch (error) {
-        // A revoked session (e.g. the same account signed in on another device)
-        // makes /api/system return 401. To avoid kicking a fresh single-device
-        // login on a transient 401, only act after two consecutive failures.
-        if (error instanceof SessionRevokedError) {
-          revokeStreakRef.current += 1
-          if (revokeStreakRef.current >= 2) handleSessionRevoked()
-        } else {
-          revokeStreakRef.current = 0
-        }
-        // Keep current state for any other failure (e.g. network unavailable).
+      } catch {
+        // Keep current state for any failure (network down, transient 401, etc).
+        // A revoked session is NO LONGER handled here — the only trigger for the
+        // "signed out on another device" message is the explicit realtime
+        // `user.session_revoked` audit event, so this can never kick a normal
+        // single-device login.
       }
     }
 
@@ -729,6 +704,22 @@ export function DemoSystemProvider({ children, initialTenantId, authUserEmail = 
         .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_shifts', filter: `tenant_id=eq.${tenantId}` }, () => void refresh())
         .on('postgres_changes', { event: '*', schema: 'public', table: 'deletion_requests', filter: `tenant_id=eq.${tenantId}` }, () => void refresh())
         .on('postgres_changes', { event: '*', schema: 'public', table: 'audit_logs', filter: `tenant_id=eq.${tenantId}` }, () => void refresh())
+        // Precise cross-device kick detection: the sign-in route writes a
+        // `user.session_revoked` audit row targeting the victim's auth user id
+        // ONLY when a second device signs in and revokes the other sessions.
+        // We react solely to that specific event, so the "signed out on another
+        // device" message never appears on a normal single-device login or a
+        // transient error (those are not observable here at all).
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'audit_logs', filter: `tenant_id=eq.${tenantId}` }, (payload) => {
+          const record = payload.new as { action?: string; user_id?: string } | null
+          if (record?.action === 'user.session_revoked' && record.user_id) {
+            void supabase.auth.getUser().then(({ data }) => {
+              if (data.user && data.user.id === record.user_id) {
+                handleSessionRevoked()
+              }
+            })
+          }
+        })
         .subscribe()
     } catch {
       // Realtime is best-effort; polling remains the fallback.

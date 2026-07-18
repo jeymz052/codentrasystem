@@ -73,6 +73,21 @@ export async function POST(request: NextRequest) {
         .signOut(data.session.access_token, 'others')
       if (revoke.error) {
         console.error('[sign-in] failed to revoke other sessions:', revoke.error.message)
+      } else if (tenantId) {
+        // Record the kick as a realtime-observable event so the device(s) that
+        // just got signed out can show a precise "signed out on another device"
+        // message. This is the ONLY trigger for that message on the client, so
+        // it never fires on a normal single-device login or a transient error.
+        await serviceClient.from('audit_logs').insert({
+          tenant_id: tenantId,
+          user_id: user.id,
+          action: 'user.session_revoked',
+          target_type: 'user',
+          target_id: user.id,
+          details: { email },
+          performed_by: user.id,
+          performed_at: new Date().toISOString(),
+        })
       }
     }
   }
