@@ -278,7 +278,7 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
                     {userNotifications.length > 0 && (
                       <div>
                         <div style={{ padding: '8px 16px', fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#94A3B8', background: '#FBFCFE', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span>Approval updates</span>
+                          <span>Updates</span>
                           <button
                             type="button"
                             onClick={() => markAllNotificationsRead()}
@@ -288,16 +288,27 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
                           </button>
                         </div>
                         {userNotifications.map((notif) => {
+                          const isBilling = notif.type === 'billing'
                           const isApproved = notif.title.includes('Approved')
                           const isRejected = notif.title.includes('Rejected')
+                          // Billing failures / cancellations / suspensions read as negative.
+                          const isNegative = isBilling
+                            ? /fail|cancel|suspend|overdue|expir|ended|grace/i.test(`${notif.title} ${notif.message}`)
+                            : isRejected
+                          const accent = isBilling
+                            ? (isNegative ? '#DC2626' : '#3B82F6')
+                            : (isApproved ? '#16A34A' : '#DC2626')
+                          const bg = isBilling
+                            ? (isNegative ? '#FEF2F2' : '#EFF6FF')
+                            : (isRejected ? '#FEF2F2' : '#F0FDF4')
                           return (
                             <div
                               key={notif.id}
                               style={{
                                 padding: '12px 16px',
                                 borderBottom: '1px solid #F1F5F9',
-                                background: isRejected ? '#FEF2F2' : '#F0FDF4',
-                                borderLeft: `3px solid ${isApproved ? '#16A34A' : isRejected ? '#DC2626' : '#DC2626'}`,
+                                background: bg,
+                                borderLeft: `3px solid ${accent}`,
                                 display: 'flex',
                                 gap: 10,
                                 alignItems: 'flex-start',

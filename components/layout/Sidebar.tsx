@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, Package, ShoppingCart, Truck,
   BarChart3, Settings, ArrowLeftRight,
-  CreditCard, Users, Building2, LogOut, Factory, CheckCircle2,
+  CreditCard, Users, Building2, LogOut, Factory, CheckCircle2, Wallet, FilePenLine,
 } from 'lucide-react'
 import { useDemoSystem } from '@/components/demo-system-provider'
 import { canAccessDashboardPath, formatRoleLabel } from '@/lib/access-control'
@@ -16,13 +16,15 @@ const NAV = [
   { href: '/dashboard/inventory',  icon: Package,          label: 'Inventory',        roles: ['admin','manager','supervisor','inventory_staff','production_staff','purchasing_staff'] },
   { href: '/dashboard/pos',        icon: CreditCard,       label: 'Point of Sale',    roles: ['admin','manager','supervisor','sales_staff'] },
   { href: '/dashboard/production', icon: Factory,          label: 'Production',       roles: ['admin','manager','supervisor','production_staff'] },
-  { href: '/dashboard/movements',  icon: ArrowLeftRight,   label: 'Stock Movements',  roles: ['admin','manager','supervisor','inventory_staff','production_staff'] },
+  { href: '/dashboard/movements',  icon: ArrowLeftRight,   label: 'Stock Movements',  roles: ['admin','manager','supervisor','inventory_staff','production_staff','purchasing_staff'] },
   { href: '/dashboard/orders',     icon: ShoppingCart,     label: 'Purchase Orders',  roles: ['admin','manager','supervisor','purchasing_staff'] },
   { href: '/dashboard/suppliers',  icon: Truck,            label: 'Suppliers',        roles: ['admin','manager','supervisor','purchasing_staff'] },
   { href: '/dashboard/approvals',  icon: CheckCircle2,     label: 'Approvals',        roles: ['admin','manager','supervisor'] },
   { href: '/dashboard/reports',    icon: BarChart3,        label: 'Reports',          roles: ['admin','manager','supervisor'] },
+  { href: '/dashboard/billing',    icon: Wallet,           label: 'Billing',          roles: ['admin','super_admin'] },
   { href: '/dashboard/users',      icon: Users,            label: 'Users',            roles: ['admin'] },
   { href: '/dashboard/settings',   icon: Settings,         label: 'Settings',         roles: ['admin'] },
+  { href: '/dashboard/website-content', icon: FilePenLine, label: 'Website Content', roles: ['super_admin'] },
 ]
 
 type SidebarProps = {
@@ -52,7 +54,7 @@ export function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps) {
             width={170}
             height={60}
             priority
-            style={{ width: '170px', height: 'auto', objectFit: 'contain' }}
+            style={{ height: 32, maxHeight: 32, width: 'auto', maxWidth: 140, objectFit: 'contain' }}
           />
         </div>
         <div style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', color: '#94A3B8', marginTop: 8, textTransform: 'uppercase' }}>
@@ -105,15 +107,15 @@ export function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps) {
               borderRadius: 8,
               marginBottom: 1,
               textDecoration: 'none',
-              background: path.startsWith('/admin') ? '#DBEAFE' : 'transparent',
-              color: path.startsWith('/admin') ? '#3B82F6' : '#475569',
-              fontWeight: path.startsWith('/admin') ? 600 : 400,
+              background: path.startsWith('/admin/tenants') ? '#DBEAFE' : 'transparent',
+              color: path.startsWith('/admin/tenants') ? '#3B82F6' : '#475569',
+              fontWeight: path.startsWith('/admin/tenants') ? 600 : 400,
               fontSize: 13,
               transition: 'all 0.15s',
               position: 'relative',
             }}
           >
-            {path.startsWith('/admin') && (
+            {path.startsWith('/admin/tenants') && (
               <span style={{
                 position: 'absolute',
                 left: 0,
@@ -125,7 +127,7 @@ export function Sidebar({ mobileOpen = false, onNavigate }: SidebarProps) {
                 borderRadius: '0 3px 3px 0',
               }} />
             )}
-            <Building2 size={16} strokeWidth={path.startsWith('/admin') ? 2.5 : 2} />
+            <Building2 size={16} strokeWidth={path.startsWith('/admin/tenants') ? 2.5 : 2} />
             <span style={{ flex: 1 }}>Tenant Monitor</span>
           </Link>
         )}

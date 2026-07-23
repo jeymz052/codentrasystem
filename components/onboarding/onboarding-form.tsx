@@ -24,11 +24,12 @@ const DEFAULT_STATE: OnboardingFormState = {
   timezone: DEFAULT_TIMEZONE,
 }
 
-export function OnboardingForm({ initialPlan }: { initialPlan?: string }) {
+export function OnboardingForm({ initialPlan, initialInterval = 'month' }: { initialPlan?: string; initialInterval?: string }) {
   const router = useRouter()
   const initialPlanValue: string = SUBSCRIPTION_PLANS.some((plan) => plan.plan === initialPlan)
     ? initialPlan ?? DEFAULT_STATE.plan
     : DEFAULT_STATE.plan
+  const initialIntervalValue: string = initialInterval === 'year' ? 'year' : 'month'
   const [form, setForm] = useState<OnboardingFormState>({
     ...DEFAULT_STATE,
     plan: initialPlanValue,
@@ -45,7 +46,7 @@ export function OnboardingForm({ initialPlan }: { initialPlan?: string }) {
       const response = await fetch('/api/onboarding', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, interval: initialIntervalValue }),
       })
 
       if (!response.ok) {
@@ -54,6 +55,26 @@ export function OnboardingForm({ initialPlan }: { initialPlan?: string }) {
 
       window.localStorage.removeItem('codentra.demo-cache.v3')
       window.localStorage.removeItem('codentra.active-tenant.v3')
+
+      // If the user arrived here from a pricing CTA, complete the Stripe
+      // subscription (7-day trial) right after onboarding. Otherwise go to
+      // the dashboard.
+      if (initialPlanValue && initialPlanValue !== 'starter') {
+        try {
+          const checkout = await fetch('/api/billing-checkout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tenantId: (await response.json()).tenantId, plan: initialPlanValue, interval: initialIntervalValue }),
+          })
+          const checkoutData = (await checkout.json()) as { url?: string }
+          if (checkoutData.url) {
+            window.location.href = checkoutData.url
+            return
+          }
+        } catch {
+          // Fall through to dashboard if checkout fails; user can retry in Settings.
+        }
+      }
       router.replace('/dashboard')
       router.refresh()
     } catch (requestError) {

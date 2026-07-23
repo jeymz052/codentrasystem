@@ -29,7 +29,6 @@ export default function SettingsPage() {
   // are quarantine storage kept separate, so they don't consume plan slots.
   const storageLocations = state.locations.filter((location) => !location.is_waste_location)
   const wasteLocations = state.locations.filter((location) => location.is_waste_location)
-  const [billingLoading, setBillingLoading] = useState(false)
   const [catalogTab, setCatalogTab] = useState<'categories' | 'uom' | 'locations'>('categories')
   const [categoryForm, setCategoryForm] = useState({ name: '', color: '#3B82F6', description: '' })
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null)
@@ -315,26 +314,10 @@ export default function SettingsPage() {
   }
 
   async function handleBilling() {
-    setBillingLoading(true)
-    try {
-      const response = await fetch('/api/billing-checkout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tenantId: state.tenant.id, plan: form.plan }),
-      })
-      if (!response.ok) {
-        throw new Error(await response.text() || 'Failed to start billing checkout')
-      }
-      const data = await response.json() as { url?: string }
-      if (data.url) {
-        window.location.href = data.url
-      }
-    } catch (error) {
-      notifyError(error instanceof Error ? error.message : 'Failed to start billing checkout')
-    } finally {
-      setBillingLoading(false)
-    }
+    const el = document.getElementById('billing')
+    if (el) el.scrollIntoView({ behavior: 'smooth' })
   }
+  void handleBilling
 
   const overviewCards = [
     { label: 'Plan', value: state.tenant.plan, icon: Coins, color: '#3B82F6' },
@@ -383,9 +366,9 @@ export default function SettingsPage() {
           </div>
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button className="btn btn-primary" onClick={() => void handleBilling()} disabled={billingLoading}>
-              <SettingsIcon size={15} /> {billingLoading ? 'Opening billing...' : 'Manage billing'}
-            </button>
+            <a href="/dashboard/billing" className="btn btn-primary" style={{ textDecoration: 'none' }}>
+              <SettingsIcon size={15} /> Manage billing
+            </a>
           </div>
         </div>
       </section>
@@ -578,11 +561,11 @@ export default function SettingsPage() {
         <div className="card" style={{ padding: 20, borderRadius: 20 }}>
           <div className="auth-badge" style={{ marginBottom: 10 }}>
             <Coins size={14} />
-            Billing and status
+            Usage this workspace
           </div>
           <h3 style={{ fontSize: 18, fontWeight: 900, color: '#0F172A', letterSpacing: '-0.04em' }}>Current state</h3>
           <p style={{ fontSize: 13, color: '#64748B', marginTop: 4, lineHeight: 1.6 }}>
-            Quick view of what’s active in the workspace today.
+            Quick view of what’s active in the workspace today. Full billing is below.
           </p>
 
           <div style={{ display: 'grid', gap: 10, marginTop: 16 }}>
@@ -596,7 +579,7 @@ export default function SettingsPage() {
             ].map((item) => (
               <div key={item.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 12px', borderRadius: 12, background: '#F8FBFF', border: '1px solid #D8E4F2' }}>
                 <div style={{ fontSize: 12, color: '#64748B', fontWeight: 700 }}>{item.label}</div>
-                <div style={{ fontSize: 13, fontWeight: 900, color: item.color }}>{item.value}</div>
+                <div style={{ fontSize: 13, fontWeight: 900, color: item.color, textTransform: 'capitalize' }}>{item.value}</div>
               </div>
             ))}
           </div>
@@ -611,7 +594,7 @@ export default function SettingsPage() {
 
       <section className="card" style={{ padding: 20, borderRadius: 20 }}>
         <div className="auth-badge" style={{ marginBottom: 10 }}>
-          <Wallet size={14} /> Store payment accounts
+          <Wallet size={14} /> Direct payment accounts
         </div>
         <h3 style={{ fontSize: 18, fontWeight: 900, color: '#0F172A', letterSpacing: '-0.04em' }}>Direct payment accounts</h3>
         <p style={{ fontSize: 13, color: '#64748B', marginTop: 4, lineHeight: 1.6 }}>

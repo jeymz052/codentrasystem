@@ -10,8 +10,11 @@ export type DashboardPath =
   | '/dashboard/suppliers'
   | '/dashboard/approvals'
   | '/dashboard/reports'
+  | '/dashboard/billing'
   | '/dashboard/users'
   | '/dashboard/settings'
+  | '/dashboard/website-content'
+  | '/admin/tenants'
 
 export type MutationAction =
   | 'resetDemo'
@@ -122,8 +125,11 @@ const SUPER_ADMIN_PATHS = new Set<DashboardPath>([
   '/dashboard/suppliers',
   '/dashboard/approvals',
   '/dashboard/reports',
+  '/dashboard/billing',
   '/dashboard/users',
   '/dashboard/settings',
+  '/dashboard/website-content',
+  '/admin/tenants',
 ])
 
 const ADMIN_PATHS = new Set<DashboardPath>([
@@ -136,6 +142,7 @@ const ADMIN_PATHS = new Set<DashboardPath>([
   '/dashboard/suppliers',
   '/dashboard/approvals',
   '/dashboard/reports',
+  '/dashboard/billing',
   '/dashboard/users',
   '/dashboard/settings',
 ])

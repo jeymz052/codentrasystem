@@ -32,6 +32,26 @@ export default function DashboardPage() {
   const renewalLabel = renewalDate
     ? `${state.tenant.subscription_status === 'trial' ? 'Trial ends' : 'Renews'} ${formatShortDate(renewalDate)}`
     : 'No renewal date'
+
+  const billingBanner = (() => {
+    const st = state.tenant.subscription_status
+    const daysLeft = (iso: string | null) => (iso ? Math.max(0, Math.ceil((new Date(iso).getTime() - Date.now()) / 86400000)) : null)
+    if (st === 'trial' && state.tenant.trial_ends_at) {
+      const d = daysLeft(state.tenant.trial_ends_at)
+      return { tone: 'warning' as const, text: `Free trial — ${d} day${d === 1 ? '' : 's'} left. Subscribe to keep access after ${formatShortDate(state.tenant.trial_ends_at)}.` }
+    }
+    if (st === 'past_due' && state.tenant.grace_period_ends_at) {
+      const d = daysLeft(state.tenant.grace_period_ends_at)
+      return { tone: 'danger' as const, text: `Payment failed. Update your card within ${d} day${d === 1 ? '' : 's'} (by ${formatShortDate(state.tenant.grace_period_ends_at)}) or your subscription ends.` }
+    }
+    if (st === 'suspended') {
+      return { tone: 'danger' as const, text: 'Your subscription is suspended. Subscribe from Settings to restore full access.' }
+    }
+    if (state.tenant.cancel_at_period_end && state.tenant.current_period_end) {
+      return { tone: 'warning' as const, text: `Subscription set to cancel on ${formatShortDate(state.tenant.current_period_end)}.` }
+    }
+    return null
+  })()
   const planUsage = [
     { label: 'Users', used: visibleUsers.length, limit: typeof plan.users === 'number' ? plan.users : visibleUsers.length, color: '#2563EB' },
     { label: 'Products', used: state.products.length, limit: typeof plan.products === 'number' ? plan.products : state.products.length, color: '#10B981' },
@@ -193,6 +213,32 @@ export default function DashboardPage() {
 
   return (
     <div>
+      {billingBanner && (
+        <Link
+          href="/dashboard/settings#billing"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            textDecoration: 'none',
+            padding: '12px 16px',
+            marginBottom: 16,
+            borderRadius: 14,
+            fontSize: 13,
+            fontWeight: 700,
+            lineHeight: 1.5,
+            color: billingBanner.tone === 'danger' ? '#B91C1C' : '#B45309',
+            background: billingBanner.tone === 'danger' ? '#FEF2F2' : '#FFFBEB',
+            border: `1px solid ${billingBanner.tone === 'danger' ? '#FECACA' : '#FDE68A'}`,
+          }}
+        >
+          <AlertTriangle size={16} style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1 }}>{billingBanner.text}</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+            Manage billing <ArrowRight size={14} />
+          </span>
+        </Link>
+      )}
       <div className="card" style={{ position: 'relative', padding: 24, marginBottom: 22, borderRadius: 22, overflow: 'hidden', background: 'linear-gradient(135deg, #F8FBFF 0%, #FFFFFF 58%, #EEF6FF 100%)' }}>
         <div style={{ position: 'absolute', inset: 'auto -80px -70px auto', width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle, rgba(59,130,246,0.20) 0%, rgba(59,130,246,0.00) 70%)', pointerEvents: 'none' }} />
         <div style={{ position: 'absolute', inset: '-70px auto auto -90px', width: 260, height: 260, borderRadius: '50%', background: 'radial-gradient(circle, rgba(16,185,129,0.14) 0%, rgba(16,185,129,0.00) 68%)', pointerEvents: 'none' }} />

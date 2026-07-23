@@ -1,7 +1,22 @@
 // types/database.ts
 
 export type SubscriptionPlan = 'starter' | 'professional' | 'enterprise'
-export type SubscriptionStatus = 'active' | 'inactive' | 'suspended' | 'trial'
+export type SubscriptionStatus = 'active' | 'inactive' | 'suspended' | 'trial' | 'past_due'
+export type BillingInterval = 'month' | 'year'
+export type BillingEventType =
+  | 'trial_started'
+  | 'subscription_started'
+  | 'payment_succeeded'
+  | 'payment_failed'
+  | 'card_expiring'
+  | 'card_updated'
+  | 'subscription_renewed'
+  | 'subscription_cancelled'
+  | 'plan_changed'
+  | 'grace_started'
+  | 'subscription_ended'
+  | 'invoice_upcoming'
+  | 'trial_will_end'
 export type BusinessType = 'retail' | 'manufacturing'
 export type UserRole = 'super_admin' | 'admin' | 'manager' | 'supervisor' | 'inventory_staff' | 'sales_staff' | 'production_staff' | 'purchasing_staff'
 export type MutationAction =
@@ -106,6 +121,15 @@ export interface Tenant {
   stripe_customer_id: string | null
   stripe_subscription_id: string | null
   stripe_price_id: string | null
+  billing_interval: BillingInterval | null
+  grace_period_ends_at: string | null
+  current_period_end: string | null
+  cancel_at_period_end: boolean
+  has_used_trial: boolean
+  card_brand: string | null
+  card_last4: string | null
+  card_exp_month: number | null
+  card_exp_year: number | null
   pos_location_id: string | null
   pos_store_locations: string[]
   pos_stations: string[]
@@ -466,10 +490,45 @@ export interface Notification {
   user_id: string
   title: string
   message: string
-  type: 'approval_result' | 'info'
+  type: 'approval_result' | 'info' | 'billing'
   read: boolean
   created_at: string
   reference_id?: string
+}
+
+export interface BillingEvent {
+  id: string
+  tenant_id: string
+  event_type: BillingEventType
+  title: string
+  description: string | null
+  amount: number | null
+  currency: string | null
+  plan: SubscriptionPlan | null
+  status: 'succeeded' | 'failed' | 'pending' | 'info' | null
+  stripe_event_id: string | null
+  stripe_object_id: string | null
+  invoice_url: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export interface BillingSummary {
+  tenant_id: string
+  plan: SubscriptionPlan
+  subscription_status: SubscriptionStatus
+  billing_interval: BillingInterval | null
+  trial_ends_at: string | null
+  subscription_ends_at: string | null
+  grace_period_ends_at: string | null
+  current_period_end: string | null
+  cancel_at_period_end: boolean
+  has_used_trial: boolean
+  has_active_subscription: boolean
+  billing_email: string | null
+  card: { brand: string | null; last4: string | null; exp_month: number | null; exp_year: number | null } | null
+  events: BillingEvent[]
+  usage?: { users: number; products: number; locations: number }
 }
 
 // POS Cart

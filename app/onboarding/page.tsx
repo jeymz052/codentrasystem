@@ -7,9 +7,10 @@ import { isConfiguredSuperAdminEmail, loadAccessibleTenants } from '@/lib/tenant
 export default async function OnboardingPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ plan?: string }>
+  searchParams?: Promise<{ plan?: string; interval?: string }>
 }) {
   const params = (await searchParams) ?? {}
+  const interval = params.interval === 'year' ? 'year' : 'month'
 
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -37,7 +38,7 @@ export default async function OnboardingPage({
         <div className="auth-hero-overlay" />
       </section>
       <section className="auth-panel">
-        <OnboardingForm initialPlan={params.plan} />
+        <OnboardingForm initialPlan={params.plan} initialInterval={interval} />
       </section>
     </main>
   )

@@ -24,6 +24,7 @@ export async function POST(request: NextRequest) {
   const business_type = String(body.business_type ?? 'retail') as BusinessType
   const billing_email = String(body.billing_email ?? user.email ?? '').trim()
   const plan = String(body.plan ?? 'starter') as SubscriptionPlan
+  const interval = (body.interval === 'year' ? 'year' : 'month') as 'month' | 'year'
   const timezone = String(body.timezone ?? 'Asia/Manila')
 
   if (!business_name) {
@@ -67,7 +68,10 @@ export async function POST(request: NextRequest) {
 
   const tenantId = randomUUID()
   const now = new Date().toISOString()
-  const subscriptionEndsAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
+  // New workspaces begin on a 7-day free trial window. If they don't start a
+  // paid subscription before it lapses, the lazy billing enforcement suspends
+  // access. Subscribing within the window still grants the full Stripe trial.
+  const trialEndsAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
   const limits = PLAN_LIMITS[plan]
 
   const seed = {
@@ -83,9 +87,9 @@ export async function POST(request: NextRequest) {
       currency: 'PHP',
       timezone,
       plan,
-      subscription_status: 'active' as SubscriptionStatus,
-      trial_ends_at: null,
-      subscription_ends_at: subscriptionEndsAt,
+      subscription_status: 'trial' as SubscriptionStatus,
+      trial_ends_at: trialEndsAt,
+      subscription_ends_at: null,
       max_users: limits.max_users,
       max_products: limits.max_products,
       max_locations: limits.max_locations,
@@ -95,6 +99,15 @@ export async function POST(request: NextRequest) {
       stripe_customer_id: null,
       stripe_subscription_id: null,
       stripe_price_id: null,
+      grace_period_ends_at: null,
+      current_period_end: null,
+      cancel_at_period_end: false,
+      has_used_trial: false,
+      billing_interval: interval,
+      card_brand: null,
+      card_last4: null,
+      card_exp_month: null,
+      card_exp_year: null,
       gcash_account: null,
       gcash_qr_url: null,
       maya_account: null,

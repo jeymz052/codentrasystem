@@ -67,6 +67,7 @@ import {
   type UserDraft,
 } from '@/lib/demo-system'
 import { getSupabaseAdminClient } from '@/lib/supabase-admin'
+import { enforceTenantBillingExpiry } from '@/lib/billing'
 import type { BusinessType, CashMovementKind, MutationAction, PaymentMethod, SubscriptionPlan, SubscriptionStatus, UserRole } from '@/types/database'
 
 type AnyRow = Record<string, any>
@@ -172,11 +173,21 @@ export async function loadTenantState(tenantId?: string | null) {
     return null
   }
 
+  // Lazily enforce trial / grace-period expiry on every load so a tenant whose
+  // trial or 5-day grace window has elapsed is correctly suspended even without
+  // a webhook firing. Best-effort: never block the load on billing errors.
+  let effectiveTenantRow = tenantRow
+  try {
+    effectiveTenantRow = await enforceTenantBillingExpiry(tenantRow as any)
+  } catch {
+    effectiveTenantRow = tenantRow
+  }
+
   const tenant = {
-    ...tenantRow,
-    pos_location_id: tenantRow.pos_location_id ?? null,
-    pos_store_locations: Array.isArray(tenantRow.pos_store_locations) ? tenantRow.pos_store_locations : [],
-    pos_stations: Array.isArray(tenantRow.pos_stations) ? tenantRow.pos_stations : [],
+    ...effectiveTenantRow,
+    pos_location_id: effectiveTenantRow.pos_location_id ?? null,
+    pos_store_locations: Array.isArray(effectiveTenantRow.pos_store_locations) ? effectiveTenantRow.pos_store_locations : [],
+    pos_stations: Array.isArray(effectiveTenantRow.pos_stations) ? effectiveTenantRow.pos_stations : [],
   }
 
   const [
@@ -479,6 +490,15 @@ export async function upsertTenantState(state: DemoSystemState) {
     stripe_customer_id: state.tenant.stripe_customer_id,
     stripe_subscription_id: state.tenant.stripe_subscription_id,
     stripe_price_id: state.tenant.stripe_price_id,
+    billing_interval: state.tenant.billing_interval ?? null,
+    grace_period_ends_at: state.tenant.grace_period_ends_at ?? null,
+    current_period_end: state.tenant.current_period_end ?? null,
+    cancel_at_period_end: state.tenant.cancel_at_period_end ?? false,
+    has_used_trial: state.tenant.has_used_trial ?? false,
+    card_brand: state.tenant.card_brand ?? null,
+    card_last4: state.tenant.card_last4 ?? null,
+    card_exp_month: state.tenant.card_exp_month ?? null,
+    card_exp_year: state.tenant.card_exp_year ?? null,
     is_active: state.tenant.is_active,
     created_at: state.tenant.created_at,
     updated_at: state.tenant.updated_at,

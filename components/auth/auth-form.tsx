@@ -14,6 +14,7 @@ type AuthFormProps = {
   mode: AuthMode
   nextPath?: string
   initialPlan?: string
+  initialInterval?: string
   resetMessage?: boolean
   initialEmail?: string
 }
@@ -24,20 +25,20 @@ export function AuthForm({
   mode,
   nextPath = '/dashboard',
   initialPlan = 'professional',
+  initialInterval = 'month',
   resetMessage = false,
   initialEmail = '',
 }: AuthFormProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
-  // For official users the email is supplied up front (e.g. a pre-provisioned
-  // link), so it's prefilled. Otherwise we restore the last remembered email.
   const [email, setEmail] = useState(initialEmail)
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState(initialPlan)
+  const [selectedInterval, setSelectedInterval] = useState<'month' | 'year'>(initialInterval === 'year' ? 'year' : 'month')
   const [remember, setRemember] = useState(false)
 
   const supabase = useMemo(() => createClient(), [])
@@ -137,7 +138,8 @@ export function AuthForm({
           email: submittedEmail,
           password: submittedPassword,
           plan: selectedPlan,
-          emailRedirectTo: `${window.location.origin}/onboarding?plan=${encodeURIComponent(selectedPlan)}`,
+          interval: selectedInterval,
+          emailRedirectTo: `${window.location.origin}/onboarding?plan=${encodeURIComponent(selectedPlan)}&interval=${selectedInterval}`,
         }),
       })
 
@@ -149,7 +151,7 @@ export function AuthForm({
 
       const needsConfirmation = response.headers.get('x-needs-confirmation') === '1'
       if (!needsConfirmation) {
-        window.location.replace(`/onboarding?plan=${encodeURIComponent(selectedPlan)}`)
+        window.location.replace(`/onboarding?plan=${encodeURIComponent(selectedPlan)}&interval=${selectedInterval}`)
       } else {
         setSuccess('Check your email to confirm your account, then continue to onboarding.')
       }
