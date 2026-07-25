@@ -6,7 +6,7 @@ import {
   isConfiguredSuperAdminEmail,
   loadAccessibleTenants,
 } from '@/lib/tenant-access'
-import { findTenantByStripeReference } from '@/lib/billing'
+import { findTenantByPayMongoReference } from '@/lib/paymongo-billing'
 
 export type BillingAuthContext = {
   user: { id: string; email: string | null }
@@ -50,7 +50,7 @@ export async function resolveBillingContext(
     return { error: NextResponse.json({ error: 'Only admins can manage billing' }, { status: 403 }) }
   }
 
-  const tenant = await findTenantByStripeReference({ tenantId: accessible.id })
+  const tenant = await findTenantByPayMongoReference({ tenantId: accessible.id })
   if (!tenant) {
     return { error: NextResponse.json({ error: 'Tenant not found' }, { status: 404 }) }
   }

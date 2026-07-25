@@ -60,6 +60,8 @@ export type WebsiteContent = {
   testimonials: WebsiteTestimonial[]
   faq: WebsiteFaqItem[]
   contact: {
+    chatLabel: string
+    chatUrl: string
     email: string
     phone: string
     responseTime: string
@@ -154,14 +156,16 @@ export const DEFAULT_WEBSITE_CONTENT: WebsiteContent = {
     { q: 'What is your refund policy?', a: 'We offer a 14-day money-back guarantee from your first charge. No questions asked.' },
   ],
   contact: {
-    email: 'hello@condentrasystem.com',
-    phone: '+63XXXXXXXXX',
+    chatLabel: 'Chat with Sales',
+    chatUrl: 'http://m.me/1235198083015833',
+    email: 'ilaganjimmlyod@gmail.com',
+    phone: '0962 866 1920',
     responseTime: 'within 24 hours',
-    note: 'Submit the form and our team will reach out within 24 hours to schedule your personalized demo at a time that works for you.',
+    note: 'Tell us what you need and our team will get back to you within 24 hours.',
   },
   footer: {
-    description: 'Supply chain, inventory, and POS - simplified for Philippine businesses.',
-    tagline: 'Systems with Integrity',
+    description: 'Inventory, POS, purchasing, production, and billing in one system built for growing teams.',
+    tagline: 'Simplicity that scales',
   },
 }
 

@@ -1,15 +1,16 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { copyResponseCookies } from '@/lib/supabase-server'
 import { resolveBillingContext } from '@/lib/billing-auth'
-import { notifyTenantBilling, recordBillingEvent, stripeRequest, updateTenantBilling } from '@/lib/billing'
+import {
+  cancelPayMongoSubscription,
+  notifyTenantBilling,
+  recordBillingEvent,
+  updateTenantBilling,
+} from '@/lib/paymongo-billing'
 import type { SubscriptionPlan } from '@/types/database'
 
 export const runtime = 'nodejs'
 
-/**
- * Cancel at period end, or reactivate a subscription that was set to cancel.
- * Body: { tenantId?: string, action: 'cancel' | 'reactivate' }
- */
 export async function POST(request: NextRequest) {
   const cookieResponse = NextResponse.next()
 
@@ -33,43 +34,38 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'No active subscription to modify' }, { status: 409 })
   }
 
-  const cancelAtPeriodEnd = action === 'cancel'
+  if (action === 'reactivate') {
+    return NextResponse.json({ error: 'PayMongo cancellations take effect immediately. Please subscribe again from Billing.' }, { status: 409 })
+  }
 
   try {
-    const updated = await stripeRequest<any>(`/subscriptions/${tenant.stripe_subscription_id}`, {
-      method: 'POST',
-      body: { cancel_at_period_end: cancelAtPeriodEnd },
-    })
+    await cancelPayMongoSubscription(tenant.stripe_subscription_id)
 
     await updateTenantBilling(tenant.id, {
-      cancel_at_period_end: Boolean(updated?.cancel_at_period_end),
+      subscription_status: 'suspended',
+      subscription_ends_at: new Date().toISOString(),
+      grace_period_ends_at: null,
+      cancel_at_period_end: false,
+      is_active: false,
     })
 
     await recordBillingEvent({
       tenantId: tenant.id,
-      eventType: cancelAtPeriodEnd ? 'subscription_cancelled' : 'plan_changed',
-      title: cancelAtPeriodEnd ? 'Cancellation scheduled' : 'Cancellation reversed',
-      description: cancelAtPeriodEnd
-        ? 'Your subscription will end at the close of the current billing period.'
-        : 'Your subscription will continue and auto-renew.',
+      eventType: 'subscription_cancelled',
+      title: 'Subscription cancelled',
+      description: 'The subscription was cancelled and access is suspended.',
       plan: tenant.plan as SubscriptionPlan,
       status: 'info',
       stripeObjectId: String(tenant.stripe_subscription_id),
     })
 
     try {
-      await notifyTenantBilling(
-        tenant.id,
-        cancelAtPeriodEnd ? 'Subscription cancellation scheduled' : 'Subscription reactivated',
-        cancelAtPeriodEnd
-          ? 'Your subscription is scheduled to cancel at the end of the current billing period.'
-          : 'Your subscription has been reactivated and will auto-renew.',
-      )
+      await notifyTenantBilling(tenant.id, 'Subscription cancelled', 'Your PayMongo subscription has been cancelled. Subscribe again from Billing to restore access.')
     } catch {
-      // best-effort notification; never fail the billing action on notification errors
+      // best-effort notification
     }
 
-    const response = NextResponse.json({ ok: true, cancel_at_period_end: Boolean(updated?.cancel_at_period_end) })
+    const response = NextResponse.json({ ok: true, cancel_at_period_end: false })
     copyResponseCookies(cookieResponse, response)
     return response
   } catch (err) {

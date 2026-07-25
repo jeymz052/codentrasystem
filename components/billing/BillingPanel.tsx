@@ -302,7 +302,7 @@ export function BillingPanel({ tenantId, canManage, notifySuccess, notifyError }
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16 }}>
             {summary.has_active_subscription && (
               <button className="btn btn-secondary" onClick={() => void openPortal()} disabled={busy !== null}>
-                {busy === 'portal' ? <Loader2 size={15} className="spin" /> : <ExternalLink size={15} />} Manage card & invoices
+                {busy === 'portal' ? <Loader2 size={15} className="spin" /> : <ExternalLink size={15} />} Open billing details
               </button>
             )}
             {summary.has_active_subscription && !summary.cancel_at_period_end && (

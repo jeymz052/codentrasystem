@@ -719,17 +719,41 @@ body {
   .landing-mobile-menu {
     position: absolute;
     top: calc(100% + 10px);
-    left: 14px;
     right: 14px;
+    left: auto;
+    width: min(290px, calc(100vw - 28px));
     display: grid !important;
-    gap: 12px;
-    padding: 14px;
-    border-radius: 18px;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 16px;
     background: rgba(255, 255, 255, 0.98);
     border: 1px solid #D6DEE8;
     box-shadow: 0 18px 40px rgba(15, 23, 42, 0.14);
     backdrop-filter: blur(10px);
     z-index: 40;
+  }
+
+  .landing-mobile-action {
+    justify-content: center !important;
+    text-align: center !important;
+    width: 100% !important;
+    min-height: 42px;
+    border-radius: 14px !important;
+    font-size: 13px !important;
+    font-weight: 800 !important;
+    box-shadow: 0 10px 20px rgba(29, 78, 216, 0.16);
+  }
+
+  .landing-mobile-action--primary {
+    background: linear-gradient(135deg, #1D4ED8 0%, #2563EB 100%) !important;
+    border: 1px solid #1D4ED8 !important;
+    color: #FFFFFF !important;
+  }
+
+  .landing-mobile-action--ghost {
+    background: #EFF6FF !important;
+    border: 1px solid #BFDBFE !important;
+    color: #1D4ED8 !important;
   }
 
   .landing-hero,

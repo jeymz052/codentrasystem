@@ -89,9 +89,9 @@ CREATE TABLE subscription_plans (
 );
 
 INSERT INTO subscription_plans (plan, name, price_monthly, price_yearly, max_users, max_products, max_locations, features) VALUES
-  ('starter',      'Starter',      499,   4999,   3,   100,  1,  '["Inventory Management","POS","Basic Reports","Low Stock Alerts","1 Location","Up to 3 Users"]'),
-  ('professional', 'Professional', 999,   9999,   10,  1000, 5,  '["Everything in Starter","Advanced Reports","Multi-Location","Purchase Orders","User Roles","Excel Import","Up to 10 Users"]'),
-  ('enterprise',   'Enterprise',   2499,  24999,  999, 9999, 99, '["Everything in Professional","Unlimited Users","Unlimited Products","Unlimited Locations","Priority Support","Custom Branding","API Access"]');
+  ('starter',      'Starter',      699,   6999,   3,   100,  1,  '["Inventory Management","POS","Basic Reports","Low Stock Alerts","1 Location","Up to 3 Users"]'),
+  ('professional', 'Professional', 1099,  10999,  10,  1000, 5,  '["Everything in Starter","Advanced Reports","Multi-Location","Purchase Orders","User Roles","Excel Import","Up to 10 Users"]'),
+  ('enterprise',   'Enterprise',   2699,  28999,  999, 9999, 99, '["Everything in Professional","Unlimited Users","Unlimited Products","Unlimited Locations","Priority Support","Custom Branding","API Access"]');
 
 -- ============================================================
 -- USERS (linked to Supabase Auth)

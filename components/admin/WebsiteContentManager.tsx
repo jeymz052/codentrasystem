@@ -699,6 +699,8 @@ export function WebsiteContentManager() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14 }}>
               <Input label="Contact title" value={content.sections.contactTitle} onChange={(value) => setContent((current) => ({ ...current, sections: { ...current.sections, contactTitle: value } }))} />
               <Input label="Contact subtitle" value={content.sections.contactSubtitle} onChange={(value) => setContent((current) => ({ ...current, sections: { ...current.sections, contactSubtitle: value } }))} multiline />
+              <Input label="Chat label" value={content.contact.chatLabel} onChange={(value) => setContent((current) => ({ ...current, contact: { ...current.contact, chatLabel: value } }))} helperText="Shown on the first floating button" />
+              <Input label="Chat URL" value={content.contact.chatUrl} onChange={(value) => setContent((current) => ({ ...current, contact: { ...current.contact, chatUrl: value } }))} helperText="Messenger, WhatsApp, or any sales chat link" />
               <Input label="Email" value={content.contact.email} onChange={(value) => setContent((current) => ({ ...current, contact: { ...current.contact, email: value } }))} />
               <Input label="Phone" value={content.contact.phone} onChange={(value) => setContent((current) => ({ ...current, contact: { ...current.contact, phone: value } }))} />
               <Input label="Response time" value={content.contact.responseTime} onChange={(value) => setContent((current) => ({ ...current, contact: { ...current.contact, responseTime: value } }))} />

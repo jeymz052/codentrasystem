@@ -16,8 +16,8 @@ export const SUBSCRIPTION_PLANS: PlanDetails[] = [
   {
     plan: 'starter',
     name: 'Starter',
-    monthly: 499,
-    yearly: 4999,
+    monthly: 699,
+    yearly: 6999,
     users: 3,
     products: 100,
     locations: 1,
@@ -26,8 +26,8 @@ export const SUBSCRIPTION_PLANS: PlanDetails[] = [
   {
     plan: 'professional',
     name: 'Professional',
-    monthly: 999,
-    yearly: 9999,
+    monthly: 1099,
+    yearly: 10999,
     users: 10,
     products: 1000,
     locations: 5,
@@ -37,8 +37,8 @@ export const SUBSCRIPTION_PLANS: PlanDetails[] = [
   {
     plan: 'enterprise',
     name: 'Enterprise',
-    monthly: 2499,
-    yearly: 24999,
+    monthly: 2699,
+    yearly: 28999,
     users: 999,
     products: 9999,
     locations: 99,

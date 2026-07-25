@@ -27,6 +27,7 @@ import { SUBSCRIPTION_PLANS, formatPlanPrice } from '@/lib/subscription-plans'
 import { BookDemoModal } from '@/components/landing/BookDemoModal'
 import type { BillingInterval } from '@/types/database'
 import { DEFAULT_WEBSITE_CONTENT, mergeWebsiteContent, type WebsiteContent } from '@/lib/website-content'
+import { EMAILJS_CONTACT_TEMPLATE_ID, ensureEmailJSScriptLoaded, isEmailJSConfigured, sendEmailJS } from '@/lib/emailjs'
 
 const NAV = [
   { label: 'Home', href: '#home' },
@@ -45,10 +46,10 @@ const planFeatures: Record<string, string[]> = {
 }
 
 const footerColumns = [
-  { title: 'Product', items: ['Inventory', 'Sales', 'POS', 'Purchasing', 'Production'] },
-  { title: 'Company', items: ['About Us', 'Careers', 'Blog', 'Codeoethi'] },
-  { title: 'Resources', items: ['Documentation', 'Help Center', 'API Reference', 'System Status'] },
-  { title: 'Legal', items: ['Privacy Policy', 'Terms of Service', 'Cookie Policy'] },
+  { title: 'Platform', items: ['Dashboard', 'Inventory', 'POS', 'Purchasing', 'Production'] },
+  { title: 'Billing', items: ['Plans', 'Free Trial', 'Subscriptions', 'Payments', 'Invoices'] },
+  { title: 'Support', items: ['Help Center', 'Contact Sales', 'Implementation', 'System Status'] },
+  { title: 'Security', items: ['Role Access', 'Audit Logs', 'Data Privacy', 'Terms'] },
 ]
 
 function AnimatedText({ text }: { text: string }) {
@@ -118,6 +119,7 @@ export default function LandingPage() {
   const [contactOpen, setContactOpen] = useState(false)
   const [bookDemoOpen, setBookDemoOpen] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [activeSection, setActiveSection] = useState('home')
   const [interval, setInterval] = useState<BillingInterval>('month')
   const [formSubmitting, setFormSubmitting] = useState(false)
   const [formStatus, setFormStatus] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -137,6 +139,46 @@ export default function LandingPage() {
       }
     })()
     return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    if (!isEmailJSConfigured()) return
+    void ensureEmailJSScriptLoaded()
+  }, [])
+
+  useEffect(() => {
+    const sectionIds = NAV.map((item) => item.href.replace('#', ''))
+
+    const syncFromHash = () => {
+      const current = window.location.hash.replace('#', '')
+      if (current && sectionIds.includes(current)) {
+        setActiveSection(current)
+      }
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0]
+        if (visible?.target instanceof HTMLElement) {
+          setActiveSection(visible.target.id)
+        }
+      },
+      { threshold: [0.2, 0.35, 0.5], rootMargin: '-18% 0px -60% 0px' }
+    )
+
+    for (const id of sectionIds) {
+      const element = document.getElementById(id)
+      if (element) observer.observe(element)
+    }
+
+    syncFromHash()
+    window.addEventListener('hashchange', syncFromHash)
+    return () => {
+      window.removeEventListener('hashchange', syncFromHash)
+      observer.disconnect()
+    }
   }, [])
 
   async function handleContactSubmit(event: FormEvent<HTMLFormElement>) {
@@ -164,6 +206,24 @@ export default function LandingPage() {
         body: JSON.stringify(data),
       })
       if (!res.ok) throw new Error('Failed to save submission')
+
+      try {
+        await sendEmailJS(EMAILJS_CONTACT_TEMPLATE_ID, {
+          from_name: data.name,
+          from_email: data.email,
+          phone: data.phone || 'N/A',
+          company: data.company || 'N/A',
+          business_type: data.business_type || 'N/A',
+          locations: data.locations || 'N/A',
+          subject: data.category === 'general' ? 'New contact message from Codentra' : `New ${data.category} message from Codentra`,
+          message: data.message,
+          category: data.category,
+          reply_to: data.email,
+        })
+      } catch {
+        // best-effort
+      }
+
       setFormStatus({ type: 'success', text: 'Message sent! We\'ll get back to you within 24 hours.' })
       form.reset()
     } catch {
@@ -201,29 +261,56 @@ export default function LandingPage() {
           }}
         >
           <Link href="/" className="landing-brand" style={{ display: 'inline-flex', alignItems: 'center', textDecoration: 'none' }}>
-            <img
-              src={landingContent.brand.logoUrl}
-              alt={landingContent.brand.logoAlt}
-              style={{ height: 27, width: 'auto', objectFit: 'contain', display: 'block' }}
-            />
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+              <img
+                src={landingContent.brand.logoUrl}
+                alt={landingContent.brand.logoAlt}
+                style={{ height: 27, width: 'auto', objectFit: 'contain', display: 'block' }}
+              />
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.02em', color: '#64748B' }}>Simplicity that scales</span>
+            </div>
           </Link>
 
-          <nav className={`landing-nav ${mobileNavOpen ? 'landing-nav--open' : ''}`} style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <nav
+            className={`landing-nav ${mobileNavOpen ? 'landing-nav--open' : ''}`}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              flexWrap: 'wrap',
+              padding: 6,
+              borderRadius: 999,
+              border: '1px solid #D8E4F2',
+              background: 'rgba(248, 251, 255, 0.92)',
+              backdropFilter: 'blur(14px)',
+              boxShadow: '0 12px 30px rgba(15, 23, 42, 0.06)',
+            }}
+          >
             {NAV.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
-                onClick={() => setMobileNavOpen(false)}
+                onClick={() => {
+                  setMobileNavOpen(false)
+                  setActiveSection(item.href.replace('#', ''))
+                }}
                 className="landing-nav-link"
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 4,
-                  color: '#1F2F44',
+                  padding: '9px 14px',
+                  borderRadius: 999,
+                  border: `1px solid ${activeSection === item.href.replace('#', '') ? '#93C5FD' : 'transparent'}`,
+                  background: activeSection === item.href.replace('#', '') ? 'linear-gradient(135deg, #EAF2FF 0%, #DDEBFF 100%)' : 'transparent',
+                  color: activeSection === item.href.replace('#', '') ? '#1D4ED8' : '#334155',
                   fontSize: 11,
-                  fontWeight: 500,
+                  fontWeight: activeSection === item.href.replace('#', '') ? 800 : 700,
+                  letterSpacing: '0.02em',
                   textDecoration: 'none',
                   whiteSpace: 'nowrap',
+                  boxShadow: activeSection === item.href.replace('#', '') ? 'inset 0 0 0 1px rgba(29, 78, 216, 0.08)' : 'none',
+                  transition: 'all 160ms ease',
                 }}
               >
                 {item.label}
@@ -324,31 +411,40 @@ export default function LandingPage() {
 
           {mobileNavOpen && (
             <div className="landing-mobile-menu" style={{ display: 'grid' }}>
-              <div style={{ display: 'grid', gap: 10 }}>
+              <div style={{ display: 'grid', gap: 8 }}>
                 {NAV.map((item) => (
                   <Link
                     key={item.href}
                     href={item.href}
-                    onClick={() => setMobileNavOpen(false)}
+                    onClick={() => {
+                      setMobileNavOpen(false)
+                      setActiveSection(item.href.replace('#', ''))
+                    }}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '12px 14px',
-                      borderRadius: 12,
-                      background: '#F8FBFF',
+                      justifyContent: 'center',
+                      padding: '11px 14px',
+                      borderRadius: 14,
+                      background: activeSection === item.href.replace('#', '') ? '#EAF2FF' : '#F8FBFF',
+                      border: `1px solid ${activeSection === item.href.replace('#', '') ? '#93C5FD' : '#E2E8F0'}`,
                       textDecoration: 'none',
-                      color: '#15314F',
+                      color: activeSection === item.href.replace('#', '') ? '#1D4ED8' : '#15314F',
                       fontSize: 14,
-                      fontWeight: 700,
+                      fontWeight: activeSection === item.href.replace('#', '') ? 800 : 700,
                     }}
                   >
                     {item.label}
                   </Link>
                 ))}
               </div>
-              <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
-                <Link href="/sign-in" onClick={() => setMobileNavOpen(false)} style={{ ...{ textDecoration: 'none' } }} className="landing-mobile-action landing-mobile-action--ghost">
+              <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
+                <Link
+                  href="/sign-in"
+                  onClick={() => setMobileNavOpen(false)}
+                  style={{ textDecoration: 'none', width: '100%' }}
+                  className="landing-mobile-action landing-mobile-action--primary"
+                >
                   Sign in
                 </Link>
                 <button
@@ -357,8 +453,8 @@ export default function LandingPage() {
                     setBookDemoOpen(true)
                     setMobileNavOpen(false)
                   }}
-                  className="landing-mobile-action landing-mobile-action--ghost"
-                  style={{ border: '1px solid #D6DEE8', background: '#fff', cursor: 'pointer' }}
+                  className="landing-mobile-action landing-mobile-action--primary"
+                  style={{ border: '1px solid #1D4ED8', background: '#1D4ED8', cursor: 'pointer', width: '100%' }}
                 >
                   {landingContent.hero.secondaryCta}
                 </button>
@@ -366,7 +462,7 @@ export default function LandingPage() {
                   href="/sign-up?plan=professional&interval=month"
                   onClick={() => setMobileNavOpen(false)}
                   className="landing-mobile-action landing-mobile-action--primary"
-                  style={{ textDecoration: 'none' }}
+                  style={{ textDecoration: 'none', width: '100%' }}
                 >
                   {landingContent.hero.primaryCta}
                 </Link>
@@ -547,46 +643,36 @@ export default function LandingPage() {
                   textAlign: 'center',
                 }}
               >
-                {index === 0 ? <BarChart3 size={40} strokeWidth={1.8} /> : index === 1 ? <MonitorSmartphone size={40} strokeWidth={1.8} /> : <Search size={40} strokeWidth={1.8} />}
-                <h3 style={{ margin: '16px 0 0', fontSize: 16, fontWeight: 800 }}>{card.title}</h3>
-                <p style={{ margin: '8px 0 0', fontSize: 13, lineHeight: 1.6, color: '#263A4D' }}>{card.text}</p>
-                <div
-                  style={{
-                    marginTop: 'auto',
-                    width: '100%',
-                    minHeight: 110,
-                    borderRadius: 8,
-                    background:
+                <div style={{
+                  width: '100%',
+                  minHeight: 164,
+                  borderRadius: 14,
+                  background: '#F8FBFF',
+                  border: '1px solid #E6EDF5',
+                  padding: 14,
+                  display: 'grid',
+                  placeItems: 'center',
+                  overflow: 'hidden',
+                }}>
+                  <img
+                    src={
                       index === 0
-                        ? 'linear-gradient(180deg, #F8FBFF 0%, #EDF4FF 100%)'
+                        ? encodeURI('/images/scalable for growth.png')
                         : index === 1
-                          ? 'linear-gradient(180deg, #F7FAFF 0%, #F1F5FB 100%)'
-                          : 'linear-gradient(180deg, #F8FAFC 0%, #EEF2F7 100%)',
-                    border: '1px solid #E6EDF5',
-                    position: 'relative',
-                    overflow: 'hidden',
-                  }}
-                >
-                  <div
+                          ? encodeURI('/images/real-time reporting.png')
+                          : encodeURI('/images/user friendly interface.png')
+                    }
+                    alt={card.title}
                     style={{
-                      position: 'absolute',
-                      left: 16,
-                      right: 16,
-                      bottom: 16,
-                      height: 50,
-                      borderRadius: 6,
-                      background:
-                        index === 0
-                          ? 'linear-gradient(135deg, rgba(29,62,102,0.12), rgba(29,62,102,0.04))'
-                          : index === 1
-                            ? 'linear-gradient(135deg, rgba(59,130,246,0.12), rgba(59,130,246,0.04))'
-                            : 'linear-gradient(135deg, rgba(16,185,129,0.12), rgba(16,185,129,0.04))',
+                      width: '100%',
+                      height: 136,
+                      objectFit: 'contain',
+                      display: 'block',
                     }}
                   />
-                  {index === 0 ? <div style={{ position: 'absolute', left: 20, bottom: 22, width: 80, height: 36, borderRadius: 6, background: '#14315A' }} /> : null}
-                  {index === 1 ? <div style={{ position: 'absolute', left: 24, bottom: 24, width: 32, height: 32, borderRadius: '50%', border: '4px solid #1D3E66' }} /> : null}
-                  {index === 2 ? <div style={{ position: 'absolute', left: 28, bottom: 22, width: 100, height: 30, borderRadius: 999, background: '#1D3E66' }} /> : null}
                 </div>
+                <h3 style={{ margin: '16px 0 0', fontSize: 16, fontWeight: 800 }}>{card.title}</h3>
+                <p style={{ margin: '8px 0 0', fontSize: 13, lineHeight: 1.6, color: '#263A4D' }}>{card.text}</p>
               </article>
             ))}
           </div>
@@ -886,7 +972,7 @@ export default function LandingPage() {
                 <a href={`tel:${landingContent.contact.phone}`} style={{ color: '#fff', textDecoration: 'none', fontSize: 16, fontWeight: 600 }}>{landingContent.contact.phone}</a>
               </div>
               <div style={{ padding: 16, borderRadius: 12, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)' }}>
-                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: '#fff' }}>What happens next?</div>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: '#fff' }}>Need help?</div>
                 <p style={{ fontSize: 12, color: '#CBD5E1', lineHeight: 1.6, margin: 0 }}>{landingContent.contact.note}</p>
               </div>
             </div>
@@ -908,8 +994,11 @@ export default function LandingPage() {
           <div className="landing-footer-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 32, alignItems: 'start', marginBottom: 40 }}>
             <div className="landing-footer-brand" style={{ gridColumn: 'span 2' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-                <img src={landingContent.brand.logoUrl} alt={landingContent.brand.logoAlt} style={{ height: 28, width: 'auto', objectFit: 'contain' }} />
+                <div style={{ background: '#FFFFFF', borderRadius: 14, padding: '8px 10px', boxShadow: '0 10px 24px rgba(0,0,0,0.14)' }}>
+                  <img src={landingContent.brand.logoUrl} alt={landingContent.brand.logoAlt} style={{ height: 28, width: 'auto', objectFit: 'contain', display: 'block' }} />
+                </div>
               </div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#E2E8F0', marginBottom: 10 }}>Simplicity that scales</div>
               <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.72)', lineHeight: 1.6, maxWidth: 280 }}>
                 {landingContent.footer.description}
               </p>
@@ -938,7 +1027,7 @@ export default function LandingPage() {
         {contactOpen && (
           <div className="landing-fab-menu" style={{ display: 'grid', gap: 6 }}>
             {[
-              { label: 'Chat with Sales', icon: MessageCircle, href: 'https://m.me/condentrasystem', prefill: "Hi! I'm interested in Codentra ERP. I'd like to request a demo." },
+              { label: landingContent.contact.chatLabel, icon: MessageCircle, href: landingContent.contact.chatUrl, prefill: "Hi! I'm interested in Codentra ERP and would like to ask about your services." },
               { label: 'Book a Demo', icon: CalendarDays, action: 'demo' },
               { label: 'Call Us', icon: Phone, href: `tel:${landingContent.contact.phone}` },
               { label: 'Email Us', icon: Mail, href: `mailto:${landingContent.contact.email}` },
@@ -983,8 +1072,10 @@ export default function LandingPage() {
                 )
               }
 
-              const isMessenger = item.label === 'Chat with Sales'
-              const finalHref = isMessenger ? `${item.href}?text=${encodeURIComponent(item.prefill ?? '')}` : item.href
+              if (!item.href) return null
+
+              const isChatLink = item.label === landingContent.contact.chatLabel
+              const finalHref = isChatLink ? `${item.href}${item.href.includes('?') ? '&' : '?'}text=${encodeURIComponent(item.prefill ?? '')}` : item.href
               return (
                 <a
                   key={item.label}

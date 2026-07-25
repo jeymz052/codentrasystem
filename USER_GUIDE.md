@@ -422,9 +422,9 @@ Codentra is subscription-based. Your plan defines hard limits and feature access
 
 | Plan | Monthly | Yearly | Max Users | Max Products | Max Locations | Highlights |
 |------|--------:|-------:|-----------:|-------------:|--------------:|------------|
-| **Starter** | ₱499 | ₱4,999 | 3 | 100 | 1 | Inventory, POS, Basic Reports, Low-Stock Alerts, 1 Location, up to 3 Users |
-| **Professional** | ₱999 | ₱9,999 | 10 | 1,000 | 5 | + Advanced Reports, Multi-Location, Purchase Orders, User Roles, Excel Import, up to 10 Users |
-| **Enterprise** | ₱2,499 | ₱24,999 | 999 | 9,999 | 99 | + Unlimited Users/Products/Locations, Priority Support, Custom Branding, API Access |
+| **Starter** | ₱699 | ₱6,999 | 3 | 100 | 1 | Inventory, POS, Basic Reports, Low-Stock Alerts, 1 Location, up to 3 Users |
+| **Professional** | ₱1,099 | ₱10,999 | 10 | 1,000 | 5 | + Advanced Reports, Multi-Location, Purchase Orders, User Roles, Excel Import, up to 10 Users |
+| **Enterprise** | ₱2,699 | ₱28,999 | 999 | 9,999 | 99 | + Unlimited Users/Products/Locations, Priority Support, Custom Branding, API Access |
 
 - **Plan limits** are shown on the Dashboard and Settings. Attempting to exceed a limit (e.g. adding an 101st product on Starter) is blocked with an "upgrade your plan" message.
 - **Manage billing** (Settings) opens the provider checkout to upgrade, downgrade, or renew.

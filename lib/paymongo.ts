@@ -39,7 +39,7 @@ function fromPayMongoAmount(amount: number) {
   return Number((Number(amount) / 100).toFixed(2))
 }
 
-async function paymongoRequest<T>(path: string, init: RequestInit, keyName: 'PAYMONGO_SECRET_KEY' | 'PAYMONGO_PUBLIC_KEY' = 'PAYMONGO_SECRET_KEY') {
+export async function paymongoRequest<T>(path: string, init: RequestInit, keyName: 'PAYMONGO_SECRET_KEY' | 'PAYMONGO_PUBLIC_KEY' = 'PAYMONGO_SECRET_KEY') {
   const baseUrl = 'https://api.paymongo.com/v1'
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 15000)

@@ -19,13 +19,25 @@ values (
       "logoUrl": "/images/codentra-removebg-preview.png",
       "logoAlt": "Codentra ERP"
     },
-    "hero": {
+      "hero": {
       "title": "Streamline Your Supply Chain with Flexible ERP Solutions. From inventory and POS to production and procurement.",
       "subtitle": "Achieve efficiency, gain real-time insights, and grow with Condentra.",
       "primaryCta": "Start 7-Day Free Trial",
       "secondaryCta": "Book a Demo",
       "imageUrl": "/images/codentra hero background image.png",
       "imageAlt": "ERP illustration"
+    },
+    "contact": {
+      "chatLabel": "Chat with Sales",
+      "chatUrl": "http://m.me/1235198083015833",
+      "email": "ilaganjimmlyod@gmail.com",
+      "phone": "0962 866 1920",
+      "responseTime": "within 24 hours",
+      "note": "Tell us what you need and our team will get back to you within 24 hours."
+    },
+    "footer": {
+      "description": "Inventory, POS, purchasing, production, and billing in one system built for growing teams.",
+      "tagline": "Simplicity that scales"
     }
   }'::jsonb
 )

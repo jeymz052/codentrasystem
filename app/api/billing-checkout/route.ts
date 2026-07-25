@@ -3,13 +3,21 @@ import { copyResponseCookies } from '@/lib/supabase-server'
 import { resolveBillingContext } from '@/lib/billing-auth'
 import {
   PLAN_LIMITS,
-  TRIAL_DAYS,
-  getPriceId,
+  getPlanId,
   notifyTenantBilling,
   recordBillingEvent,
-  stripeRequest,
+  createPayMongoSubscription,
+  ensurePayMongoCustomer,
+  getSubscriptionCustomerId,
+  getSubscriptionNextBillingDate,
+  getSubscriptionPaymentUrl,
+  getSubscriptionPlanId,
+  getSubscriptionStatus,
+  getPayMongoSubscription,
+  updatePayMongoSubscriptionPlan,
   updateTenantBilling,
-} from '@/lib/billing'
+  resolvePlanFromPlanId,
+} from '@/lib/paymongo-billing'
 import type { BillingInterval, SubscriptionPlan } from '@/types/database'
 
 export const runtime = 'nodejs'
@@ -41,69 +49,51 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid billing interval' }, { status: 400 })
   }
 
-  let priceId: string
+  let planId: string
   try {
-    priceId = getPriceId(plan, interval)
+    planId = getPlanId(plan, interval)
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'Price not configured' }, { status: 400 })
+    return NextResponse.json({ error: err instanceof Error ? err.message : 'Plan not configured' }, { status: 400 })
   }
 
   const origin = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') ?? request.nextUrl.origin
   const billingEmail = String(user.email ?? tenant.billing_email ?? '')
 
   try {
-    // ------------------------------------------------------------
-    // CASE 1: Existing ACTIVE / TRIAL / PAST_DUE subscription
-    // -> upgrade / downgrade / interval switch in place (proration).
-    // ------------------------------------------------------------
     const hasLiveSubscription =
       Boolean(tenant.stripe_subscription_id) &&
       ['active', 'trial', 'past_due'].includes(String(tenant.subscription_status))
 
     if (hasLiveSubscription) {
-      const subscription = await stripeRequest<any>(`/subscriptions/${tenant.stripe_subscription_id}`)
-      const currentItem = subscription?.items?.data?.[0]
+      const subscription = await getPayMongoSubscription(tenant.stripe_subscription_id!)
+      const currentPlanId = getSubscriptionPlanId(subscription)
 
-      if (!currentItem) {
-        return NextResponse.json({ error: 'Active subscription has no line item' }, { status: 409 })
-      }
-
-      // No-op if already on the requested price.
-      if (currentItem.price?.id === priceId) {
+      if (currentPlanId === planId) {
         const response = NextResponse.json({ changed: false, message: 'Already on this plan.' })
         copyResponseCookies(cookieResponse, response)
         return response
       }
 
-      const updated = await stripeRequest<any>(`/subscriptions/${tenant.stripe_subscription_id}`, {
-        method: 'POST',
-        body: {
-          cancel_at_period_end: false,
-          proration_behavior: 'create_prorations',
-          items: [{ id: currentItem.id, price: priceId }],
-          metadata: { tenant_id: tenant.id, plan },
-        },
-        idempotencyKey: `plan-change-${tenant.id}-${priceId}-${Date.now()}`,
-      })
+      const updated = await updatePayMongoSubscriptionPlan(tenant.stripe_subscription_id!, planId)
+      const updatedPlanId = getSubscriptionPlanId(updated) || planId
+      const resolvedPlan = resolvePlanFromPlanId(updatedPlanId) ?? { plan, interval }
+      const limits = PLAN_LIMITS[resolvedPlan.plan]
 
-      const limits = PLAN_LIMITS[plan]
       await updateTenantBilling(tenant.id, {
-        plan,
-        billing_interval: interval,
-        stripe_price_id: priceId,
+        plan: resolvedPlan.plan,
+        billing_interval: resolvedPlan.interval,
+        stripe_price_id: updatedPlanId,
         cancel_at_period_end: false,
-        current_period_end: updated?.current_period_end
-          ? new Date(Number(updated.current_period_end) * 1000).toISOString()
-          : tenant.current_period_end,
+        current_period_end: getSubscriptionNextBillingDate(updated) ?? tenant.current_period_end,
         ...limits,
       })
 
       await recordBillingEvent({
         tenantId: tenant.id,
         eventType: 'plan_changed',
-        title: `Plan changed to ${plan} (${interval === 'year' ? 'yearly' : 'monthly'})`,
-        description: 'Your subscription plan was updated with prorated billing.',
-        plan,
+        title: `Plan changed to ${resolvedPlan.plan} (${resolvedPlan.interval === 'year' ? 'yearly' : 'monthly'})`,
+        description: 'Your subscription plan was updated.',
+        plan: resolvedPlan.plan,
         status: 'succeeded',
         stripeObjectId: String(tenant.stripe_subscription_id),
       })
@@ -112,7 +102,7 @@ export async function POST(request: NextRequest) {
         await notifyTenantBilling(
           tenant.id,
           'Plan changed',
-          `Your subscription is now on the ${plan} plan (${interval === 'year' ? 'yearly' : 'monthly'}).`
+          `Your subscription is now on the ${resolvedPlan.plan} plan (${resolvedPlan.interval === 'year' ? 'yearly' : 'monthly'}).`
         )
       } catch {
         // best-effort notification
@@ -123,44 +113,58 @@ export async function POST(request: NextRequest) {
       return response
     }
 
-    // ------------------------------------------------------------
-    // CASE 2: No live subscription -> create a Checkout Session.
-    // Apply a 7-day free trial only on the first subscription.
-    // ------------------------------------------------------------
-    const applyTrial = !tenant.has_used_trial
-
-    const checkoutBody: Record<string, unknown> = {
-      mode: 'subscription',
-      success_url: `${origin}/dashboard/settings?billing=success`,
-      cancel_url: `${origin}/dashboard/settings?billing=cancelled`,
-      client_reference_id: tenant.id,
-      allow_promotion_codes: true,
-      line_items: [{ price: priceId, quantity: 1 }],
-      metadata: { tenant_id: tenant.id, plan, interval, price_id: priceId },
-      subscription_data: {
-        metadata: { tenant_id: tenant.id, plan, interval },
-        ...(applyTrial ? { trial_period_days: TRIAL_DAYS } : {}),
-      },
-      // Require a payment method up front so the card is on file for the trial
-      // and for automatic renewal / dunning.
-      payment_method_collection: 'always',
-    }
-
-    // Reuse the existing Stripe customer if we have one; otherwise let Checkout
-    // create one and capture it via the webhook.
-    if (tenant.stripe_customer_id) {
-      checkoutBody.customer = tenant.stripe_customer_id
-    } else if (billingEmail) {
-      checkoutBody.customer_email = billingEmail
-    }
-
-    const session = await stripeRequest<{ id: string; url: string }>('/checkout/sessions', {
-      method: 'POST',
-      body: checkoutBody,
-      idempotencyKey: `checkout-${tenant.id}-${priceId}-${Date.now()}`,
+    const customerId = await ensurePayMongoCustomer({
+      email: billingEmail,
+      name: tenant.name,
+      phone: tenant.phone,
     })
 
-    const response = NextResponse.json({ url: session.url, id: session.id })
+    const subscription = await createPayMongoSubscription({ planId, customerId })
+    const paymentUrl = getSubscriptionPaymentUrl(subscription)
+    const subscriptionId = String(subscription?.data?.id ?? subscription?.id ?? '')
+    const currentPlan = resolvePlanFromPlanId(getSubscriptionPlanId(subscription)) ?? { plan, interval }
+    const status = getSubscriptionStatus(subscription)
+    const limits = PLAN_LIMITS[currentPlan.plan]
+
+    await updateTenantBilling(tenant.id, {
+      stripe_customer_id: getSubscriptionCustomerId(subscription) || customerId,
+      stripe_subscription_id: subscriptionId || null,
+      stripe_price_id: planId,
+      billing_interval: currentPlan.interval,
+      plan: currentPlan.plan,
+      subscription_status: status === 'active' ? 'active' : 'inactive',
+      current_period_end: getSubscriptionNextBillingDate(subscription) ?? tenant.current_period_end,
+      cancel_at_period_end: false,
+      has_used_trial: true,
+      is_active: true,
+      ...limits,
+    })
+
+    await recordBillingEvent({
+      tenantId: tenant.id,
+      eventType: 'subscription_started',
+      title: `Subscription started â€” ${currentPlan.plan}`,
+      description: 'Subscription created and awaiting payment confirmation.',
+      plan: currentPlan.plan,
+      status: 'pending',
+      stripeObjectId: subscriptionId || null,
+    })
+
+    try {
+      await notifyTenantBilling(
+        tenant.id,
+        'Subscription created',
+        `Your ${currentPlan.plan} subscription was created. Complete the payment to activate it.`
+      )
+    } catch {
+      // best-effort notification
+    }
+
+    const response = NextResponse.json({
+      url: paymentUrl ?? `${origin}/dashboard/settings?billing=confirm`,
+      id: subscriptionId || null,
+      message: 'Complete the payment to activate your subscription.',
+    })
     copyResponseCookies(cookieResponse, response)
     return response
   } catch (err) {

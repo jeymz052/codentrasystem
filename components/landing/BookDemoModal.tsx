@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent, useEffect } from 'react'
 import { CalendarDays, X } from 'lucide-react'
-import { EMAILJS_CONFIG, isEmailJSConfigured } from '@/lib/emailjs'
+import { EMAILJS_DEMO_TEMPLATE_ID, ensureEmailJSScriptLoaded, isEmailJSConfigured, sendEmailJS } from '@/lib/emailjs'
 
 type Props = {
   open: boolean
@@ -14,13 +14,8 @@ export function BookDemoModal({ open, onClose }: Props) {
   const [status, setStatus] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   useEffect(() => {
-    if (!open) return
-    if (!isEmailJSConfigured()) return
-    const script = document.createElement('script')
-    script.src = 'https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/emailjs.min.js'
-    script.async = true
-    document.body.appendChild(script)
-    return () => { document.body.removeChild(script) }
+    if (!open || !isEmailJSConfigured()) return
+    void ensureEmailJSScriptLoaded()
   }, [open])
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -53,28 +48,23 @@ export function BookDemoModal({ open, onClose }: Props) {
       })
       if (!res.ok) throw new Error('Failed')
 
-      if (isEmailJSConfigured() && typeof window !== 'undefined' && (window as any).emailjs) {
-        try {
-          await (window as any).emailjs.send(
-            EMAILJS_CONFIG.serviceId,
-            EMAILJS_CONFIG.templateId,
-            {
-              from_name: payload.name,
-              from_email: payload.email,
-              phone: payload.phone || 'N/A',
-              company: payload.company || 'N/A',
-              business_type: payload.business_type || 'N/A',
-              locations: payload.locations || 'N/A',
-              preferred_date: payload.preferred_date || 'Not specified',
-              preferred_time: payload.preferred_time || 'Not specified',
-              message: payload.message,
-              category: payload.category,
-            },
-            EMAILJS_CONFIG.publicKey
-          )
-        } catch {
-          // best-effort
-        }
+      try {
+        await sendEmailJS(EMAILJS_DEMO_TEMPLATE_ID, {
+          from_name: payload.name,
+          from_email: payload.email,
+          phone: payload.phone || 'N/A',
+          company: payload.company || 'N/A',
+          business_type: payload.business_type || 'N/A',
+          locations: payload.locations || 'N/A',
+          preferred_date: payload.preferred_date || 'Not specified',
+          preferred_time: payload.preferred_time || 'Not specified',
+          subject: 'New demo request from Codentra',
+          message: payload.message,
+          category: payload.category,
+          reply_to: payload.email,
+        })
+      } catch {
+        // best-effort
       }
 
       setStatus({ type: 'success', text: 'Demo request sent! We\'ll reach out within 24 hours.' })
